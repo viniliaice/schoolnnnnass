@@ -28,7 +28,6 @@ interface TeacherRow {
   id: number;
   name: string;
   email: string;
-  password: string;
   assignedClasses: string[];
 }
 
@@ -36,7 +35,6 @@ interface ParentRow {
   id: number;
   name: string;
   email: string;
-  password: string;
   phone1: string;
   phone2: string;
   xafada: string;
@@ -107,7 +105,7 @@ export function BulkUpload() {
   // ─── Teacher State ───
   const [teacherRows, setTeacherRows] = useState<TeacherRow[]>(
     Array.from({ length: 2 }, () => ({
-      id: generateRowId(), name: '', email: '', password: '', assignedClasses: []
+      id: generateRowId(), name: '', email: '', assignedClasses: []
     }))
   );
   const [teacherCsvMode, setTeacherCsvMode] = useState(false);
@@ -117,7 +115,7 @@ export function BulkUpload() {
   // ─── Parent State ───
   const [parentRows, setParentRows] = useState<ParentRow[]>(
     Array.from({ length: 2 }, () => ({
-      id: generateRowId(), name: '', email: '', password: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
+      id: generateRowId(), name: '', email: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
     }))
   );
   const [parentCsvMode, setParentCsvMode] = useState(false);
@@ -262,7 +260,7 @@ export function BulkUpload() {
   // TEACHER HANDLERS
   // ═══════════════════════════════════
   const addTeacherRow = () => {
-    setTeacherRows(prev => [...prev, { id: generateRowId(), name: '', email: '', password: '', assignedClasses: [] }]);
+    setTeacherRows(prev => [...prev, { id: generateRowId(), name: '', email: '', assignedClasses: [] }]);
   };
 
   const removeTeacherRow = (id: number) => {
@@ -288,12 +286,11 @@ export function BulkUpload() {
       if (line.toLowerCase().includes('name') && line.toLowerCase().includes('email')) continue;
       const parts = line.split(',').map(s => s.trim());
       if (parts.length >= 1 && parts[0]) {
-        const classes = parts[3] ? parts[3].split(';').map(c => c.trim()).filter(c => CLASSES.includes(c)) : [];
+        const classes = parts[2] ? parts[2].split(';').map(c => c.trim()).filter(c => CLASSES.includes(c)) : [];
         rows.push({
           id: generateRowId(),
           name: parts[0],
           email: parts[1] || `${parts[0].toLowerCase().replace(/\s+/g, '.')}@campus.edu`,
-          password: parts[2] || 'password123', // Default password if not provided
           assignedClasses: classes,
         });
       }
@@ -322,7 +319,6 @@ export function BulkUpload() {
     const data: Omit<User, 'id' | 'createdAt'>[] = valid.map(r => ({
       name: r.name.trim(),
       email: r.email.trim() || `${r.name.trim().toLowerCase().replace(/\s+/g, '.')}@campus.edu`,
-      password: r.password || 'password123', // Default password if not set
       role: 'teacher' as const,
       assignedClasses: r.assignedClasses,
     }));
@@ -331,7 +327,7 @@ export function BulkUpload() {
       addToast({ type: 'success', title: `✅ ${data.length} teachers created successfully!` });
       setTeacherRows(
         Array.from({ length: 2 }, () => ({
-          id: generateRowId(), name: '', email: '', password: '', assignedClasses: []
+          id: generateRowId(), name: '', email: '', assignedClasses: []
         }))
       );
     } catch (error) {
@@ -368,12 +364,11 @@ export function BulkUpload() {
           id: generateRowId(),
           name: parts[0],
           email: parts[1] || '',
-          password: parts[2] || 'password123', // Default password if not provided
-          phone1: parts[3] || '',
-          phone2: parts[4] || '',
-          xafada: parts[5] || '',
-          udow: parts[6] || '',
-          paymentnumber: parts[7] || '',
+          phone1: parts[2] || '',
+          phone2: parts[3] || '',
+          xafada: parts[4] || '',
+          udow: parts[5] || '',
+          paymentnumber: parts[6] || '',
         });
       }
     }
@@ -401,7 +396,6 @@ export function BulkUpload() {
     const data: Omit<User, 'id' | 'createdAt'>[] = valid.map(r => ({
       name: r.name.trim(),
       email: r.email.trim() || `${r.name.trim().toLowerCase().replace(/\s+/g, '.')}@email.com`,
-      password: r.password || 'password123', // Default password if not set
       role: 'parent' as const,
       phone1: r.phone1,
       phone2: r.phone2,
@@ -414,7 +408,7 @@ export function BulkUpload() {
       addToast({ type: 'success', title: `✅ ${data.length} parents created successfully!` });
       setParentRows(
         Array.from({ length: 2 }, () => ({
-          id: generateRowId(), name: '', email: '', password: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
+          id: generateRowId(), name: '', email: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
         }))
       );
     } catch (error) {

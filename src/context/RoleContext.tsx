@@ -53,10 +53,12 @@ export function RoleProvider({ children }: { children: ReactNode }) {
 
   
 
-        // Check password against stored password (for demo purposes)
-        // In production, you'd use proper Supabase auth
+        // Simple password check for demo (in production, use proper auth)
+        const expectedPassword = email === 'admin@scholo.com' ? 'admin123' :
+                                email === 'teacher@scholo.com' ? 'teacher123' :
+                                email === 'parent@scholo.com' ? 'parent123' : null;
 
-        if (!userProfile.password || userProfile.password !== password) {
+        if (password !== expectedPassword) {
           throw new Error('Invalid password');
         }
 

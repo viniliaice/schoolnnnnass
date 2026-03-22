@@ -43,7 +43,6 @@ export interface User {
   id: string;
   name: string;
   email: string;
-  password?: string; // For demo authentication
   role: Role;
   // Parent-specific fields
   phone1?: string;

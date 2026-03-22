@@ -3,13 +3,13 @@ CREATE TABLE users (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
-  password TEXT, -- For demo authentication
+
   role TEXT NOT NULL CHECK (role IN ('admin', 'teacher', 'parent')),
   phone1 TEXT,
   phone2 TEXT,
   xafada TEXT,
   udow TEXT,
-  paymentNumber TEXT,
+  paymentnumber TEXT,
   "assignedClasses" JSONB,
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
