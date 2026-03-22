@@ -14,9 +14,17 @@ export function ExamResults() {
 
   useEffect(() => {
     if (!session) return;
-    const kids = getStudentsByParent(session.userId);
-    setChildren(kids);
-    setExams(getExamsByParent(session.userId, 'approved'));
+
+    const loadData = async () => {
+      const [kids, examsData] = await Promise.all([
+        getStudentsByParent(session.userId),
+        getExamsByParent(session.userId, 'approved')
+      ]);
+      setChildren(kids);
+      setExams(examsData);
+    };
+
+    loadData();
   }, [session]);
 
   const filtered = exams

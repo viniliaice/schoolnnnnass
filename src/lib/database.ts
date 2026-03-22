@@ -1,209 +1,319 @@
 import { User, Student, Exam, ExamStatus, ExamType, Role } from '../types';
+import { supabase } from './supabase';
 
-const KEYS = {
-  users: 'cc_users',
-  students: 'cc_students',
-  exams: 'cc_exams',
-  seeded: 'cc_seeded',
-};
+// ── Authentication ──
+export async function signIn(email: string, password: string) {
+  const { data, error } = await supabase.auth.signInWithPassword({
+    email,
+    password,
+  });
+  if (error) throw error;
+  return data;
+}
 
-function get<T>(key: string): T[] {
-  try {
-    const data = localStorage.getItem(key);
-    return data ? JSON.parse(data) : [];
-  } catch {
-    return [];
+export async function signUp(email: string, password: string, userData: Partial<User>) {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+  });
+  if (error) throw error;
+
+  // Create user profile in our users table
+  if (data.user) {
+    const { error: profileError } = await supabase
+      .from('users')
+      .insert({
+        id: data.user.id,
+        email: data.user.email,
+        name: userData.name || '',
+        role: userData.role || 'parent',
+        phone1: userData.phone1 || '',
+        phone2: userData.phone2 || '',
+        xafada: userData.xafada || '',
+        udow: userData.udow || '',
+        payment: userData.payment || '',
+        assignedClasses: userData.assignedClasses || [],
+      });
+    if (profileError) throw profileError;
   }
+
+  return data;
 }
 
-function set<T>(key: string, data: T[]): void {
-  localStorage.setItem(key, JSON.stringify(data));
+export async function signOut() {
+  const { error } = await supabase.auth.signOut();
+  if (error) throw error;
 }
 
-function generateId(): string {
-  return Date.now().toString(36) + Math.random().toString(36).substring(2, 9);
-}
-
-// ── Users ──
-export function getUsers(): User[] {
-  return get<User>(KEYS.users);
-}
-
-export function getUsersByRole(role: Role): User[] {
-  return getUsers().filter(u => u.role === role);
-}
-
-export function getUserById(id: string): User | undefined {
-  return getUsers().find(u => u.id === id);
-}
-
-export function createUser(data: Omit<User, 'id' | 'createdAt'>): User {
-  const users = getUsers();
-  const user: User = { ...data, id: generateId(), createdAt: new Date().toISOString() };
-  users.push(user);
-  set(KEYS.users, users);
+export async function getCurrentUser() {
+  const { data: { user }, error } = await supabase.auth.getUser();
+  if (error) throw error;
   return user;
 }
 
-export function updateUser(id: string, data: Partial<User>): User | null {
-  const users = getUsers();
-  const idx = users.findIndex(u => u.id === id);
-  if (idx === -1) return null;
-  users[idx] = { ...users[idx], ...data };
-  set(KEYS.users, users);
-  return users[idx];
+export async function getCurrentUserProfile() {
+  const user = await getCurrentUser();
+  if (!user) return null;
+
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('id', user.id)
+    .maybeSingle();
+
+  if (error) throw error;
+  return data;
 }
 
-export function deleteUser(id: string): boolean {
-  const users = getUsers();
-  const filtered = users.filter(u => u.id !== id);
-  if (filtered.length === users.length) return false;
-  set(KEYS.users, filtered);
+export async function createDemoAccounts() {
+  const demoUsers = [
+    { email: 'admin@scholo.com', password: 'admin123', name: 'Dr. Sarah Mitchell', role: 'admin' as const },
+    { email: 'teacher@scholo.com', password: 'teacher123', name: 'Prof. James Wilson', role: 'teacher' as const, assignedClasses: ['Grade 10-A', 'Grade 9-A', 'Grade 8-B'] },
+    { email: 'parent@scholo.com', password: 'parent123', name: 'Michael Johnson', role: 'parent' as const },
+  ];
+
+  for (const user of demoUsers) {
+    try {
+      // Check if user already exists
+      const { data: existing } = await supabase
+        .from('users')
+        .select('id')
+        .eq('email', user.email)
+        .maybeSingle();
+
+      if (existing) {
+        console.log(`Demo account for ${user.email} already exists`);
+        continue; // Skip if already exists
+      }
+
+      // For demo purposes, create user profile directly with a generated ID
+      // In production, you'd use proper authentication
+      const userId = `${user.role}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
+      const { error: profileError } = await supabase
+        .from('users')
+        .insert({
+          id: userId,
+          email: user.email,
+          name: user.name,
+          role: user.role,
+          assignedClasses: user.assignedClasses || [],
+        });
+
+      if (profileError) throw profileError;
+
+      console.log(`Created demo account for ${user.email}`);
+    } catch (error) {
+      console.error(`Error creating demo account for ${user.email}:`, error);
+    }
+  }
+}
+
+// ── Users ──
+export async function getUsers(): Promise<User[]> {
+  const { data, error } = await supabase.from('users').select('*');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getUsersByRole(role: Role): Promise<User[]> {
+  const { data, error } = await supabase.from('users').select('*').eq('role', role);
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getUserById(id: string): Promise<User | undefined> {
+  const { data, error } = await supabase.from('users').select('*').eq('id', id).single();
+  if (error) return undefined;
+  return data;
+}
+
+export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<User> {
+  // Generate unique ID based on role and timestamp
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 8);
+  const id = `${data.role}-${timestamp}-${random}`;
+
+  const user: Omit<User, 'id'> = { ...data, createdAt: new Date().toISOString() };
+  const { data: created, error } = await supabase.from('users').insert({ id, ...user }).select().single();
+  if (error) {
+    console.error('Error creating user:', error);
+    throw error;
+  }
+  return created;
+}
+
+export async function updateUser(id: string, data: Partial<User>): Promise<User | null> {
+  const { data: updated, error } = await supabase.from('users').update(data).eq('id', id).select().single();
+  if (error) return null;
+  return updated;
+}
+
+export async function deleteUser(id: string): Promise<boolean> {
+  const { error } = await supabase.from('users').delete().eq('id', id);
+  if (error) return false;
   // Also unlink students from deleted parent
-  const students = getStudents();
-  const updated = students.map(s => s.parentId === id ? { ...s, parentId: null } : s);
-  set(KEYS.students, updated);
+  await supabase.from('students').update({ parentid: null }).eq('parentid', id);
   return true;
 }
 
 // ── Students ──
-export function getStudents(): Student[] {
-  return get<Student>(KEYS.students);
+export async function getStudents(): Promise<Student[]> {
+  const { data, error } = await supabase.from('students').select('*');
+  if (error) throw error;
+  return data || [];
 }
 
-export function getStudentById(id: string): Student | undefined {
-  return getStudents().find(s => s.id === id);
+export async function getStudentById(id: string): Promise<Student | undefined> {
+  const { data, error } = await supabase.from('students').select('*').eq('id', id).single();
+  if (error) return undefined;
+  return data;
 }
 
-export function getStudentsByParent(parentId: string): Student[] {
-  return getStudents().filter(s => s.parentId === parentId);
+export async function getStudentsByParent(parentId: string): Promise<Student[]> {
+  const { data, error } = await supabase.from('students').select('*').eq('parentId', parentId);
+  if (error) throw error;
+  return data || [];
 }
 
-export function getStudentsByClass(className: string): Student[] {
-  return getStudents().filter(s => s.className === className);
+export async function getStudentsByClass(className: string): Promise<Student[]> {
+  const { data, error } = await supabase.from('students').select('*').eq('className', className);
+  if (error) throw error;
+  return data || [];
 }
 
-export function getStudentsByClasses(classNames: string[]): Student[] {
-  return getStudents().filter(s => classNames.includes(s.className));
+export async function getStudentsByClasses(classNames: string[]): Promise<Student[]> {
+  const { data, error } = await supabase.from('students').select('*').in('className', classNames);
+  if (error) throw error;
+  return data || [];
 }
 
-export function createStudent(data: Omit<Student, 'id' | 'createdAt'>): Student {
-  const students = getStudents();
-  const student: Student = { ...data, id: generateId(), createdAt: new Date().toISOString() };
-  students.push(student);
-  set(KEYS.students, students);
-  return student;
+export async function createStudent(data: Omit<Student, 'id' | 'createdAt'>): Promise<Student> {
+  // Generate unique ID
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 8);
+  const id = `student-${timestamp}-${random}`;
+
+  const student: Omit<Student, 'id'> = { ...data, createdAt: new Date().toISOString() };
+  const { data: created, error } = await supabase.from('students').insert({ id, ...student }).select().single();
+  if (error) throw error;
+  return created;
 }
 
-export function updateStudent(id: string, data: Partial<Student>): Student | null {
-  const students = getStudents();
-  const idx = students.findIndex(s => s.id === id);
-  if (idx === -1) return null;
-  students[idx] = { ...students[idx], ...data };
-  set(KEYS.students, students);
-  return students[idx];
+export async function updateStudent(id: string, data: Partial<Student>): Promise<Student | null> {
+  const { data: updated, error } = await supabase.from('students').update(data).eq('id', id).select().single();
+  if (error) return null;
+  return updated;
 }
 
-export function deleteStudent(id: string): boolean {
-  const students = getStudents();
-  const filtered = students.filter(s => s.id !== id);
-  if (filtered.length === students.length) return false;
-  set(KEYS.students, filtered);
-  const exams = getExams().filter(e => e.studentId !== id);
-  set(KEYS.exams, exams);
+export async function deleteStudent(id: string): Promise<boolean> {
+  const { error } = await supabase.from('students').delete().eq('id', id);
+  if (error) return false;
+  await supabase.from('exams').delete().eq('studentid', id);
   return true;
 }
 
 // ── Exams ──
-export function getExams(): Exam[] {
-  return get<Exam>(KEYS.exams);
+export async function getExams(): Promise<Exam[]> {
+  const { data, error } = await supabase.from('exams').select('*');
+  if (error) throw error;
+  return data || [];
 }
 
-export function getExamsByStudent(studentId: string): Exam[] {
-  return getExams().filter(e => e.studentId === studentId);
+export async function getExamsByStudent(studentId: string): Promise<Exam[]> {
+  const { data, error } = await supabase.from('exams').select('*').eq('studentId', studentId);
+  if (error) throw error;
+  return data || [];
 }
 
-export function getExamsByParent(parentId: string, statusFilter?: ExamStatus): Exam[] {
-  let exams = getExams().filter(e => e.parentId === parentId);
-  if (statusFilter) exams = exams.filter(e => e.status === statusFilter);
-  return exams;
+export async function getExamsByParent(parentId: string, statusFilter?: ExamStatus): Promise<Exam[]> {
+  let query = supabase.from('exams').select('*').eq('parentId', parentId);
+  if (statusFilter) query = query.eq('status', statusFilter);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
 }
 
-export function getExamsByTeacher(teacherId: string): Exam[] {
-  return getExams().filter(e => e.teacherId === teacherId);
+export async function getExamsByTeacher(teacherId: string): Promise<Exam[]> {
+  const { data, error } = await supabase.from('exams').select('*').eq('teacherId', teacherId);
+  if (error) throw error;
+  return data || [];
 }
 
-export function getExamsByStatus(status: ExamStatus): Exam[] {
-  return getExams().filter(e => e.status === status);
+export async function getExamsByStatus(status: ExamStatus): Promise<Exam[]> {
+  const { data, error } = await supabase.from('exams').select('*').eq('status', status);
+  if (error) throw error;
+  return data || [];
 }
 
-export function createExam(data: Omit<Exam, 'id' | 'createdAt'>): Exam {
-  const exams = getExams();
-  const exam: Exam = { ...data, id: generateId(), createdAt: new Date().toISOString() };
-  exams.push(exam);
-  set(KEYS.exams, exams);
-  return exam;
+export async function createExam(data: Omit<Exam, 'id' | 'createdAt'>): Promise<Exam> {
+  // Generate unique ID
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 8);
+  const id = `exam-${timestamp}-${random}`;
+
+  const exam: Omit<Exam, 'id'> = { ...data, createdAt: new Date().toISOString() };
+  const { data: created, error } = await supabase.from('exams').insert({ id, ...exam }).select().single();
+  if (error) throw error;
+  return created;
 }
 
-export function updateExamStatus(id: string, status: ExamStatus): Exam | null {
-  const exams = getExams();
-  const idx = exams.findIndex(e => e.id === id);
-  if (idx === -1) return null;
-  exams[idx] = { ...exams[idx], status };
-  set(KEYS.exams, exams);
-  return exams[idx];
+export async function updateExamStatus(id: string, status: ExamStatus): Promise<Exam | null> {
+  const { data: updated, error } = await supabase.from('exams').update({ status }).eq('id', id).select().single();
+  if (error) return null;
+  return updated;
 }
 
-export function deleteExam(id: string): boolean {
-  const exams = getExams();
-  const filtered = exams.filter(e => e.id !== id);
-  if (filtered.length === exams.length) return false;
-  set(KEYS.exams, filtered);
-  return true;
+export async function deleteExam(id: string): Promise<boolean> {
+  const { error } = await supabase.from('exams').delete().eq('id', id);
+  return !error;
 }
 
 // ── Bulk Operations ──
-export function bulkCreateUsers(dataList: Omit<User, 'id' | 'createdAt'>[]): User[] {
-  const users = getUsers();
-  const created: User[] = [];
-  for (const data of dataList) {
-    const user: User = { ...data, id: generateId(), createdAt: new Date().toISOString() };
-    users.push(user);
-    created.push(user);
-  }
-  set(KEYS.users, users);
-  return created;
+export async function bulkCreateUsers(dataList: Omit<User, 'id' | 'createdAt'>[]): Promise<User[]> {
+  const users = dataList.map(data => {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 8);
+    const id = `${data.role}-${timestamp}-${random}`;
+    return { id, ...data, createdAt: new Date().toISOString() };
+  });
+  const { data, error } = await supabase.from('users').insert(users).select();
+  if (error) throw error;
+  return data || [];
 }
 
-export function bulkCreateStudents(dataList: Omit<Student, 'id' | 'createdAt'>[]): Student[] {
-  const students = getStudents();
-  const created: Student[] = [];
-  for (const data of dataList) {
-    const student: Student = { ...data, id: generateId(), createdAt: new Date().toISOString() };
-    students.push(student);
-    created.push(student);
-  }
-  set(KEYS.students, students);
-  return created;
+export async function bulkCreateStudents(dataList: Omit<Student, 'id' | 'createdAt'>[]): Promise<Student[]> {
+  const studentsWithTimestamps = dataList.map(data => {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 8);
+    const id = `student-${timestamp}-${random}`;
+    return { id, ...data, createdAt: new Date().toISOString() };
+  });
+  const { data, error } = await supabase.from('students').insert(studentsWithTimestamps).select();
+  if (error) throw error;
+  return data || [];
 }
 
-export function bulkCreateExams(dataList: Omit<Exam, 'id' | 'createdAt'>[]): Exam[] {
-  const exams = getExams();
-  const created: Exam[] = [];
-  for (const data of dataList) {
-    const exam: Exam = { ...data, id: generateId(), createdAt: new Date().toISOString() };
-    exams.push(exam);
-    created.push(exam);
-  }
-  set(KEYS.exams, exams);
-  return created;
+export async function bulkCreateExams(dataList: Omit<Exam, 'id' | 'createdAt'>[]): Promise<Exam[]> {
+  const examsWithTimestamps = dataList.map(data => {
+    const timestamp = Date.now();
+    const random = Math.random().toString(36).substring(2, 8);
+    const id = `exam-${timestamp}-${random}`;
+    return { id, ...data, createdAt: new Date().toISOString() };
+  });
+  const { data, error } = await supabase.from('exams').insert(examsWithTimestamps).select();
+  if (error) throw error;
+  return data || [];
 }
 
 // ── Stats ──
-export function getSystemStats() {
-  const users = getUsers();
-  const students = getStudents();
-  const exams = getExams();
+export async function getSystemStats() {
+  const [users, students, exams] = await Promise.all([
+    getUsers(),
+    getStudents(),
+    getExams()
+  ]);
+
   return {
     totalTeachers: users.filter(u => u.role === 'teacher').length,
     totalParents: users.filter(u => u.role === 'parent').length,
@@ -219,14 +329,16 @@ export function getSystemStats() {
 }
 
 // ── Seeding ──
-export function isSeeded(): boolean {
-  return localStorage.getItem(KEYS.seeded) === 'true';
+export async function isSeeded(): Promise<boolean> {
+  const users = await getUsers();
+  return users.length > 0;
 }
 
-export function seedDatabase(): void {
-  localStorage.removeItem(KEYS.users);
-  localStorage.removeItem(KEYS.students);
-  localStorage.removeItem(KEYS.exams);
+export async function seedDatabase(): Promise<void> {
+  // Clear existing data
+  await supabase.from('exams').delete().neq('id', ''); // Delete all
+  await supabase.from('students').delete().neq('id', '');
+  await supabase.from('users').delete().neq('id', '');
 
   const now = new Date().toISOString();
 
@@ -251,21 +363,21 @@ export function seedDatabase(): void {
   const parent1: User = {
     id: 'parent-001', name: 'Michael Johnson', email: 'mjohnson@email.com',
     role: 'parent', phone1: '0612345678', phone2: '0612345679',
-    xafada: 'Hodan', udow: 'Bakaaraha', paymentNumber: 'EVC-0612345678',
+    xafada: 'Hodan', udow: 'Bakaaraha', 
     createdAt: now,
   };
 
   const parent2: User = {
     id: 'parent-002', name: 'Lisa Rodriguez', email: 'lrodriguez@email.com',
     role: 'parent', phone1: '0617654321', phone2: '0617654322',
-    xafada: 'Warta Nabadda', udow: 'Km4 Junction', paymentNumber: 'EVC-0617654321',
+    xafada: 'Warta Nabadda', udow: 'Km4 Junction',
     createdAt: now,
   };
 
   const parent3: User = {
     id: 'parent-003', name: 'David Thompson', email: 'dthompson@email.com',
     role: 'parent', phone1: '0615551234', phone2: '0615551235',
-    xafada: 'Dharkenley', udow: 'Ex-Control', paymentNumber: 'EVC-0615551234',
+    xafada: 'Dharkenley', udow: 'Ex-Control', 
     createdAt: now,
   };
 
@@ -399,15 +511,13 @@ export function seedDatabase(): void {
     addExam('student-005', sub, [90, 86, 94, 88, 82][i], 100, 'Final', 'May', 'approved', 'parent-003', 'teacher-002', '2025-05-22');
   });
 
-  set(KEYS.users, users);
-  set(KEYS.students, students);
-  set(KEYS.exams, exams);
-  localStorage.setItem(KEYS.seeded, 'true');
+  await bulkCreateUsers(users);
+  await bulkCreateStudents(students);
+  await bulkCreateExams(exams);
 }
 
-export function clearDatabase(): void {
-  localStorage.removeItem(KEYS.users);
-  localStorage.removeItem(KEYS.students);
-  localStorage.removeItem(KEYS.exams);
-  localStorage.removeItem(KEYS.seeded);
+export async function clearDatabase(): Promise<void> {
+  await supabase.from('exams').delete().neq('id', '');
+  await supabase.from('students').delete().neq('id', '');
+  await supabase.from('users').delete().neq('id', '');
 }

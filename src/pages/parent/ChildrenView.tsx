@@ -11,8 +11,17 @@ export function ChildrenView() {
 
   useEffect(() => {
     if (!session) return;
-    setChildren(getStudentsByParent(session.userId));
-    setExams(getExamsByParent(session.userId, 'approved'));
+
+    const loadData = async () => {
+      const [childrenData, examsData] = await Promise.all([
+        getStudentsByParent(session.userId),
+        getExamsByParent(session.userId, 'approved')
+      ]);
+      setChildren(childrenData);
+      setExams(examsData);
+    };
+
+    loadData();
   }, [session]);
 
   return (

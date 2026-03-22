@@ -1,46 +1,126 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
 import { Role, RoleSession } from '../types';
+import { supabase } from '../lib/supabase';
+import { getCurrentUserProfile } from '../lib/database';
 
 interface RoleContextType {
   session: RoleSession | null;
-  login: (role: Role, userId: string, userName: string) => void;
-  logout: () => void;
+  user: any;
+  login: (email: string, password: string) => Promise<void>;
+  logout: () => Promise<void>;
   isLoggedIn: boolean;
+  loading: boolean;
 }
 
 const RoleContext = createContext<RoleContextType | undefined>(undefined);
 
-const SESSION_KEY = 'cc_session';
-
 export function RoleProvider({ children }: { children: ReactNode }) {
-  const [session, setSession] = useState<RoleSession | null>(() => {
+  const [session, setSession] = useState<RoleSession | null>(null);
+  const [user, setUser] = useState<any>(null);
+  const [loading, setLoading] = useState(true);
+
+    const login = useCallback(async (email: string, password: string) => {
+
+      setLoading(true);
+
+      try {
+
+        // For demo purposes, check against users table directly
+
+        // In production, you'd use Supabase auth
+
+        const { data: userProfile, error } = await supabase
+
+          .from('users')
+
+          .select('*')
+
+          .eq('email', email)
+
+          .maybeSingle();
+
+  
+
+        if (error) throw error;
+
+  
+
+        if (!userProfile) {
+
+          throw new Error('User not found');
+
+        }
+
+  
+
+        // Check password against stored password (for demo purposes)
+        // In production, you'd use proper Supabase auth
+
+        if (!userProfile.password || userProfile.password !== password) {
+          throw new Error('Invalid password');
+        }
+
+
+
+  
+
+        const newSession: RoleSession = {
+
+          role: userProfile.role,
+
+          userId: userProfile.id,
+
+          userName: userProfile.name,
+
+        };
+
+        setSession(newSession);
+
+        setUser({ id: userProfile.id, email: userProfile.email });
+
+      } catch (error) {
+
+        console.error("Login error:", error);
+
+        throw error;
+
+      }
+
+      finally {
+
+        setLoading(false);
+
+      }
+
+    }, []);
+
+  const logout = useCallback(async () => {
+    setLoading(true);
     try {
-      const stored = localStorage.getItem(SESSION_KEY);
-      return stored ? JSON.parse(stored) : null;
-    } catch {
-      return null;
+      // For demo purposes, just clear the session
+      // In production, you'd sign out from Supabase auth
+      setSession(null);
+      setUser(null);
+    } finally {
+      setLoading(false);
     }
-  });
-
-  const login = useCallback((role: Role, userId: string, userName: string) => {
-    const newSession: RoleSession = { role, userId, userName };
-    setSession(newSession);
-    localStorage.setItem(SESSION_KEY, JSON.stringify(newSession));
-  }, []);
-
-  const logout = useCallback(() => {
-    setSession(null);
-    localStorage.removeItem(SESSION_KEY);
   }, []);
 
   useEffect(() => {
-    if (session) {
-      localStorage.setItem(SESSION_KEY, JSON.stringify(session));
-    }
-  }, [session]);
+    // For demo purposes, we don't persist sessions
+    // In production, you'd check for existing auth sessions
+    setLoading(false);
+  }, []);
 
   return (
-    <RoleContext.Provider value={{ session, login, logout, isLoggedIn: !!session }}>
+    <RoleContext.Provider value={{
+      session,
+      user,
+      login,
+      logout,
+      isLoggedIn: !!session,
+      loading
+    }}>
       {children}
     </RoleContext.Provider>
   );

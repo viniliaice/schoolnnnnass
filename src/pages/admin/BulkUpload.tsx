@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import {
   getUsersByRole, bulkCreateUsers, bulkCreateStudents, getStudents
 } from '../../lib/database';
@@ -28,6 +28,7 @@ interface TeacherRow {
   id: number;
   name: string;
   email: string;
+  password: string;
   assignedClasses: string[];
 }
 
@@ -35,11 +36,12 @@ interface ParentRow {
   id: number;
   name: string;
   email: string;
+  password: string;
   phone1: string;
   phone2: string;
   xafada: string;
   udow: string;
-  paymentNumber: string;
+  paymentnumber: string;
 }
 
 function generateRowId() {
@@ -105,7 +107,7 @@ export function BulkUpload() {
   // ─── Teacher State ───
   const [teacherRows, setTeacherRows] = useState<TeacherRow[]>(
     Array.from({ length: 2 }, () => ({
-      id: generateRowId(), name: '', email: '', assignedClasses: []
+      id: generateRowId(), name: '', email: '', password: '', assignedClasses: []
     }))
   );
   const [teacherCsvMode, setTeacherCsvMode] = useState(false);
@@ -115,18 +117,31 @@ export function BulkUpload() {
   // ─── Parent State ───
   const [parentRows, setParentRows] = useState<ParentRow[]>(
     Array.from({ length: 2 }, () => ({
-      id: generateRowId(), name: '', email: '', phone1: '', phone2: '', xafada: '', udow: '', paymentNumber: ''
+      id: generateRowId(), name: '', email: '', password: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
     }))
   );
   const [parentCsvMode, setParentCsvMode] = useState(false);
   const [parentCsv, setParentCsv] = useState('');
 
+  const [parents, setParents] = useState<User[]>([]);
+  const [teachers, setTeachers] = useState<User[]>([]);
+  const [students, setStudents] = useState<any[]>([]);
+
+  // Refs
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ─── Derived Data ───
-  const parents = getUsersByRole('parent');
-  const teachers = getUsersByRole('teacher');
-  const students = getStudents();
+  // Load data on mount
+  useEffect(() => {
+    const loadData = async () => {
+      const parentsData = await getUsersByRole('parent');
+      const teachersData = await getUsersByRole('teacher');
+      const studentsData = await getStudents();
+      setParents(parentsData);
+      setTeachers(teachersData);
+      setStudents(studentsData);
+    };
+    loadData();
+  }, []);
 
   // ─── Helper: Resolve parent by name ───
   const resolveParentId = useCallback((name: string): string => {
@@ -209,7 +224,7 @@ export function BulkUpload() {
     }
   };
 
-  const submitStudents = () => {
+  const submitStudents = async () => {
     const valid = studentRows.filter(r => r.name.trim());
     if (valid.length === 0) {
       addToast({ type: 'error', title: 'No students to add — enter at least one name' });
@@ -230,20 +245,24 @@ export function BulkUpload() {
       className: r.className,
       parentId: r.parentId || null,
     }));
-    bulkCreateStudents(data);
-    addToast({ type: 'success', title: `✅ ${data.length} students created successfully!` });
-    setStudentRows(
-      Array.from({ length: 3 }, () => ({
-        id: generateRowId(), name: '', className: CLASSES[0], parentName: '', parentId: ''
-      }))
-    );
+    try {
+      await bulkCreateStudents(data);
+      addToast({ type: 'success', title: `✅ ${data.length} students created successfully!` });
+      setStudentRows(
+        Array.from({ length: 3 }, () => ({
+          id: generateRowId(), name: '', className: CLASSES[0], parentName: '', parentId: ''
+        }))
+      );
+    } catch (error) {
+      addToast({ type: 'error', title: 'Failed to create students' });
+    }
   };
 
   // ═══════════════════════════════════
   // TEACHER HANDLERS
   // ═══════════════════════════════════
   const addTeacherRow = () => {
-    setTeacherRows(prev => [...prev, { id: generateRowId(), name: '', email: '', assignedClasses: [] }]);
+    setTeacherRows(prev => [...prev, { id: generateRowId(), name: '', email: '', password: '', assignedClasses: [] }]);
   };
 
   const removeTeacherRow = (id: number) => {
@@ -269,11 +288,12 @@ export function BulkUpload() {
       if (line.toLowerCase().includes('name') && line.toLowerCase().includes('email')) continue;
       const parts = line.split(',').map(s => s.trim());
       if (parts.length >= 1 && parts[0]) {
-        const classes = parts[2] ? parts[2].split(';').map(c => c.trim()).filter(c => CLASSES.includes(c)) : [];
+        const classes = parts[3] ? parts[3].split(';').map(c => c.trim()).filter(c => CLASSES.includes(c)) : [];
         rows.push({
           id: generateRowId(),
           name: parts[0],
           email: parts[1] || `${parts[0].toLowerCase().replace(/\s+/g, '.')}@campus.edu`,
+          password: parts[2] || 'password123', // Default password if not provided
           assignedClasses: classes,
         });
       }
@@ -293,7 +313,7 @@ export function BulkUpload() {
     addToast({ type: 'success', title: `${parsed.length} teacher rows imported` });
   };
 
-  const submitTeachers = () => {
+  const submitTeachers = async () => {
     const valid = teacherRows.filter(r => r.name.trim());
     if (valid.length === 0) {
       addToast({ type: 'error', title: 'No teachers to add' });
@@ -302,16 +322,21 @@ export function BulkUpload() {
     const data: Omit<User, 'id' | 'createdAt'>[] = valid.map(r => ({
       name: r.name.trim(),
       email: r.email.trim() || `${r.name.trim().toLowerCase().replace(/\s+/g, '.')}@campus.edu`,
+      password: r.password || 'password123', // Default password if not set
       role: 'teacher' as const,
       assignedClasses: r.assignedClasses,
     }));
-    bulkCreateUsers(data);
-    addToast({ type: 'success', title: `✅ ${data.length} teachers created successfully!` });
-    setTeacherRows(
-      Array.from({ length: 2 }, () => ({
-        id: generateRowId(), name: '', email: '', assignedClasses: []
-      }))
-    );
+    try {
+      await bulkCreateUsers(data);
+      addToast({ type: 'success', title: `✅ ${data.length} teachers created successfully!` });
+      setTeacherRows(
+        Array.from({ length: 2 }, () => ({
+          id: generateRowId(), name: '', email: '', password: '', assignedClasses: []
+        }))
+      );
+    } catch (error) {
+      addToast({ type: 'error', title: 'Failed to create teachers' });
+    }
   };
 
   // ═══════════════════════════════════
@@ -319,7 +344,7 @@ export function BulkUpload() {
   // ═══════════════════════════════════
   const addParentRows = (count: number) => {
     const newRows: ParentRow[] = Array.from({ length: count }, () => ({
-      id: generateRowId(), name: '', email: '', phone1: '', phone2: '', xafada: '', udow: '', paymentNumber: ''
+      id: generateRowId(), name: '', email: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
     }));
     setParentRows(prev => [...prev, ...newRows]);
   };
@@ -343,11 +368,12 @@ export function BulkUpload() {
           id: generateRowId(),
           name: parts[0],
           email: parts[1] || '',
-          phone1: parts[2] || '',
-          phone2: parts[3] || '',
-          xafada: parts[4] || '',
-          udow: parts[5] || '',
-          paymentNumber: parts[6] || '',
+          password: parts[2] || 'password123', // Default password if not provided
+          phone1: parts[3] || '',
+          phone2: parts[4] || '',
+          xafada: parts[5] || '',
+          udow: parts[6] || '',
+          paymentnumber: parts[7] || '',
         });
       }
     }
@@ -366,7 +392,7 @@ export function BulkUpload() {
     addToast({ type: 'success', title: `${parsed.length} parent rows imported` });
   };
 
-  const submitParents = () => {
+  const submitParents = async () => {
     const valid = parentRows.filter(r => r.name.trim());
     if (valid.length === 0) {
       addToast({ type: 'error', title: 'No parents to add' });
@@ -375,20 +401,25 @@ export function BulkUpload() {
     const data: Omit<User, 'id' | 'createdAt'>[] = valid.map(r => ({
       name: r.name.trim(),
       email: r.email.trim() || `${r.name.trim().toLowerCase().replace(/\s+/g, '.')}@email.com`,
+      password: r.password || 'password123', // Default password if not set
       role: 'parent' as const,
       phone1: r.phone1,
       phone2: r.phone2,
       xafada: r.xafada,
       udow: r.udow,
-      paymentNumber: r.paymentNumber,
+      paymentnumber: r.paymentnumber,
     }));
-    bulkCreateUsers(data);
-    addToast({ type: 'success', title: `✅ ${data.length} parents created successfully!` });
-    setParentRows(
-      Array.from({ length: 2 }, () => ({
-        id: generateRowId(), name: '', email: '', phone1: '', phone2: '', xafada: '', udow: '', paymentNumber: ''
-      }))
-    );
+    try {
+      await bulkCreateUsers(data);
+      addToast({ type: 'success', title: `✅ ${data.length} parents created successfully!` });
+      setParentRows(
+        Array.from({ length: 2 }, () => ({
+          id: generateRowId(), name: '', email: '', password: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
+        }))
+      );
+    } catch (error) {
+      addToast({ type: 'error', title: 'Failed to create parents' });
+    }
   };
 
   // ═══════════════════════════════════
@@ -586,7 +617,7 @@ export function BulkUpload() {
           {parentCsvMode ? (
             <CsvPasteArea
               title="Paste Parent CSV"
-              description="Format: Name, Email, Phone1, Phone2, Xafada, Udow, PaymentNumber"
+              description="Format: Name, Email, Phone1, Phone2, Xafada, Udow, Paymentnumber"
               example={PARENT_CSV_EXAMPLE}
               value={parentCsv}
               onChange={setParentCsv}
@@ -638,8 +669,8 @@ export function BulkUpload() {
                           <input type="text" placeholder="📱 Phone 2" value={row.phone2}
                             onChange={e => updateParentRow(row.id, 'phone2', e.target.value)}
                             className="px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-violet-200 focus:border-violet-400 outline-none" />
-                          <input type="text" placeholder="💳 Payment Number" value={row.paymentNumber}
-                            onChange={e => updateParentRow(row.id, 'paymentNumber', e.target.value)}
+                          <input type="text" placeholder="💳 Payment Number" value={row.paymentnumber}
+                            onChange={e => updateParentRow(row.id, 'paymentnumber', e.target.value)}
                             className="px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-violet-200 focus:border-violet-400 outline-none" />
                         </div>
                         {/* Location */}
@@ -1017,7 +1048,7 @@ export function BulkUpload() {
               </button>
             </div>
             <code className="text-xs text-violet-700 block bg-violet-100 p-3 rounded-lg font-mono whitespace-pre-wrap">
-              Name, Email, Phone1, Phone2, Xafada, Udow, PaymentNumber{'\n'}
+              Name, Email, Phone1, Phone2, Xafada, Udow, Paymentnumber{'\n'}
               Fadumo Abdi, fadumo@email.com, 0615551234, 0615551235, Hodan, Bakaaraha, EVC-0615551234
             </code>
           </div>

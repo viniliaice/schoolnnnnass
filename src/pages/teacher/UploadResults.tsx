@@ -44,15 +44,20 @@ export function UploadResults() {
 
   useEffect(() => {
     if (!session) return;
-    const teacher = getUserById(session.userId);
-    const cls = teacher?.assignedClasses || [];
-    setClasses(cls);
-    if (cls.length > 0) setSelectedClass(cls[0]);
+
+    const loadData = async () => {
+      const teacher = await getUserById(session.userId);
+      const cls = teacher?.assignedClasses || [];
+      setClasses(cls);
+      if (cls.length > 0) setSelectedClass(cls[0]);
+    };
+
+    loadData();
   }, [session]);
 
-  const loadStudents = useCallback(() => {
+  const loadStudents = useCallback(async () => {
     if (!selectedClass) return;
-    const students = getStudentsByClasses([selectedClass]);
+    const students = await getStudentsByClasses([selectedClass]);
     setStudentScores(
       students.map(s => ({
         studentId: s.id,
@@ -66,7 +71,10 @@ export function UploadResults() {
   }, [selectedClass]);
 
   useEffect(() => {
-    loadStudents();
+    const load = async () => {
+      await loadStudents();
+    };
+    load();
   }, [loadStudents]);
 
   const updateScore = (studentId: string, score: string) => {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { getUsers, createUser, deleteUser, updateUser, getStudentsByParent } from '../../lib/database';
-import { User, Role, CLASSES } from '../../types';
+import { getUsers, createUser, deleteUser, updateUser, getStudentsByParent, getStudents } from '../../lib/database';
+import { User, Role, CLASSES, Student } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { Dialog } from '../../components/ui/Dialog';
 import {
@@ -12,6 +12,7 @@ import { cn } from '../../utils/cn';
 export function ManageUsers() {
   const { addToast } = useToast();
   const [users, setUsers] = useState<User[]>([]);
+  const [students, setStudents] = useState<Student[]>([]);
   const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all');
   const [search, setSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
@@ -29,8 +30,20 @@ export function ManageUsers() {
   const [formPayment, setFormPayment] = useState('');
   const [formClasses, setFormClasses] = useState<string[]>([]);
 
-  const refresh = () => setUsers(getUsers());
-  useEffect(() => { refresh(); }, []);
+  const refresh = async () => {
+    const [usersData, studentsData] = await Promise.all([
+      getUsers(),
+      getStudents()
+    ]);
+    setUsers(usersData);
+    setStudents(studentsData);
+  };
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  const getChildren = (parentId: string) => students.filter(s => s.parentId === parentId);
 
   const filtered = users
     .filter(u => roleFilter === 'all' || u.role === roleFilter)
@@ -41,7 +54,7 @@ export function ManageUsers() {
     setFormXafada(''); setFormUdow(''); setFormPayment(''); setFormClasses([]);
   };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!formName.trim() || !formEmail.trim()) {
       addToast({ type: 'error', title: 'Name and email are required' });
       return;
@@ -52,47 +65,59 @@ export function ManageUsers() {
     if (createRole === 'parent') {
       data.phone1 = formPhone1; data.phone2 = formPhone2;
       data.xafada = formXafada; data.udow = formUdow;
-      data.paymentNumber = formPayment;
+      data.paymentnumber = formPayment;
     }
     if (createRole === 'teacher') {
       data.assignedClasses = formClasses;
     }
-    createUser(data);
-    addToast({ type: 'success', title: `${createRole} created successfully` });
-    resetForm(); setShowCreate(false); refresh();
+    try {
+      await createUser(data);
+      addToast({ type: 'success', title: `${createRole} created successfully` });
+      resetForm(); setShowCreate(false); await refresh();
+    } catch (error) {
+      addToast({ type: 'error', title: 'Failed to create user' });
+    }
   };
 
-  const handleEdit = () => {
+  const handleEdit = async () => {
     if (!showEdit) return;
     const data: Partial<User> = { name: formName, email: formEmail };
     if (showEdit.role === 'parent') {
       data.phone1 = formPhone1; data.phone2 = formPhone2;
       data.xafada = formXafada; data.udow = formUdow;
-      data.paymentNumber = formPayment;
+      data.paymentnumber = formPayment;
     }
     if (showEdit.role === 'teacher') {
       data.assignedClasses = formClasses;
     }
-    updateUser(showEdit.id, data);
-    addToast({ type: 'success', title: 'User updated successfully' });
-    resetForm(); setShowEdit(null); refresh();
+    try {
+      await updateUser(showEdit.id, data);
+      addToast({ type: 'success', title: 'User updated successfully' });
+      resetForm(); setShowEdit(null); await refresh();
+    } catch (error) {
+      addToast({ type: 'error', title: 'Failed to update user' });
+    }
   };
 
-  const handleDelete = (user: User) => {
+  const handleDelete = async (user: User) => {
     if (user.role === 'admin') {
       addToast({ type: 'error', title: 'Cannot delete admin' });
       return;
     }
-    deleteUser(user.id);
-    addToast({ type: 'success', title: `${user.name} deleted` });
-    refresh();
+    try {
+      await deleteUser(user.id);
+      addToast({ type: 'success', title: `${user.name} deleted` });
+      await refresh();
+    } catch (error) {
+      addToast({ type: 'error', title: 'Failed to delete user' });
+    }
   };
 
   const openEdit = (user: User) => {
     setFormName(user.name); setFormEmail(user.email);
     setFormPhone1(user.phone1 || ''); setFormPhone2(user.phone2 || '');
     setFormXafada(user.xafada || ''); setFormUdow(user.udow || '');
-    setFormPayment(user.paymentNumber || '');
+    setFormPayment(user.paymentnumber || '');
     setFormClasses(user.assignedClasses || []);
     setShowEdit(user);
   };
@@ -152,7 +177,7 @@ export function ManageUsers() {
       {/* User Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filtered.map(user => {
-          const children = user.role === 'parent' ? getStudentsByParent(user.id) : [];
+          const children = user.role === 'parent' ? getChildren(user.id) : [];
           return (
             <div key={user.id} className="bg-white rounded-2xl border border-slate-200 p-5 hover:shadow-lg transition-shadow">
               <div className="flex items-start justify-between mb-3">
@@ -353,7 +378,7 @@ export function ManageUsers() {
       {/* Parent Detail Dialog */}
       <Dialog open={!!showDetail} onClose={() => setShowDetail(null)} title="Parent Details" className="max-w-xl">
         {showDetail && (() => {
-          const children = getStudentsByParent(showDetail.id);
+          const children = getChildren(showDetail.id);
           return (
             <div className="space-y-5">
               {/* Profile Header */}
@@ -404,7 +429,7 @@ export function ManageUsers() {
                 <div className="flex items-center gap-2 text-sm text-slate-500 mb-1">
                   <CreditCard className="w-4 h-4" /> Payment Number
                 </div>
-                <p className="font-bold text-slate-900">{showDetail.paymentNumber || '—'}</p>
+                <p className="font-bold text-slate-900">{showDetail.paymentnumber || '—'}</p>
               </div>
 
               {/* Children */}

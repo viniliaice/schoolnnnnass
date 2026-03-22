@@ -1,19 +1,37 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getExamsByTeacher, getStudentById } from '../../lib/database';
-import { Exam, ExamStatus } from '../../types';
+import { getExamsByTeacher, getStudentById, getUserById, getStudentsByClasses } from '../../lib/database';
+import { Exam, ExamStatus, Student } from '../../types';
 import { FileText, Clock, CheckCircle, XCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 export function AllResults() {
   const { session } = useRole();
   const [exams, setExams] = useState<Exam[]>([]);
+  const [students, setStudents] = useState<Student[]>([]);
   const [statusFilter, setStatusFilter] = useState<ExamStatus | 'all'>('all');
 
   useEffect(() => {
     if (!session) return;
-    setExams(getExamsByTeacher(session.userId));
+
+    const loadData = async () => {
+      const teacher = await getUserById(session.userId);
+      const classes = teacher?.assignedClasses || [];
+      const [examsData, studentsData] = await Promise.all([
+        getExamsByTeacher(session.userId),
+        getStudentsByClasses(classes)
+      ]);
+      setExams(examsData);
+      setStudents(studentsData);
+    };
+
+    loadData();
   }, [session]);
+
+  const getStudentName = (studentId: string) => {
+    const student = students.find(s => s.id === studentId);
+    return student?.name || '—';
+  };
 
   const filtered = exams
     .filter(e => statusFilter === 'all' || e.status === statusFilter)
@@ -65,10 +83,9 @@ export function AllResults() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map(exam => {
-                const student = getStudentById(exam.studentId);
                 return (
                   <tr key={exam.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-5 py-3 text-sm font-medium text-slate-800">{student?.name || '—'}</td>
+                    <td className="px-5 py-3 text-sm font-medium text-slate-800">{getStudentName(exam.studentId)}</td>
                     <td className="px-5 py-3 text-sm text-slate-600">{exam.subject}</td>
                     <td className="px-5 py-3">
                       <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-xs font-medium">{exam.examType}</span>

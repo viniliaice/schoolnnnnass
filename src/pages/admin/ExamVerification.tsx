@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { getExams, updateExamStatus, getStudentById, getUserById } from '../../lib/database';
-import { Exam, ExamStatus } from '../../types';
+import { getExams, updateExamStatus, getStudentById, getUserById, getStudents, getUsersByRole } from '../../lib/database';
+import { Exam, ExamStatus, Student, User } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { CheckCircle, XCircle, Clock, FileText } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -8,19 +8,38 @@ import { cn } from '../../utils/cn';
 export function ExamVerification() {
   const { addToast } = useToast();
   const [exams, setExams] = useState<Exam[]>([]);
+  const [students, setStudents] = useState<Student[]>([]);
+  const [teachers, setTeachers] = useState<User[]>([]);
   const [statusFilter, setStatusFilter] = useState<ExamStatus | 'all'>('pending');
 
-  const refresh = () => setExams(getExams());
+  const refresh = async () => {
+    const [examsData, studentsData, teachersData] = await Promise.all([
+      getExams(),
+      getStudents(),
+      getUsersByRole('teacher')
+    ]);
+    setExams(examsData);
+    setStudents(studentsData);
+    setTeachers(teachersData);
+  };
+
   useEffect(() => { refresh(); }, []);
+
+  const getStudent = (studentId: string) => students.find(s => s.id === studentId);
+  const getTeacher = (teacherId: string) => teachers.find(t => t.id === teacherId);
 
   const filtered = exams
     .filter(e => statusFilter === 'all' || e.status === statusFilter)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  const handleAction = (id: string, status: ExamStatus) => {
-    updateExamStatus(id, status);
-    addToast({ type: 'success', title: `Exam ${status}` });
-    refresh();
+  const handleAction = async (id: string, status: ExamStatus) => {
+    try {
+      await updateExamStatus(id, status);
+      addToast({ type: 'success', title: `Exam ${status}` });
+      await refresh();
+    } catch (error) {
+      addToast({ type: 'error', title: 'Failed to update exam status' });
+    }
   };
 
   const tabs: { label: string; value: ExamStatus | 'all'; count: number }[] = [
@@ -67,8 +86,8 @@ export function ExamVerification() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {filtered.map(exam => {
-                const student = getStudentById(exam.studentId);
-                const teacher = getUserById(exam.teacherId);
+                const student = getStudent(exam.studentId);
+                const teacher = getTeacher(exam.teacherId);
                 return (
                   <tr key={exam.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-5 py-3">

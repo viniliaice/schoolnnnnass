@@ -7,22 +7,34 @@ export function TeacherDashboard() {
   const { session } = useRole();
   const [stats, setStats] = useState({ classes: 0, students: 0, submissions: 0, pending: 0, approved: 0, rejected: 0 });
   const [assignedClasses, setAssignedClasses] = useState<string[]>([]);
+  const [classCounts, setClassCounts] = useState<Record<string, number>>({});
 
   useEffect(() => {
     if (!session) return;
-    const teacher = getUserById(session.userId);
-    const classes = teacher?.assignedClasses || [];
-    setAssignedClasses(classes);
-    const students = getStudentsByClasses(classes);
-    const exams = getExamsByTeacher(session.userId);
-    setStats({
-      classes: classes.length,
-      students: students.length,
-      submissions: exams.length,
-      pending: exams.filter(e => e.status === 'pending').length,
-      approved: exams.filter(e => e.status === 'approved').length,
-      rejected: exams.filter(e => e.status === 'rejected').length,
-    });
+
+    const loadData = async () => {
+      const teacher = await getUserById(session.userId);
+      const classes = teacher?.assignedClasses || [];
+      setAssignedClasses(classes);
+      const students = await getStudentsByClasses(classes);
+      const exams = await getExamsByTeacher(session.userId);
+      setStats({
+        classes: classes.length,
+        students: students.length,
+        submissions: exams.length,
+        pending: exams.filter(e => e.status === 'pending').length,
+        approved: exams.filter(e => e.status === 'approved').length,
+        rejected: exams.filter(e => e.status === 'rejected').length,
+      });
+      // Calculate class counts
+      const counts: Record<string, number> = {};
+      classes.forEach(cls => {
+        counts[cls] = students.filter(s => s.className === cls).length;
+      });
+      setClassCounts(counts);
+    };
+
+    loadData();
   }, [session]);
 
   const cards = [
@@ -60,7 +72,7 @@ export function TeacherDashboard() {
         {assignedClasses.length > 0 ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
             {assignedClasses.map(cls => {
-              const studentCount = getStudentsByClasses([cls]).length;
+              const studentCount = classCounts[cls] || 0;
               return (
                 <div key={cls} className="bg-teal-50 rounded-xl p-4 border border-teal-100">
                   <p className="font-bold text-teal-800">{cls}</p>

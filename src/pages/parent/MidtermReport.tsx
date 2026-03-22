@@ -14,11 +14,20 @@ export function MidtermReport() {
 
   useEffect(() => {
     if (!session) return;
-    const kids = getStudentsByParent(session.userId);
-    setChildren(kids);
-    if (kids.length > 0) setSelectedChild(kids[0].id);
-    setExams(getExamsByParent(session.userId, 'approved'));
-    setAllStudents(getStudents());
+
+    const loadData = async () => {
+      const [kids, examsData, allStudentsData] = await Promise.all([
+        getStudentsByParent(session.userId),
+        getExamsByParent(session.userId, 'approved'),
+        getStudents()
+      ]);
+      setChildren(kids);
+      if (kids.length > 0) setSelectedChild(kids[0].id);
+      setExams(examsData);
+      setAllStudents(allStudentsData);
+    };
+
+    loadData();
   }, [session]);
 
   const child = children.find(c => c.id === selectedChild);

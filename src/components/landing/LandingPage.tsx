@@ -1,6 +1,7 @@
+import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { seedDatabase, isSeeded } from '../../lib/database';
+import { seedDatabase, isSeeded as checkIsSeeded } from '../../lib/database';
 import { Role } from '../../types';
 import { Shield, BookOpen, Heart, Database, School, Sparkles, ArrowRight, CheckCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -44,12 +45,35 @@ const roles: { role: Role; label: string; description: string; icon: typeof Shie
 export function LandingPage() {
   const { login } = useRole();
   const { addToast } = useToast();
-  const seeded = isSeeded();
+  const [seeded, setSeeded] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const handleSeed = () => {
-    seedDatabase();
-    addToast({ type: 'success', title: 'Database Seeded!', description: '6 users, 5 students, and comprehensive exam records created.' });
-    setTimeout(() => window.location.reload(), 500);
+  useEffect(() => {
+    const checkSeeded = async () => {
+      try {
+        const isDatabaseSeeded = await checkIsSeeded();
+        setSeeded(isDatabaseSeeded);
+      } catch (error) {
+        console.error('Error checking if database is seeded:', error);
+      } finally {
+        setLoading(false);
+      }
+    };
+    checkSeeded();
+  }, []);
+
+  const handleSeed = async () => {
+    try {
+      setLoading(true);
+      await seedDatabase();
+      addToast({ type: 'success', title: 'Database Seeded!', description: '6 users, 5 students, and comprehensive exam records created.' });
+      setSeeded(true);
+      setTimeout(() => window.location.reload(), 500);
+    } catch (error) {
+      console.error('Error seeding database:', error);
+      addToast({ type: 'error', title: 'Seeding Failed', description: 'Failed to seed the database. Check console for details.' });
+      setLoading(false);
+    }
   };
 
   const handleRoleSelect = (roleConfig: typeof roles[0]) => {
@@ -109,10 +133,16 @@ export function LandingPage() {
                   <p className="text-sm text-slate-500 mb-4">Initialize with demo data — users, students, and exam records</p>
                   <button
                     onClick={handleSeed}
-                    className="inline-flex items-center gap-2 px-6 py-2.5 bg-gradient-to-r from-indigo-600 to-indigo-700 text-white rounded-xl font-medium text-sm hover:from-indigo-700 hover:to-indigo-800 shadow-lg shadow-indigo-200 transition-all hover:shadow-xl active:scale-[0.98]"
+                    disabled={loading}
+                    className={cn(
+                      "inline-flex items-center gap-2 px-6 py-2.5 rounded-xl font-medium text-sm shadow-lg transition-all active:scale-[0.98]",
+                      loading
+                        ? "bg-slate-400 cursor-not-allowed"
+                        : "bg-gradient-to-r from-indigo-600 to-indigo-700 text-white hover:from-indigo-700 hover:to-indigo-800 shadow-indigo-200 hover:shadow-xl"
+                    )}
                   >
                     <Database className="w-4 h-4" />
-                    Seed Database
+                    {loading ? 'Seeding...' : 'Seed Database'}
                   </button>
                 </>
               )}
@@ -129,9 +159,9 @@ export function LandingPage() {
                   "hover:shadow-xl hover:-translate-y-1 active:scale-[0.98]",
                   roleConfig.borderColor,
                   roleConfig.bgColor,
-                  !seeded && "opacity-50 cursor-not-allowed"
+                  (!seeded || loading) && "opacity-50 cursor-not-allowed"
                 )}
-                disabled={!seeded}
+                disabled={!seeded || loading}
               >
                 <div className={cn("w-12 h-12 rounded-xl flex items-center justify-center mb-4", roleConfig.color, "bg-white shadow-sm")}>
                   <roleConfig.icon className="w-6 h-6" />

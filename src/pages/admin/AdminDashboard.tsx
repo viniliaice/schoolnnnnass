@@ -3,16 +3,28 @@ import { getSystemStats, getStudents, getExams, getUsers } from '../../lib/datab
 import { Users, GraduationCap, FileText, CheckCircle, XCircle, Clock, TrendingUp, BookOpen } from 'lucide-react';
 
 export function AdminDashboard() {
-  const [stats, setStats] = useState(getSystemStats());
-  const [recentExams, setRecentExams] = useState(getExams().slice(-5).reverse());
+  const [stats, setStats] = useState<any>(null);
+  const [recentExams, setRecentExams] = useState<any[]>([]);
+  const [students, setStudents] = useState<any[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
 
   useEffect(() => {
-    setStats(getSystemStats());
-    setRecentExams(getExams().slice(-5).reverse());
+    const loadData = async () => {
+      const statsData = await getSystemStats();
+      const examsData = await getExams();
+      const studentsData = await getStudents();
+      const usersData = await getUsers();
+
+      setStats(statsData);
+      setRecentExams(examsData.slice(-5).reverse());
+      setStudents(studentsData);
+      setUsers(usersData);
+    };
+    loadData();
   }, []);
 
-  const students = getStudents();
-  const users = getUsers();
+  if (!stats) return <div>Loading...</div>;
+
   const classes = [...new Set(students.map(s => s.className))];
 
   const statCards = [

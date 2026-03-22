@@ -13,12 +13,17 @@ export function FinalReport() {
   const [allStudents, setAllStudents] = useState<Student[]>([]);
 
   useEffect(() => {
-    if (!session) return;
-    const kids = getStudentsByParent(session.userId);
-    setChildren(kids);
-    if (kids.length > 0) setSelectedChild(kids[0].id);
-    setExams(getExamsByParent(session.userId, 'approved'));
-    setAllStudents(getStudents());
+    const loadData = async () => {
+      if (!session) return;
+      const kids = await getStudentsByParent(session.userId);
+      setChildren(kids);
+      if (kids.length > 0) setSelectedChild(kids[0].id);
+      const examsData = await getExamsByParent(session.userId, 'approved');
+      setExams(examsData);
+      const allStudentsData = await getStudents();
+      setAllStudents(allStudentsData);
+    };
+    loadData();
   }, [session]);
 
   const child = children.find(c => c.id === selectedChild);

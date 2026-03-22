@@ -1,6 +1,7 @@
 import { RoleProvider, useRole } from './context/RoleContext';
 import { ToastProvider } from './context/ToastContext';
 import { ToastContainer } from './components/ui/Toast';
+import { LoginPage } from './components/landing/LoginPage';
 import { LandingPage } from './components/landing/LandingPage';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 
@@ -26,10 +27,24 @@ import { MidtermReport } from './pages/parent/MidtermReport';
 import { FinalReport } from './pages/parent/FinalReport';
 
 function AppContent() {
-  const { session, isLoggedIn } = useRole();
+  const { session, isLoggedIn, loading } = useRole();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-indigo-50 via-white to-teal-50 flex items-center justify-center">
+        <div className="text-center">
+          <div className="w-16 h-16 bg-indigo-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          </div>
+          <h2 className="text-xl font-semibold text-slate-900 mb-2">Loading...</h2>
+          <p className="text-slate-600">Please wait while we set up your session</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!isLoggedIn || !session) {
-    return <LandingPage />;
+    return <LoginPage />;
   }
 
   return (

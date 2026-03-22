@@ -14,10 +14,16 @@ export function MonthlyReport() {
 
   useEffect(() => {
     if (!session) return;
-    const kids = getStudentsByParent(session.userId);
-    setChildren(kids);
-    if (kids.length > 0) setSelectedChild(kids[0].id);
-    setExams(getExamsByParent(session.userId, 'approved'));
+
+    const loadData = async () => {
+      const kids = await getStudentsByParent(session.userId);
+      setChildren(kids);
+      if (kids.length > 0) setSelectedChild(kids[0].id);
+      const examsData = await getExamsByParent(session.userId, 'approved');
+      setExams(examsData);
+    };
+
+    loadData();
   }, [session]);
 
   // Monthly Report = CA-type exams for selected month, filtered per student

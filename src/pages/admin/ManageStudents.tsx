@@ -19,10 +19,13 @@ export function ManageStudents() {
   const [formClass, setFormClass] = useState(CLASSES[0]);
   const [formParent, setFormParent] = useState('');
 
-  const refresh = () => {
-    setStudents(getStudents());
-    setParents(getUsersByRole('parent'));
+  const refresh = async () => {
+    const studentsData = await getStudents();
+    const parentsData = await getUsersByRole('parent');
+    setStudents(studentsData);
+    setParents(parentsData);
   };
+
   useEffect(() => { refresh(); }, []);
 
   const allClasses = [...new Set(students.map(s => s.className))].sort();
@@ -32,24 +35,36 @@ export function ManageStudents() {
 
   const resetForm = () => { setFormName(''); setFormClass(CLASSES[0]); setFormParent(''); };
 
-  const handleCreate = () => {
+  const handleCreate = async () => {
     if (!formName.trim()) { addToast({ type: 'error', title: 'Student name is required' }); return; }
-    createStudent({ name: formName, className: formClass, parentId: formParent || null });
-    addToast({ type: 'success', title: 'Student added successfully' });
-    resetForm(); setShowCreate(false); refresh();
+    try {
+      await createStudent({ name: formName, className: formClass, parentId: formParent || null });
+      addToast({ type: 'success', title: 'Student added successfully' });
+      resetForm(); setShowCreate(false); await refresh();
+    } catch (error) {
+      addToast({ type: 'error', title: 'Failed to add student' });
+    }
   };
 
-  const handleEdit = () => {
+  const handleEdit = async () => {
     if (!showEdit) return;
-    updateStudent(showEdit.id, { name: formName, className: formClass, parentId: formParent || null });
-    addToast({ type: 'success', title: 'Student updated' });
-    resetForm(); setShowEdit(null); refresh();
+    try {
+      await updateStudent(showEdit.id, { name: formName, className: formClass, parentId: formParent || null });
+      addToast({ type: 'success', title: 'Student updated' });
+      resetForm(); setShowEdit(null); await refresh();
+    } catch (error) {
+      addToast({ type: 'error', title: 'Failed to update student' });
+    }
   };
 
-  const handleDelete = (s: Student) => {
-    deleteStudent(s.id);
-    addToast({ type: 'success', title: `${s.name} deleted` });
-    refresh();
+  const handleDelete = async (s: Student) => {
+    try {
+      await deleteStudent(s.id);
+      addToast({ type: 'success', title: `${s.name} deleted` });
+      await refresh();
+    } catch (error) {
+      addToast({ type: 'error', title: 'Failed to delete student' });
+    }
   };
 
   const openEdit = (s: Student) => {

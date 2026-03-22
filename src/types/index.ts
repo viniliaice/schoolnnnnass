@@ -11,10 +11,27 @@ export const MONTHS = [
 ];
 
 export const CLASSES = [
+  // Kindergarten
+  'KG-A', 'KG-B',
+
+  // Primary School (Grades 1-6)
+  'Grade 1-A', 'Grade 1-B', 'Grade 1-C',
+  'Grade 2-A', 'Grade 2-B', 'Grade 2-C',
+  'Grade 3-A', 'Grade 3-B', 'Grade 3-C',
+  'Grade 4-A', 'Grade 4-B', 'Grade 4-C',
+  'Grade 5-A', 'Grade 5-B', 'Grade 5-C',
+  'Grade 6-A', 'Grade 6-B', 'Grade 6-C',
+
+  // Secondary School (Grades 7-12)
   'Grade 7-A', 'Grade 7-B', 'Grade 7-C',
-  'Grade 8-A', 'Grade 8-B',
-  'Grade 9-A', 'Grade 9-B',
-  'Grade 10-A', 'Grade 10-B',
+  'Grade 8-A', 'Grade 8-B', 'Grade 8-C',
+  'Grade 9-A', 'Grade 9-B', 'Grade 9-C',
+  'Grade 10-A', 'Grade 10-B', 'Grade 10-C',
+  'Grade 11-A', 'Grade 11-B', 'Grade 11-C',
+  'Grade 12-A', 'Grade 12-B', 'Grade 12-C',
+
+  // Alternative naming for Year 12 (if needed)
+  'Year 12-A', 'Year 12-B', 'Year 12-C',
 ];
 
 export const SUBJECTS = [
@@ -26,13 +43,14 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  password?: string; // For demo authentication
   role: Role;
   // Parent-specific fields
   phone1?: string;
   phone2?: string;
   xafada?: string;
   udow?: string;
-  paymentNumber?: string;
+  paymentnumber?: string;
   // Teacher-specific fields
   assignedClasses?: string[];
   createdAt: string;

@@ -8,19 +8,28 @@ import { cn } from '../../utils/cn';
 export function TeacherStudents() {
   const { session } = useRole();
   const [students, setStudents] = useState<Student[]>([]);
+  const [parents, setParents] = useState([]);
   const [classes, setClasses] = useState<string[]>([]);
   const [classFilter, setClassFilter] = useState('all');
   const [search, setSearch] = useState('');
 
   useEffect(() => {
     if (!session) return;
-    const teacher = getUserById(session.userId);
-    const cls = teacher?.assignedClasses || [];
-    setClasses(cls);
-    setStudents(getStudentsByClasses(cls));
-  }, [session]);
 
-  const parents = getUsersByRole('parent');
+    const loadData = async () => {
+      const teacher = await getUserById(session.userId);
+      const cls = teacher?.assignedClasses || [];
+      setClasses(cls);
+      const [studentsData, parentsData] = await Promise.all([
+        getStudentsByClasses(cls),
+        getUsersByRole('parent')
+      ]);
+      setStudents(studentsData);
+      setParents(parentsData);
+    };
+
+    loadData();
+  }, [session]);
   const filtered = students
     .filter(s => classFilter === 'all' || s.className === classFilter)
     .filter(s => s.name.toLowerCase().includes(search.toLowerCase()));
