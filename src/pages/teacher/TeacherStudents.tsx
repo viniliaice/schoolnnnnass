@@ -1,0 +1,97 @@
+import { useState, useEffect } from 'react';
+import { useRole } from '../../context/RoleContext';
+import { getUserById, getStudentsByClasses, getUsersByRole } from '../../lib/database';
+import { Student } from '../../types';
+import { GraduationCap, Search } from 'lucide-react';
+import { cn } from '../../utils/cn';
+
+export function TeacherStudents() {
+  const { session } = useRole();
+  const [students, setStudents] = useState<Student[]>([]);
+  const [classes, setClasses] = useState<string[]>([]);
+  const [classFilter, setClassFilter] = useState('all');
+  const [search, setSearch] = useState('');
+
+  useEffect(() => {
+    if (!session) return;
+    const teacher = getUserById(session.userId);
+    const cls = teacher?.assignedClasses || [];
+    setClasses(cls);
+    setStudents(getStudentsByClasses(cls));
+  }, [session]);
+
+  const parents = getUsersByRole('parent');
+  const filtered = students
+    .filter(s => classFilter === 'all' || s.className === classFilter)
+    .filter(s => s.name.toLowerCase().includes(search.toLowerCase()));
+
+  return (
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold text-slate-900">My Classes</h1>
+        <p className="text-slate-500 mt-1">Students in your assigned classes</p>
+      </div>
+
+      <div className="flex flex-col sm:flex-row gap-3">
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={() => setClassFilter('all')}
+            className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
+              classFilter === 'all' ? 'bg-teal-100 text-teal-700 ring-2 ring-offset-1 ring-teal-200' : 'bg-white text-slate-500 border border-slate-200'
+            )}>All ({students.length})</button>
+          {classes.map(cls => (
+            <button key={cls} onClick={() => setClassFilter(cls)}
+              className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
+                classFilter === cls ? 'bg-teal-100 text-teal-700 ring-2 ring-offset-1 ring-teal-200' : 'bg-white text-slate-500 border border-slate-200'
+              )}>{cls}</button>
+          ))}
+        </div>
+        <div className="relative flex-1 max-w-xs">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+          <input type="text" placeholder="Search students..." value={search} onChange={e => setSearch(e.target.value)}
+            className="w-full pl-10 pr-4 py-2 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-teal-200 focus:border-teal-400 outline-none" />
+        </div>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="bg-slate-50 border-b border-slate-200">
+                <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase">Student</th>
+                <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase">Class</th>
+                <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase">Parent</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100">
+              {filtered.map(s => {
+                const parent = parents.find(p => p.id === s.parentId);
+                return (
+                  <tr key={s.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-6 py-4">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold text-xs">
+                          {s.name.split(' ').map(n => n[0]).join('')}
+                        </div>
+                        <span className="font-semibold text-slate-800 text-sm">{s.name}</span>
+                      </div>
+                    </td>
+                    <td className="px-6 py-4">
+                      <span className="bg-teal-50 text-teal-700 px-2.5 py-1 rounded-lg text-xs font-semibold">{s.className}</span>
+                    </td>
+                    <td className="px-6 py-4 text-sm text-slate-600">{parent?.name || <span className="italic text-slate-400">Unassigned</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {filtered.length === 0 && (
+          <div className="text-center py-12 text-slate-400">
+            <GraduationCap className="w-12 h-12 mx-auto mb-3 opacity-50" />
+            <p className="font-medium">No students in your classes</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
