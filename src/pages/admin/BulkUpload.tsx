@@ -24,17 +24,21 @@ interface StudentRow {
   parentId: string;   // resolved ID
 }
 
+
 interface TeacherRow {
   id: number;
   name: string;
   email: string;
+  password: string;
   assignedClasses: string[];
 }
+
 
 interface ParentRow {
   id: number;
   name: string;
   email: string;
+  password: string;
   phone1: string;
   phone2: string;
   xafada: string;
@@ -105,7 +109,7 @@ export function BulkUpload() {
   // ─── Teacher State ───
   const [teacherRows, setTeacherRows] = useState<TeacherRow[]>(
     Array.from({ length: 2 }, () => ({
-      id: generateRowId(), name: '', email: '', assignedClasses: []
+      id: generateRowId(), name: '', email: '', password: '', assignedClasses: []
     }))
   );
   const [teacherCsvMode, setTeacherCsvMode] = useState(false);
@@ -115,7 +119,7 @@ export function BulkUpload() {
   // ─── Parent State ───
   const [parentRows, setParentRows] = useState<ParentRow[]>(
     Array.from({ length: 2 }, () => ({
-      id: generateRowId(), name: '', email: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
+      id: generateRowId(), name: '', email: '', password: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
     }))
   );
   const [parentCsvMode, setParentCsvMode] = useState(false);
@@ -242,6 +246,7 @@ export function BulkUpload() {
       name: r.name.trim(),
       className: r.className,
       parentId: r.parentId || null,
+      createdAt: new Date().toISOString(),
     }));
     try {
       await bulkCreateStudents(data);
@@ -260,7 +265,7 @@ export function BulkUpload() {
   // TEACHER HANDLERS
   // ═══════════════════════════════════
   const addTeacherRow = () => {
-    setTeacherRows(prev => [...prev, { id: generateRowId(), name: '', email: '', assignedClasses: [] }]);
+    setTeacherRows(prev => [...prev, { id: generateRowId(), name: '', email: '', password: '', assignedClasses: [] }]);
   };
 
   const removeTeacherRow = (id: number) => {
@@ -286,11 +291,12 @@ export function BulkUpload() {
       if (line.toLowerCase().includes('name') && line.toLowerCase().includes('email')) continue;
       const parts = line.split(',').map(s => s.trim());
       if (parts.length >= 1 && parts[0]) {
-        const classes = parts[2] ? parts[2].split(';').map(c => c.trim()).filter(c => CLASSES.includes(c)) : [];
+        const classes = parts[3] ? parts[3].split(';').map(c => c.trim()).filter(c => CLASSES.includes(c)) : [];
         rows.push({
           id: generateRowId(),
           name: parts[0],
           email: parts[1] || `${parts[0].toLowerCase().replace(/\s+/g, '.')}@campus.edu`,
+          password: parts[2] || '',
           assignedClasses: classes,
         });
       }
@@ -304,7 +310,7 @@ export function BulkUpload() {
       addToast({ type: 'error', title: 'No valid rows found in CSV' });
       return;
     }
-    setTeacherRows(prev => [...prev.filter(r => r.name.trim()), ...parsed]);
+    setTeacherRows(prev => [...prev.filter(r => r.name.trim()), ...parsed as TeacherRow[]]);
     setTeacherCsv('');
     setTeacherCsvMode(false);
     addToast({ type: 'success', title: `${parsed.length} teacher rows imported` });
@@ -318,16 +324,18 @@ export function BulkUpload() {
     }
     const data: Omit<User, 'id' | 'createdAt'>[] = valid.map(r => ({
       name: r.name.trim(),
-      email: r.email.trim() || `${r.name.trim().toLowerCase().replace(/\s+/g, '.')}@campus.edu`,
+      email: r.email.trim() || `${r.name.trim().toLowerCase().replace(/\s+/g, '.') }@campus.edu`,
+      password: r.password,
       role: 'teacher' as const,
       assignedClasses: r.assignedClasses,
+      createdAt: new Date().toISOString(),
     }));
     try {
       await bulkCreateUsers(data);
       addToast({ type: 'success', title: `✅ ${data.length} teachers created successfully!` });
       setTeacherRows(
         Array.from({ length: 2 }, () => ({
-          id: generateRowId(), name: '', email: '', assignedClasses: []
+          id: generateRowId(), name: '', email: '', password: '', assignedClasses: []
         }))
       );
     } catch (error) {
@@ -340,9 +348,9 @@ export function BulkUpload() {
   // ═══════════════════════════════════
   const addParentRows = (count: number) => {
     const newRows: ParentRow[] = Array.from({ length: count }, () => ({
-      id: generateRowId(), name: '', email: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
+      id: generateRowId(), name: '', email: '', password: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
     }));
-    setParentRows(prev => [...prev, ...newRows]);
+    setParentRows(prev => [...prev, ...newRows as ParentRow[]]);
   };
 
   const removeParentRow = (id: number) => {
@@ -364,11 +372,12 @@ export function BulkUpload() {
           id: generateRowId(),
           name: parts[0],
           email: parts[1] || '',
-          phone1: parts[2] || '',
-          phone2: parts[3] || '',
-          xafada: parts[4] || '',
-          udow: parts[5] || '',
-          paymentnumber: parts[6] || '',
+          password: parts[2] || '',
+          phone1: parts[3] || '',
+          phone2: parts[4] || '',
+          xafada: parts[5] || '',
+          udow: parts[6] || '',
+          paymentnumber: parts[7] || '',
         });
       }
     }
@@ -395,20 +404,22 @@ export function BulkUpload() {
     }
     const data: Omit<User, 'id' | 'createdAt'>[] = valid.map(r => ({
       name: r.name.trim(),
-      email: r.email.trim() || `${r.name.trim().toLowerCase().replace(/\s+/g, '.')}@email.com`,
+      email: r.email.trim() || `${r.name.trim().toLowerCase().replace(/\s+/g, '.') }@email.com`,
+      password: r.password,
       role: 'parent' as const,
       phone1: r.phone1,
       phone2: r.phone2,
       xafada: r.xafada,
       udow: r.udow,
       paymentnumber: r.paymentnumber,
+      createdAt: new Date().toISOString(),
     }));
     try {
       await bulkCreateUsers(data);
       addToast({ type: 'success', title: `✅ ${data.length} parents created successfully!` });
       setParentRows(
         Array.from({ length: 2 }, () => ({
-          id: generateRowId(), name: '', email: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
+          id: generateRowId(), name: '', email: '', password: '', phone1: '', phone2: '', xafada: '', udow: '', paymentnumber: ''
         }))
       );
     } catch (error) {
@@ -475,7 +486,7 @@ export function BulkUpload() {
       </div>
 
       {/* ═══ IMPORT ORDER BANNER ═══ */}
-      <div className="bg-gradient-to-r from-indigo-50 via-violet-50 to-teal-50 border border-indigo-100 rounded-2xl p-4 sm:p-5">
+      <div className="bg-linear-to-r from-indigo-50 via-violet-50 to-teal-50 border border-indigo-100 rounded-2xl p-4 sm:p-5">
         <div className="flex items-center gap-2 mb-3">
           <Sparkles className="w-5 h-5 text-indigo-600" />
           <h3 className="font-bold text-slate-800 text-sm">Recommended Import Order</h3>
@@ -518,7 +529,7 @@ export function BulkUpload() {
         </div>
         {activeTab === 'students' && parents.length === 0 && (
           <div className="mt-3 flex items-center gap-2 text-amber-700 bg-amber-100 border border-amber-200 rounded-lg px-3 py-2 text-xs font-medium">
-            <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            <AlertCircle className="w-4 h-4 shrink-0" />
             No parents found! Upload parents first so you can assign students to them.
           </div>
         )}
@@ -604,7 +615,7 @@ export function BulkUpload() {
       {activeTab === 'parents' && (
         <>
           <div className={cn("rounded-xl p-3 border flex items-center gap-3 text-sm", tc.light, tc.border, tc.text)}>
-            <Info className="w-4 h-4 flex-shrink-0" />
+            <Info className="w-4 h-4 shrink-0" />
             <span><strong>Step 1:</strong> Upload parents first. Each parent needs a name, contact details, and location info.</span>
           </div>
 
@@ -644,7 +655,7 @@ export function BulkUpload() {
                 {parentRows.map((row, idx) => (
                   <div key={row.id} className="bg-white rounded-2xl border border-slate-200 p-4 group hover:shadow-md transition-all">
                     <div className="flex items-start gap-3">
-                      <span className="text-sm text-slate-400 font-mono mt-2.5 w-6 flex-shrink-0">{idx + 1}</span>
+                      <span className="text-sm text-slate-400 font-mono mt-2.5 w-6 shrink-0">{idx + 1}</span>
                       <div className="flex-1 space-y-3">
                         {/* Name & Email */}
                         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -653,6 +664,9 @@ export function BulkUpload() {
                             className="px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-violet-200 focus:border-violet-400 outline-none" />
                           <input type="email" placeholder="Email" value={row.email}
                             onChange={e => updateParentRow(row.id, 'email', e.target.value)}
+                            className="px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-violet-200 focus:border-violet-400 outline-none" />
+                        <input type="password" placeholder="Password *" value={row.password}
+                            onChange={e => updateParentRow(row.id, 'password', e.target.value)}
                             className="px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-violet-200 focus:border-violet-400 outline-none" />
                         </div>
                         {/* Phones & Payment */}
@@ -708,7 +722,7 @@ export function BulkUpload() {
       {activeTab === 'teachers' && (
         <>
           <div className={cn("rounded-xl p-3 border flex items-center gap-3 text-sm", tc.light, tc.border, tc.text)}>
-            <Info className="w-4 h-4 flex-shrink-0" />
+            <Info className="w-4 h-4 shrink-0" />
             <span><strong>Step 2:</strong> Upload teachers and assign them to the classes they teach.</span>
           </div>
 
@@ -740,15 +754,19 @@ export function BulkUpload() {
                 {teacherRows.map((row, idx) => (
                   <div key={row.id} className="bg-white rounded-2xl border border-slate-200 p-4 group hover:shadow-md transition-all">
                     <div className="flex items-start gap-3">
-                      <span className="text-sm text-slate-400 font-mono mt-2.5 w-6 flex-shrink-0">{idx + 1}</span>
+                      <span className="text-sm text-slate-400 font-mono mt-2.5 w-6 shrink-0">{idx + 1}</span>
                       <div className="flex-1 space-y-3">
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                           <input type="text" placeholder="Full name *" value={row.name}
                             onChange={e => updateTeacherRow(row.id, 'name', e.target.value)}
                             className="px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-teal-200 focus:border-teal-400 outline-none" />
                           <input type="email" placeholder="Email (auto-generated if empty)" value={row.email}
                             onChange={e => updateTeacherRow(row.id, 'email', e.target.value)}
                             className="px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-teal-200 focus:border-teal-400 outline-none" />
+                           <input type="password" placeholder="Password *" value={row.password}
+                            onChange={e => updateTeacherRow(row.id, 'password', e.target.value)}
+                            className="px-3 py-2 rounded-lg border border-slate-200 text-sm focus:ring-2 focus:ring-violet-200 focus:border-violet-400 outline-none" />
+                       
                         </div>
                         {/* Class Picker */}
                         <div>
@@ -817,7 +835,7 @@ export function BulkUpload() {
       {activeTab === 'students' && (
         <>
           <div className={cn("rounded-xl p-3 border flex items-center gap-3 text-sm", tc.light, tc.border, tc.text)}>
-            <Info className="w-4 h-4 flex-shrink-0" />
+            <Info className="w-4 h-4 shrink-0" />
             <span><strong>Step 3:</strong> Upload students and assign each to a class and parent. Use parent name in CSV — it will auto-match.</span>
           </div>
 
@@ -845,7 +863,7 @@ export function BulkUpload() {
                   </div>
                 ) : (
                   <div className="bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-700 font-medium flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                    <AlertCircle className="w-4 h-4 shrink-0" />
                     No parents in the system yet. Upload parents first (Step 1), then come back here.
                   </div>
                 )
@@ -1106,7 +1124,7 @@ export function BulkUpload() {
       {/* ═══ IMPORT GUIDE DIALOG ═══ */}
       <Dialog open={showGuide} onClose={() => setShowGuide(false)} title="📋 Import Guide — How to Upload Data" className="max-w-2xl">
         <div className="space-y-6">
-          <div className="bg-gradient-to-r from-indigo-50 to-violet-50 rounded-xl p-4 border border-indigo-100">
+          <div className="bg-linear-to-r from-indigo-50 to-violet-50 rounded-xl p-4 border border-indigo-100">
             <h4 className="font-bold text-slate-800 mb-2">Why does order matter?</h4>
             <p className="text-sm text-slate-600">
               Students need to be linked to their parents. If you upload students first,

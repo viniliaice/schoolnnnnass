@@ -1,7 +1,9 @@
+import { useState } from 'react';
 import { RoleProvider, useRole } from './context/RoleContext';
 import { ToastProvider } from './context/ToastContext';
 import { ToastContainer } from './components/ui/Toast';
 import { LoginPage } from './components/landing/LoginPage';
+import { SignUpPage } from './components/landing/SignUpPage';
 import { LandingPage } from './components/landing/LandingPage';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 
@@ -26,8 +28,10 @@ import { MonthlyReport } from './pages/parent/MonthlyReport';
 import { MidtermReport } from './pages/parent/MidtermReport';
 import { FinalReport } from './pages/parent/FinalReport';
 
+
 function AppContent() {
   const { session, isLoggedIn, loading } = useRole();
+  const [showSignUp, setShowSignUp] = useState(false);
 
   if (loading) {
     return (
@@ -44,7 +48,28 @@ function AppContent() {
   }
 
   if (!isLoggedIn || !session) {
-    return <LoginPage />;
+    return (
+      <>
+        {showSignUp ? <SignUpPage /> : <LoginPage />}
+        <div className="text-center mt-4">
+          {showSignUp ? (
+            <button
+              className="text-indigo-600 hover:underline font-medium"
+              onClick={() => setShowSignUp(false)}
+            >
+              Already have an account? Log in
+            </button>
+          ) : (
+            <button
+              className="text-indigo-600 hover:underline font-medium"
+              onClick={() => setShowSignUp(true)}
+            >
+              Don't have an account? Sign up
+            </button>
+          )}
+        </div>
+      </>
+    );
   }
 
   return (

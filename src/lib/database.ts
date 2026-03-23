@@ -11,33 +11,36 @@ export async function signIn(email: string, password: string) {
   return data;
 }
 
-export async function signUp(email: string, password: string, userData: Partial<User>) {
+// Sign up a new user (used for first-time password setup)
+export async function signUp(email: string, password: string) {
   const { data, error } = await supabase.auth.signUp({
     email,
     password,
   });
   if (error) throw error;
-
   // Create user profile in our users table
   if (data.user) {
     const { error: profileError } = await supabase
       .from('users')
-      .insert({
-        id: data.user.id,
-        email: data.user.email,
-        name: userData.name || '',
-        role: userData.role || 'parent',
-        phone1: userData.phone1 || '',
-        phone2: userData.phone2 || '',
-        xafada: userData.xafada || '',
-        udow: userData.udow || '',
-        payment: userData.payment || '',
-        assignedClasses: userData.assignedClasses || [],
-      });
+      .update({ id: data.user.id })
+      .eq('email', email);
     if (profileError) throw profileError;
   }
-
   return data;
+}
+
+// ...existing code...
+
+// Helper: check if user exists in Supabase Auth
+export async function isUserInAuth(email: string): Promise<boolean> {
+  // Supabase does not provide direct API to check, so try signIn with random password
+  const { error } = await supabase.auth.signInWithPassword({ email, password: 'invalid-password' });
+  if (error && error.message.includes('Invalid login credentials')) {
+    // If error is invalid credentials, user exists in Auth
+    return true;
+  }
+  // If error is user not found, user does not exist
+  return false;
 }
 
 export async function signOut() {
@@ -176,11 +179,13 @@ export async function getStudentsByParent(parentId: string): Promise<Student[]> 
   return data || [];
 }
 
+
 export async function getStudentsByClass(className: string): Promise<Student[]> {
   const { data, error } = await supabase.from('students').select('*').eq('className', className);
   if (error) throw error;
   return data || [];
 }
+
 
 export async function getStudentsByClasses(classNames: string[]): Promise<Student[]> {
   const { data, error } = await supabase.from('students').select('*').in('className', classNames);
@@ -194,14 +199,26 @@ export async function createStudent(data: Omit<Student, 'id' | 'createdAt'>): Pr
   const random = Math.random().toString(36).substring(2, 8);
   const id = `student-${timestamp}-${random}`;
 
-  const student: Omit<Student, 'id'> = { ...data, createdAt: new Date().toISOString() };
+  // Use PascalCase for DB columns to match Supabase schema
+  const student = {
+    name: data.name,
+    className: data.className,
+    parentId: data.parentId,
+    createdAt: new Date().toISOString(),
+  };
   const { data: created, error } = await supabase.from('students').insert({ id, ...student }).select().single();
   if (error) throw error;
   return created;
 }
 
 export async function updateStudent(id: string, data: Partial<Student>): Promise<Student | null> {
-  const { data: updated, error } = await supabase.from('students').update(data).eq('id', id).select().single();
+  // Use PascalCase for DB columns to match Supabase schema
+  const updateData: any = {};
+  if (data.name !== undefined) updateData.name = data.name;
+  if (data.className !== undefined) updateData.className = data.className;
+  if (data.parentId !== undefined) updateData.parentId = data.parentId;
+  if (data.createdAt !== undefined) updateData.createdAt = data.createdAt;
+  const { data: updated, error } = await supabase.from('students').update(updateData).eq('id', id).select().single();
   if (error) return null;
   return updated;
 }
@@ -246,7 +263,7 @@ export async function getExamsByStatus(status: ExamStatus): Promise<Exam[]> {
   return data || [];
 }
 
-export async function createExam(data: Omit<Exam, 'id' | 'createdAt'>): Promise<Exam> {
+export async function createExam(data: Omit<Exam, 'id' | 'created_At'>): Promise<Exam> {
   // Generate unique ID
   const timestamp = Date.now();
   const random = Math.random().toString(36).substring(2, 8);
@@ -371,7 +388,7 @@ export async function seedDatabase(): Promise<void> {
     id: 'parent-002', name: 'Lisa Rodriguez', email: 'lrodriguez@email.com',
     role: 'parent', phone1: '0617654321', phone2: '0617654322',
     xafada: 'Warta Nabadda', udow: 'Km4 Junction',
-    createdAt: now,
+createdAt: now,
   };
 
   const parent3: User = {

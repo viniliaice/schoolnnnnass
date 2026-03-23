@@ -1,7 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from 'react';
-import { Role, RoleSession } from '../types';
+import { RoleSession } from '../types';
 import { supabase } from '../lib/supabase';
-import { getCurrentUserProfile } from '../lib/database';
 
 interface RoleContextType {
   session: RoleSession | null;
@@ -19,82 +18,42 @@ export function RoleProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
+    // Login logic: only checks password from users table (no Supabase Auth)
     const login = useCallback(async (email: string, password: string) => {
-
       setLoading(true);
-
       try {
-
-        // For demo purposes, check against users table directly
-
-        // In production, you'd use Supabase auth
-
-        const { data: userProfile, error } = await supabase
-
+        // 1. Check if user exists in users table
+        const { data: userProfile, error: userError } = await supabase
           .from('users')
-
           .select('*')
-
           .eq('email', email)
-
           .maybeSingle();
+        if (userError) throw userError;
+        if (!userProfile) throw new Error('User not found');
 
-  
-
-        if (error) throw error;
-
-  
-
-        if (!userProfile) {
-
-          throw new Error('User not found');
-
-        }
-
-  
-
-        // Simple password check for demo (in production, use proper auth)
-        const expectedPassword = email === 'admin@scholo.com' ? 'admin123' :
-                                email === 'teacher@scholo.com' ? 'teacher123' :
-                                email === 'parent@scholo.com' ? 'parent123' : null;
-
-        if (password !== expectedPassword) {
+        // 2. Check password (plain text, or hash if implemented)
+        if (!userProfile.password || userProfile.password !== password) {
           throw new Error('Invalid password');
         }
 
-
-
-  
-
+        // Success: set session
         const newSession: RoleSession = {
-
           role: userProfile.role,
-
           userId: userProfile.id,
-
           userName: userProfile.name,
-
         };
-
         setSession(newSession);
-
         setUser({ id: userProfile.id, email: userProfile.email });
-
       } catch (error) {
-
-        console.error("Login error:", error);
-
+        console.error('Login error:', error);
         throw error;
-
-      }
-
-      finally {
-
+      } finally {
         setLoading(false);
-
       }
-
     }, []);
+
+    // Helper: Set password for first-time users (creates Supabase Auth account and links to users table)
+// setFirstTimePassword helper removed for now (can be re-exposed via context/provider if needed)
 
   const logout = useCallback(async () => {
     setLoading(true);

@@ -29,6 +29,7 @@ export function ManageUsers() {
   const [formUdow, setFormUdow] = useState('');
   const [formPayment, setFormPayment] = useState('');
   const [formClasses, setFormClasses] = useState<string[]>([]);
+  const [formPassword, setFormPassword] = useState('');
 
   const refresh = async () => {
     const [usersData, studentsData] = await Promise.all([
@@ -51,16 +52,16 @@ export function ManageUsers() {
 
   const resetForm = () => {
     setFormName(''); setFormEmail(''); setFormPhone1(''); setFormPhone2('');
-    setFormXafada(''); setFormUdow(''); setFormPayment(''); setFormClasses([]);
+    setFormXafada(''); setFormUdow(''); setFormPayment(''); setFormClasses([]); setFormPassword('');
   };
 
   const handleCreate = async () => {
-    if (!formName.trim() || !formEmail.trim()) {
-      addToast({ type: 'error', title: 'Name and email are required' });
+    if (!formName.trim() || !formEmail.trim() || !formPassword.trim()) {
+      addToast({ type: 'error', title: 'Name, email, and password are required' });
       return;
     }
     const data: Omit<User, 'id' | 'createdAt'> = {
-      name: formName, email: formEmail, role: createRole,
+      name: formName, email: formEmail, role: createRole, password: formPassword,
     };
     if (createRole === 'parent') {
       data.phone1 = formPhone1; data.phone2 = formPhone2;
@@ -82,6 +83,7 @@ export function ManageUsers() {
   const handleEdit = async () => {
     if (!showEdit) return;
     const data: Partial<User> = { name: formName, email: formEmail };
+    if (formPassword.trim()) data.password = formPassword;
     if (showEdit.role === 'parent') {
       data.phone1 = formPhone1; data.phone2 = formPhone2;
       data.xafada = formXafada; data.udow = formUdow;
@@ -119,6 +121,7 @@ export function ManageUsers() {
     setFormXafada(user.xafada || ''); setFormUdow(user.udow || '');
     setFormPayment(user.paymentnumber || '');
     setFormClasses(user.assignedClasses || []);
+    setFormPassword('');
     setShowEdit(user);
   };
 
@@ -280,6 +283,8 @@ export function ManageUsers() {
             className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
           <input placeholder="Email" value={formEmail} onChange={e => setFormEmail(e.target.value)}
             className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
+          <input placeholder="Password" type="password" value={formPassword} onChange={e => setFormPassword(e.target.value)}
+            className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" required />
 
           {createRole === 'parent' && (
             <>
@@ -330,6 +335,8 @@ export function ManageUsers() {
           <input placeholder="Full Name" value={formName} onChange={e => setFormName(e.target.value)}
             className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
           <input placeholder="Email" value={formEmail} onChange={e => setFormEmail(e.target.value)}
+            className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
+          <input placeholder="Password (leave blank to keep current)" type="password" value={formPassword} onChange={e => setFormPassword(e.target.value)}
             className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
 
           {showEdit?.role === 'parent' && (
