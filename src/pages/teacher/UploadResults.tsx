@@ -139,8 +139,12 @@ export function UploadResults() {
   const handleSubmitAll = () => {
     setSubmitting(true);
 
-    const examsToCreate = filledStudents.map(s => {
-      const student = getStudentById(s.studentId);
+
+    // Fetch all students in parallel and map parentId
+    const studentPromises = filledStudents.map(s => getStudentById(s.studentId));
+    const students = await Promise.all(studentPromises);
+    const examsToCreate = filledStudents.map((s, idx) => {
+      const student = students[idx];
       return {
         studentId: s.studentId,
         subject,
@@ -155,7 +159,7 @@ export function UploadResults() {
       };
     });
 
-    bulkCreateExams(examsToCreate);
+    await bulkCreateExams(examsToCreate);
 
     setSubmitting(false);
     setSubmitted(true);
@@ -415,7 +419,7 @@ export function UploadResults() {
                         <td className="px-4 py-3 text-sm text-slate-400 font-mono">{idx + 1}</td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold text-xs flex-shrink-0">
+                            <div className="w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center text-teal-700 font-bold text-xs shrink-0">
                               {s.studentName.split(' ').map(n => n[0]).join('').substring(0, 2)}
                             </div>
                             <span className="font-semibold text-slate-800 text-sm">{s.studentName}</span>
