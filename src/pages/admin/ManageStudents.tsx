@@ -1,14 +1,18 @@
 import { useState, useEffect } from 'react';
-import { getStudents, getUsersByRole, createStudent, updateStudent, deleteStudent } from '../../lib/database';
+import { getStudentsPaginated, getUsersByRole, createStudent, updateStudent, deleteStudent } from '../../lib/database';
 import { Student, User, CLASSES } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { Dialog } from '../../components/ui/Dialog';
-import { Plus, Trash2, Edit, GraduationCap, Search } from 'lucide-react';
+import { DataTable } from '../../components/ui/DataTable';
+import { Plus, Trash2, Edit, GraduationCap, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { ColumnDef } from '@tanstack/react-table';
 
 export function ManageStudents() {
   const { addToast } = useToast();
   const [students, setStudents] = useState<Student[]>([]);
+  const [totalStudents, setTotalStudents] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
   const [parents, setParents] = useState<User[]>([]);
   const [classFilter, setClassFilter] = useState('all');
   const [search, setSearch] = useState('');
@@ -18,22 +22,110 @@ export function ManageStudents() {
   const [formName, setFormName] = useState('');
   const [formClass, setFormClass] = useState(CLASSES[0]);
   const [formParent, setFormParent] = useState('');
+  const [parentSearch, setParentSearch] = useState('');
 
-  const refresh = async () => {
-    const studentsData = await getStudents();
-    const parentsData = await getUsersByRole('parent');
-    setStudents(studentsData);
+  const STUDENTS_PER_PAGE = 50;
+
+  const refresh = async (page: number = currentPage, searchTerm?: string) => {
+    const [studentsData, parentsData] = await Promise.all([
+      getStudentsPaginated(page, STUDENTS_PER_PAGE, searchTerm || search),
+      getUsersByRole('parent')
+    ]);
+    setStudents(studentsData.students);
+    setTotalStudents(studentsData.total);
     setParents(parentsData);
   };
 
-  useEffect(() => { refresh(); }, []);
+  useEffect(() => {
+    refresh();
+  }, [currentPage]);
 
-  const allClasses = [...new Set(students.map(s => s.className))].sort();
-  const filtered = students
-    .filter(s => classFilter === 'all' || s.className === classFilter)
-    .filter(s => s.name.toLowerCase().includes(search.toLowerCase()));
+  useEffect(() => {
+    refresh(1); // Reset to first page when search changes
+    setCurrentPage(1);
+  }, [search]);
 
-  const resetForm = () => { setFormName(''); setFormClass(CLASSES[0]); setFormParent(''); };
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
+
+  const filteredParents = parents.filter(p =>
+    p.name.toLowerCase().includes(parentSearch.toLowerCase()) ||
+    p.email.toLowerCase().includes(parentSearch.toLowerCase())
+  );
+
+  const filtered = students.filter(s => classFilter === 'all' || s.className === classFilter);
+
+  const columns: ColumnDef<Student>[] = [
+    {
+      accessorKey: 'name',
+      header: 'Name',
+      cell: ({ row }) => {
+        const student = row.original;
+        return (
+          <div className="flex items-center gap-3">
+            <div className="w-8 h-8 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">
+              {student.name.split(' ').map(n => n[0]).join('')}
+            </div>
+            <span className="font-medium text-gray-900">{student.name}</span>
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: 'className',
+      header: 'Class',
+      cell: ({ row }) => {
+        const className = row.getValue('className') as string;
+        return (
+          <span className="bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-lg text-xs font-semibold">
+            {className}
+          </span>
+        );
+      },
+    },
+    {
+      id: 'parent',
+      header: 'Parent',
+      cell: ({ row }) => {
+        const student = row.original;
+        const parent = parents.find(p => p.id === student.parentId);
+        return parent ? (
+          <div>
+            <span className="text-sm text-gray-900 font-medium">{parent.name}</span>
+            {parent.phone1 && <span className="text-xs text-gray-500 block">{parent.phone1}</span>}
+          </div>
+        ) : (
+          <span className="text-sm text-gray-400 italic">Unassigned</span>
+        );
+      },
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      cell: ({ row }) => {
+        const student = row.original;
+        return (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => openEdit(student)}
+              className="p-1 text-blue-400 hover:text-blue-600"
+            >
+              <Edit className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => handleDelete(student)}
+              className="p-1 text-red-400 hover:text-red-600"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        );
+      },
+    },
+  ];
+
+  const resetForm = () => { setFormName(''); setFormClass(CLASSES[0]); setFormParent(''); setParentSearch(''); };
 
   const handleCreate = async () => {
     if (!formName.trim()) { addToast({ type: 'error', title: 'Student name is required' }); return; }
@@ -68,7 +160,11 @@ export function ManageStudents() {
   };
 
   const openEdit = (s: Student) => {
-    setFormName(s.name); setFormClass(s.className); setFormParent(s.parentId || '');
+    const parent = parents.find(p => p.id === s.parentId);
+    setFormName(s.name);
+    setFormClass(s.className);
+    setFormParent(s.parentId || '');
+    setParentSearch(parent ? parent.name : '');
     setShowEdit(s);
   };
 
@@ -92,7 +188,7 @@ export function ManageStudents() {
             className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
               classFilter === 'all' ? 'bg-indigo-100 text-indigo-700 ring-2 ring-offset-1 ring-indigo-200' : 'bg-white text-slate-500 border border-slate-200'
             )}>All Classes</button>
-          {allClasses.map(cls => (
+          {CLASSES.map(cls => (
             <button key={cls} onClick={() => setClassFilter(cls)}
               className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
                 classFilter === cls ? 'bg-indigo-100 text-indigo-700 ring-2 ring-offset-1 ring-indigo-200' : 'bg-white text-slate-500 border border-slate-200'
@@ -107,67 +203,23 @@ export function ManageStudents() {
         </div>
       </div>
 
-      {/* Table */}
-      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase">Student</th>
-                <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase">Class</th>
-                <th className="text-left px-6 py-3 text-xs font-semibold text-slate-500 uppercase">Parent</th>
-                <th className="text-right px-6 py-3 text-xs font-semibold text-slate-500 uppercase">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map(s => {
-                const parent = parents.find(p => p.id === s.parentId);
-                return (
-                  <tr key={s.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-6 py-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-9 h-9 rounded-full bg-blue-100 flex items-center justify-center text-blue-700 font-bold text-xs">
-                          {s.name.split(' ').map(n => n[0]).join('')}
-                        </div>
-                        <span className="font-semibold text-slate-800 text-sm">{s.name}</span>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-lg text-xs font-semibold">{s.className}</span>
-                    </td>
-                    <td className="px-6 py-4">
-                      {parent ? (
-                        <div>
-                          <span className="text-sm text-slate-800 font-medium">{parent.name}</span>
-                          {parent.phone1 && <span className="text-xs text-slate-400 block">{parent.phone1}</span>}
-                        </div>
-                      ) : (
-                        <span className="text-sm text-slate-400 italic">Unassigned</span>
-                      )}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <div className="flex justify-end gap-2">
-                        <button onClick={() => openEdit(s)} className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                          <Edit className="w-4 h-4" />
-                        </button>
-                        <button onClick={() => handleDelete(s)} className="p-2 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+
+
+      {/* Students Table */}
+      <DataTable
+        data={filtered}
+        columns={columns}
+        searchPlaceholder="Search students..."
+        searchValue={search}
+        onSearchChange={setSearch}
+      />
+
+      {filtered.length === 0 && (
+        <div className="text-center py-12 text-slate-400">
+          <GraduationCap className="w-12 h-12 mx-auto mb-3 opacity-50" />
+          <p className="font-medium">No students found</p>
         </div>
-        {filtered.length === 0 && (
-          <div className="text-center py-12 text-slate-400">
-            <GraduationCap className="w-12 h-12 mx-auto mb-3 opacity-50" />
-            <p className="font-medium">No students found</p>
-          </div>
-        )}
-      </div>
+      )}
 
       {/* Create Dialog */}
       <Dialog open={showCreate} onClose={() => setShowCreate(false)} title="Add New Student" description="Only admins can add students">
@@ -183,11 +235,38 @@ export function ManageStudents() {
           </div>
           <div>
             <label className="text-sm font-semibold text-slate-700 mb-1.5 block">Assign Parent</label>
-            <select value={formParent} onChange={e => setFormParent(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none bg-white">
-              <option value="">— No parent —</option>
-              {parents.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Search parents by name or email..."
+                value={parentSearch}
+                onChange={e => setParentSearch(e.target.value)}
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none"
+              />
+              {parentSearch && (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                  <button
+                    onClick={() => { setFormParent(''); setParentSearch(''); }}
+                    className="w-full px-4 py-2 text-left text-sm text-slate-500 hover:bg-slate-50"
+                  >
+                    — No parent —
+                  </button>
+                  {filteredParents.map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => { setFormParent(p.id); setParentSearch(p.name); }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                    >
+                      <div className="font-medium text-slate-800">{p.name}</div>
+                      <div className="text-xs text-slate-500">{p.email}</div>
+                    </button>
+                  ))}
+                  {filteredParents.length === 0 && parentSearch && (
+                    <div className="px-4 py-2 text-sm text-slate-500">No parents found</div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
           <button onClick={handleCreate}
             className="w-full py-2.5 bg-indigo-600 text-white rounded-xl font-medium text-sm hover:bg-indigo-700 transition-colors">
@@ -210,11 +289,38 @@ export function ManageStudents() {
           </div>
           <div>
             <label className="text-sm font-semibold text-slate-700 mb-1.5 block">Assign Parent</label>
-            <select value={formParent} onChange={e => setFormParent(e.target.value)}
-              className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none bg-white">
-              <option value="">— No parent —</option>
-              {parents.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-            </select>
+            <div className="relative">
+              <input
+                type="text"
+                placeholder="Search parents by name or email..."
+                value={parentSearch}
+                onChange={e => setParentSearch(e.target.value)}
+                className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none"
+              />
+              {parentSearch && (
+                <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+                  <button
+                    onClick={() => { setFormParent(''); setParentSearch(''); }}
+                    className="w-full px-4 py-2 text-left text-sm text-slate-500 hover:bg-slate-50"
+                  >
+                    — No parent —
+                  </button>
+                  {filteredParents.map(p => (
+                    <button
+                      key={p.id}
+                      onClick={() => { setFormParent(p.id); setParentSearch(p.name); }}
+                      className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50"
+                    >
+                      <div className="font-medium text-slate-800">{p.name}</div>
+                      <div className="text-xs text-slate-500">{p.email}</div>
+                    </button>
+                  ))}
+                  {filteredParents.length === 0 && parentSearch && (
+                    <div className="px-4 py-2 text-sm text-slate-500">No parents found</div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
           <button onClick={handleEdit}
             className="w-full py-2.5 bg-indigo-600 text-white rounded-xl font-medium text-sm hover:bg-indigo-700 transition-colors">

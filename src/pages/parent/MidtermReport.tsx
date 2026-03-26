@@ -1,75 +1,49 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getExamsByParent, getStudents } from '../../lib/database';
-import { Student, Exam, getGrade } from '../../types';
+import { getStudentsByParent, getCurrentTerm, getMidtermReport } from '../../lib/database';
+import { Student } from '../../types';
+import type { MidtermReport } from '../../types';
 import { FileBarChart } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 export function MidtermReport() {
   const { session } = useRole();
   const [children, setChildren] = useState<Student[]>([]);
-  const [exams, setExams] = useState<Exam[]>([]);
+  const [reportData, setReportData] = useState<MidtermReport | null>(null);
   const [selectedChild, setSelectedChild] = useState('');
-  const [allStudents, setAllStudents] = useState<Student[]>([]);
 
   useEffect(() => {
     if (!session) return;
 
     const loadData = async () => {
-      const [kids, examsData, allStudentsData] = await Promise.all([
-        getStudentsByParent(session.userId),
-        getExamsByParent(session.userId, 'approved'),
-        getStudents()
-      ]);
+      const kids = await getStudentsByParent(session.userId);
       setChildren(kids);
       if (kids.length > 0) setSelectedChild(kids[0].id);
-      setExams(examsData);
-      setAllStudents(allStudentsData);
     };
 
     loadData();
   }, [session]);
 
+  useEffect(() => {
+    if (!selectedChild) return;
+
+    const loadReport = async () => {
+      const term = await getCurrentTerm();
+      if (!term) return;
+      const report = await getMidtermReport(selectedChild, term.id);
+      setReportData(report);
+    };
+
+    loadReport();
+  }, [selectedChild]);
+
   const child = children.find(c => c.id === selectedChild);
 
-  // Midterm exams for selected child
-  const midtermExams = exams.filter(e => e.studentId === selectedChild && e.examType === 'Midterm');
-  const subjects = [...new Set(midtermExams.map(e => e.subject))];
-
-  const subjectData = subjects.map(sub => {
-    const exam = midtermExams.find(e => e.subject === sub)!;
-    return {
-      subject: sub,
-      score: exam.score,
-      total: exam.total,
-      percentage: Math.round(exam.score / exam.total * 100),
-      grade: getGrade(Math.round(exam.score / exam.total * 100)),
-    };
-  });
-
-  const totalScore = subjectData.reduce((s, d) => s + d.score, 0);
-  const totalMarks = subjectData.reduce((s, d) => s + d.total, 0);
-  const overallAvg = subjectData.length > 0
-    ? Math.round(subjectData.reduce((s, d) => s + d.percentage, 0) / subjectData.length)
+  const overallAvg = reportData?.scores.length
+    ? Math.round(reportData.scores.reduce((s, score) => s + score.percentage, 0) / reportData.scores.length)
     : 0;
 
-  // Calculate rank among classmates (simple position)
-  let rank = '—';
-  if (child && subjectData.length > 0) {
-    const classmates = allStudents.filter(s => s.className === child.className);
-    const classMidtermAvgs = classmates.map(cm => {
-      const cmExams = exams.filter(e => e.studentId === cm.id && e.examType === 'Midterm');
-      if (cmExams.length === 0) return { id: cm.id, avg: 0 };
-      const avg = Math.round(cmExams.reduce((s, e) => s + (e.score / e.total * 100), 0) / cmExams.length);
-      return { id: cm.id, avg };
-    }).filter(cm => cm.avg > 0).sort((a, b) => b.avg - a.avg);
-
-    const pos = classMidtermAvgs.findIndex(cm => cm.id === selectedChild) + 1;
-    if (pos > 0) {
-      const suffix = pos === 1 ? 'st' : pos === 2 ? 'nd' : pos === 3 ? 'rd' : 'th';
-      rank = `${pos}${suffix} / ${classMidtermAvgs.length}`;
-    }
-  }
+  const rank = reportData ? `${reportData.overall_rank} / ${reportData.total_students}` : '—';
 
   return (
     <div className="space-y-6">
@@ -111,7 +85,7 @@ export function MidtermReport() {
             </div>
           </div>
 
-          {subjectData.length > 0 ? (
+          {reportData && reportData.scores.length > 0 ? (
             <>
               <div className="overflow-x-auto">
                 <table className="w-full">
@@ -122,42 +96,48 @@ export function MidtermReport() {
                       <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Total</th>
                       <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Percentage</th>
                       <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Grade</th>
+                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject Rank</th>
+                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Class Avg</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
-                    {subjectData.map(row => (
-                      <tr key={row.subject} className="hover:bg-slate-50">
-                        <td className="px-5 py-4 font-semibold text-slate-800 text-sm">{row.subject}</td>
-                        <td className="px-5 py-4 text-center font-bold text-slate-700">{row.score}</td>
-                        <td className="px-5 py-4 text-center text-slate-500">{row.total}</td>
+                    {reportData.scores.map(score => (
+                      <tr key={score.subject} className="hover:bg-slate-50">
+                        <td className="px-5 py-4 font-semibold text-slate-800 text-sm">{score.subject}</td>
+                        <td className="px-5 py-4 text-center font-bold text-slate-700">{score.score}</td>
+                        <td className="px-5 py-4 text-center text-slate-500">{score.total}</td>
                         <td className="px-5 py-4 text-center">
                           <span className={cn("font-bold",
-                            row.percentage >= 80 ? 'text-emerald-600' : row.percentage >= 60 ? 'text-amber-600' : 'text-red-600'
-                          )}>{row.percentage}%</span>
+                            score.percentage >= 80 ? 'text-emerald-600' : score.percentage >= 60 ? 'text-amber-600' : 'text-red-600'
+                          )}>{score.percentage}%</span>
                         </td>
                         <td className="px-5 py-4 text-center">
                           <span className={cn("px-3 py-1 rounded-full text-xs font-bold",
-                            row.grade === 'A' ? 'bg-emerald-100 text-emerald-700' :
-                            row.grade === 'B' ? 'bg-blue-100 text-blue-700' :
-                            row.grade === 'C' ? 'bg-amber-100 text-amber-700' :
-                            row.grade === 'D' ? 'bg-orange-100 text-orange-700' :
+                            score.grade === 'A' ? 'bg-emerald-100 text-emerald-700' :
+                            score.grade === 'B' ? 'bg-blue-100 text-blue-700' :
+                            score.grade === 'C' ? 'bg-amber-100 text-amber-700' :
+                            score.grade === 'D' ? 'bg-orange-100 text-orange-700' :
                             'bg-red-100 text-red-700'
-                          )}>{row.grade}</span>
+                          )}>{score.grade}</span>
                         </td>
+                        <td className="px-5 py-4 text-center text-slate-600">{score.subject_rank}</td>
+                        <td className="px-5 py-4 text-center text-slate-600">{score.class_average}%</td>
                       </tr>
                     ))}
                   </tbody>
                   <tfoot>
                     <tr className="bg-slate-50 font-bold">
-                      <td className="px-5 py-3 text-sm text-slate-800">TOTAL</td>
-                      <td className="px-5 py-3 text-center text-slate-800">{totalScore}</td>
-                      <td className="px-5 py-3 text-center text-slate-500">{totalMarks}</td>
+                      <td className="px-5 py-3 text-sm text-slate-800">OVERALL</td>
+                      <td className="px-5 py-3 text-center text-slate-800">—</td>
+                      <td className="px-5 py-3 text-center text-slate-500">—</td>
                       <td className="px-5 py-3 text-center text-indigo-700">{overallAvg}%</td>
                       <td className="px-5 py-3 text-center">
                         <span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700">
-                          {getGrade(overallAvg)}
+                          {overallAvg >= 90 ? 'A' : overallAvg >= 80 ? 'B' : overallAvg >= 70 ? 'C' : overallAvg >= 60 ? 'D' : 'F'}
                         </span>
                       </td>
+                      <td className="px-5 py-3 text-center text-slate-800">{rank}</td>
+                      <td className="px-5 py-3 text-center text-slate-500">—</td>
                     </tr>
                   </tfoot>
                 </table>

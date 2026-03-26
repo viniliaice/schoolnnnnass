@@ -63,6 +63,33 @@ export interface Student {
   createdAt: string;
 }
 
+export interface Subject {
+  id: string;
+  name: string;
+  shortName?: string;
+  createdAt: string;
+}
+
+export interface AcademicYear {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  isCurrent: boolean;
+  createdAt: string;
+}
+
+export interface Term {
+  id: string;
+  name: string;
+  academicYearId: string;
+  startDate: string;
+  endDate: string;
+  isCurrent: boolean;
+  months: string[];
+  createdAt: string;
+}
+
 export interface Exam {
   id: string;
   studentId: string;
@@ -125,4 +152,137 @@ export function getGrade(score: number): string {
 
 export function isPassing(score: number): boolean {
   return score >= 60;
+}
+
+// New types for enhanced schema
+export interface AcademicYear {
+  id: string;
+  name: string;
+  startDate: string;
+  endDate: string;
+  isCurrent: boolean;
+  createdAt: string;
+}
+
+export interface Term {
+  id: string;
+  name: string;
+  academicYearId: string;
+  startDate: string;
+  endDate: string;
+  isCurrent: boolean;
+  months: string[];
+  createdAt: string;
+}
+
+export interface Subject {
+  id: string;
+  name: string;
+  shortName?: string;
+  createdAt: string;
+}
+
+export interface ClassSubject {
+  id: string;
+  className: string;
+  subjectId: string;
+  teacherId?: string;
+}
+
+export interface GradeScale {
+  id: string;
+  minScore: number;
+  maxScore: number;
+  grade: string;
+  remark: string;
+  gpa?: number;
+}
+
+export interface ReportComment {
+  id: string;
+  studentId: string;
+  termId: string;
+  teacherComment?: string;
+  principalComment?: string;
+  teacherId?: string;
+  createdAt: string;
+}
+
+export interface ReportConfig {
+  id: string;
+  caWeight: number;
+  midtermWeight: number;
+  finalWeight: number;
+  caTypes: string[];
+  updatedAt: string;
+}
+
+// Update Exam interface
+export interface Exam {
+  id: string;
+  studentId: string;
+  subject: string;
+  score: number;
+  total: number;
+  examType: ExamType;
+  month: string;
+  status: ExamStatus;
+  parentId: string | null;
+  date: string;
+  createdAt: string;
+  teacherId: string;
+  termId?: string;  // New
+  subjectId?: string;  // New
+}
+
+// Add report types
+export interface MonthlyScore {
+  subject: string;
+  month: string;
+  average: number;
+  assessment_count: number;
+  details: {
+    type: string;
+    score: number;
+    total: number;
+    percentage: number;
+    date: string;
+  }[];
+}
+
+export interface MidtermScore {
+  subject: string;
+  score: number;
+  total: number;
+  percentage: number;
+  grade: string;
+  remark: string;
+  subject_rank: number;
+  class_average: number;
+  highest_in_class: number;
+}
+
+export interface MidtermReport {
+  scores: MidtermScore[];
+  overall_rank: number;
+  total_students: number;
+}
+
+export interface FinalSubject {
+  subject: string;
+  ca_avg: number;
+  ca_weighted: number;
+  midterm_score: number;
+  midterm_weighted: number;
+  final_score: number;
+  final_weighted: number;
+  total: number;
+}
+
+export interface FinalReport {
+  weights: { ca: number; midterm: number; final: number };
+  results: FinalSubject[];
+  overall_rank: number;
+  total_students: number;
+  comment: { teacher: string; principal: string };
 }

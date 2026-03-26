@@ -19,6 +19,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'Manage Users', icon: Users, path: '/admin/users' },
     { label: 'Manage Students', icon: GraduationCap, path: '/admin/students' },
+    { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
     { label: 'Exam Verification', icon: ClipboardCheck, path: '/admin/exams' },
   ],

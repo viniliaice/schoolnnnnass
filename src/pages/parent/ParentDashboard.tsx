@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getExamsByParent } from '../../lib/database';
+import { getStudentsByParent, getExamsByParent, getCurrentTerm } from '../../lib/database';
 import { Student, Exam, CA_TYPES, getGrade } from '../../types';
 import { GraduationCap, BookOpen, TrendingUp, Award } from 'lucide-react';
 
@@ -13,12 +13,15 @@ export function ParentDashboard() {
     if (!session) return;
 
     const loadData = async () => {
+      const term = await getCurrentTerm();
       const [childrenData, examsData] = await Promise.all([
         getStudentsByParent(session.userId),
         getExamsByParent(session.userId, 'approved')
       ]);
+      // Filter by current term
+      const filteredExams = term ? examsData.filter(e => e.termId === term.id) : examsData;
       setChildren(childrenData);
-      setExams(examsData);
+      setExams(filteredExams);
     };
 
     loadData();

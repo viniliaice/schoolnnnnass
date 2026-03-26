@@ -11,6 +11,7 @@ import { DashboardLayout } from './components/layout/DashboardLayout';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { ManageUsers } from './pages/admin/ManageUsers';
 import { ManageStudents } from './pages/admin/ManageStudents';
+import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
 import { ExamVerification } from './pages/admin/ExamVerification';
 
@@ -81,6 +82,7 @@ function AppContent() {
             case '/dashboard': return <AdminDashboard />;
             case '/admin/users': return <ManageUsers />;
             case '/admin/students': return <ManageStudents />;
+            case '/admin/academic': return <ManageAcademic />;
             case '/admin/bulk': return <BulkUpload />;
             case '/admin/exams': return <ExamVerification />;
             default: return <AdminDashboard />;

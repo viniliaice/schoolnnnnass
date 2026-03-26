@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getExamsByParent } from '../../lib/database';
+import { getStudentsByParent, getExamsByParent, getCurrentTerm } from '../../lib/database';
 import { Student, Exam, ExamType, EXAM_TYPES } from '../../types';
 import { BookOpen } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -16,12 +16,15 @@ export function ExamResults() {
     if (!session) return;
 
     const loadData = async () => {
+      const term = await getCurrentTerm();
       const [kids, examsData] = await Promise.all([
         getStudentsByParent(session.userId),
         getExamsByParent(session.userId, 'approved')
       ]);
+      // Filter exams by current term if term exists
+      const filteredExams = term ? examsData.filter(e => e.termId === term.id) : examsData;
       setChildren(kids);
-      setExams(examsData);
+      setExams(filteredExams);
     };
 
     loadData();

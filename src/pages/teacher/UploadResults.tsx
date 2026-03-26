@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getUserById, getStudentsByClasses, bulkCreateExams } from '../../lib/database';
-import { ExamType, EXAM_TYPES, MONTHS, SUBJECTS } from '../../types';
+import { getUserById, getStudentsByClasses, bulkCreateExams, getCurrentTerm, getSubjects } from '../../lib/database';
+import { ExamType, EXAM_TYPES, MONTHS, SUBJECTS, Term, Subject } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import {
   Upload, CheckCircle, ChevronRight, ChevronLeft, Users,
@@ -33,6 +33,11 @@ export function UploadResults() {
   const [total, setTotal] = useState('100');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
 
+  // New state for term and subject
+  const [currentTerm, setCurrentTerm] = useState<Term | null>(null);
+  const [subjects, setSubjects] = useState<Subject[]>([]);
+  const [selectedSubject, setSelectedSubject] = useState('');
+
   // Grid state
   const [studentScores, setStudentScores] = useState<StudentScore[]>([]);
   const [step, setStep] = useState<Step>('config');
@@ -50,6 +55,13 @@ export function UploadResults() {
       const cls = teacher?.assignedClasses || [];
       setClasses(cls);
       if (cls.length > 0) setSelectedClass(cls[0]);
+
+      // Load current term and subjects
+      const term = await getCurrentTerm();
+      const subj = await getSubjects();
+      setCurrentTerm(term);
+      setSubjects(subj);
+      if (subj.length > 0) setSelectedSubject(subj[0].id);
     };
 
     loadData();
@@ -116,7 +128,7 @@ export function UploadResults() {
     return isNaN(score) || score < 0 || score > totalNum;
   });
 
-  const canProceedToScores = selectedClass && subject && examType && month && total && parseInt(total) > 0;
+  const canProceedToScores = selectedClass && selectedSubject && examType && month && total && parseInt(total) > 0;
   const canProceedToReview = filledStudents.length > 0 && !hasErrors;
 
   const goToScores = () => {
@@ -136,25 +148,25 @@ export function UploadResults() {
     setStep('review');
   };
 
-  const handleSubmitAll = () => {
+  const handleSubmitAll = async () => {
     setSubmitting(true);
 
-    const examsToCreate = filledStudents.map(s => {
-      return {
-        studentId: s.studentId,
-        subject,
-        score: parseInt(s.score),
-        total: totalNum,
-        examType,
-        month,
-        status: 'pending' as const,
-        parentId: s.parentId,
-        date,
-        teacherId: session!.userId,
-      };
-    });
+    const examsToCreate = filledStudents.map(s => ({
+      studentId: s.studentId,
+      subject: subjects.find(sub => sub.id === selectedSubject)?.name || subject,
+      score: parseInt(s.score),
+      total: totalNum,
+      examType,
+      month,
+      status: 'pending' as const,
+      parentId: s.parentId,
+      date,
+      teacherId: session!.userId,
+      termId: currentTerm?.id,
+      subjectId: selectedSubject,
+    }));
 
-    bulkCreateExams(examsToCreate);
+    await bulkCreateExams(examsToCreate);
 
     setSubmitting(false);
     setSubmitted(true);
@@ -257,9 +269,9 @@ export function UploadResults() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="text-sm font-semibold text-slate-700 mb-1.5 block">Subject</label>
-                <select value={subject} onChange={e => setSubject(e.target.value)}
+                <select value={selectedSubject} onChange={e => setSelectedSubject(e.target.value)}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-teal-200 focus:border-teal-400 outline-none bg-white">
-                  {SUBJECTS.map(s => <option key={s} value={s}>{s}</option>)}
+                  {subjects.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
                 </select>
               </div>
               <div>

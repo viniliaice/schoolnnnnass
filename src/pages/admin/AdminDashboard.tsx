@@ -7,25 +7,88 @@ export function AdminDashboard() {
   const [recentExams, setRecentExams] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [classesPage, setClassesPage] = useState(1);
+  const [recentPage, setRecentPage] = useState(1);
+  const CLASSES_PER_PAGE = 5;
+  const RECENT_PER_PAGE = 5; // show 5 per page from the 15 loaded
 
   useEffect(() => {
     const loadData = async () => {
+      setLoading(true);
       const statsData = await getSystemStats();
       const examsData = await getExams();
       const studentsData = await getStudents();
       const usersData = await getUsers();
 
       setStats(statsData);
-      setRecentExams(examsData.slice(-5).reverse());
+      // limit recent exams to last 15
+      setRecentExams(examsData.slice(-15).reverse());
       setStudents(studentsData);
       setUsers(usersData);
+      setLoading(false);
     };
     loadData();
   }, []);
 
-  if (!stats) return <div>Loading...</div>;
+  if (loading || !stats) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">Admin Dashboard</h1>
+          <p className="text-slate-500 mt-1">System overview and key metrics</p>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+          {Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="rounded-2xl p-4 border border-white/50 bg-slate-50 h-24 animate-pulse" />
+          ))}
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 min-h-56">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="h-5 w-5 bg-slate-100 rounded animate-pulse" />
+              <div className="h-6 w-48 bg-slate-100 rounded animate-pulse" />
+            </div>
+            <div className="space-y-3">
+              {Array.from({ length: CLASSES_PER_PAGE }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                  <div>
+                    <div className="h-4 w-32 bg-slate-100 rounded mb-2 animate-pulse" />
+                    <div className="h-3 w-48 bg-slate-100 rounded animate-pulse" />
+                  </div>
+                  <div className="h-6 w-20 bg-slate-100 rounded animate-pulse" />
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 p-6 min-h-56">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="h-5 w-5 bg-slate-100 rounded animate-pulse" />
+              <div className="h-6 w-48 bg-slate-100 rounded animate-pulse" />
+            </div>
+            <div className="space-y-3">
+              {Array.from({ length: RECENT_PER_PAGE }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                  <div>
+                    <div className="h-4 w-32 bg-slate-100 rounded mb-2 animate-pulse" />
+                    <div className="h-3 w-48 bg-slate-100 rounded animate-pulse" />
+                  </div>
+                  <div className="h-6 w-20 bg-slate-100 rounded animate-pulse" />
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   const classes = [...new Set(students.map(s => s.className))];
+  const classesPaged = classes.slice((classesPage - 1) * CLASSES_PER_PAGE, classesPage * CLASSES_PER_PAGE);
+  const recentPaged = recentExams.slice((recentPage - 1) * RECENT_PER_PAGE, recentPage * RECENT_PER_PAGE);
 
   const statCards = [
     { label: 'Teachers', value: stats.totalTeachers, icon: Users, color: 'bg-teal-500', bg: 'bg-teal-50' },
@@ -65,7 +128,18 @@ export function AdminDashboard() {
             <h2 className="text-lg font-bold text-slate-900">Classes Overview</h2>
           </div>
           <div className="space-y-3">
-            {classes.map(cls => {
+            {loading ? (
+              Array.from({ length: CLASSES_PER_PAGE }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                  <div>
+                    <div className="h-4 w-32 bg-slate-100 rounded mb-2 animate-pulse" />
+                    <div className="h-3 w-48 bg-slate-100 rounded animate-pulse" />
+                  </div>
+                  <div className="h-6 w-20 bg-slate-100 rounded animate-pulse" />
+                </div>
+              ))
+            ) : (
+              classesPaged.map(cls => {
               const count = students.filter(s => s.className === cls).length;
               const teacher = users.find(u => u.role === 'teacher' && u.assignedClasses?.includes(cls));
               return (
@@ -79,7 +153,18 @@ export function AdminDashboard() {
                   </span>
                 </div>
               );
-            })}
+              })
+            )}
+            {/* classes pagination */}
+            {!loading && classes.length > CLASSES_PER_PAGE && (
+              <div className="flex items-center justify-end gap-2 mt-2">
+                <button onClick={() => setClassesPage(1)} disabled={classesPage === 1} className="px-2 py-1 text-sm rounded disabled:opacity-50">First</button>
+                <button onClick={() => setClassesPage(p => Math.max(1, p - 1))} disabled={classesPage === 1} className="px-2 py-1 text-sm rounded disabled:opacity-50">Prev</button>
+                <div className="px-2 text-sm">{classesPage} / {Math.ceil(classes.length / CLASSES_PER_PAGE)}</div>
+                <button onClick={() => setClassesPage(p => Math.min(Math.ceil(classes.length / CLASSES_PER_PAGE), p + 1))} disabled={classesPage === Math.ceil(classes.length / CLASSES_PER_PAGE)} className="px-2 py-1 text-sm rounded disabled:opacity-50">Next</button>
+                <button onClick={() => setClassesPage(Math.ceil(classes.length / CLASSES_PER_PAGE))} disabled={classesPage === Math.ceil(classes.length / CLASSES_PER_PAGE)} className="px-2 py-1 text-sm rounded disabled:opacity-50">Last</button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -90,7 +175,18 @@ export function AdminDashboard() {
             <h2 className="text-lg font-bold text-slate-900">Recent Exam Submissions</h2>
           </div>
           <div className="space-y-3">
-            {recentExams.map(exam => {
+            {loading ? (
+              Array.from({ length: RECENT_PER_PAGE }).map((_, i) => (
+                <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                  <div>
+                    <div className="h-4 w-32 bg-slate-100 rounded mb-2 animate-pulse" />
+                    <div className="h-3 w-48 bg-slate-100 rounded animate-pulse" />
+                  </div>
+                  <div className="h-6 w-20 bg-slate-100 rounded animate-pulse" />
+                </div>
+              ))
+            ) : (
+              recentPaged.map(exam => {
               const student = students.find(s => s.id === exam.studentId);
               return (
                 <div key={exam.id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
@@ -110,7 +206,18 @@ export function AdminDashboard() {
                   </div>
                 </div>
               );
-            })}
+              }))}
+
+            {/* recent pagination */}
+            {!loading && recentExams.length > RECENT_PER_PAGE && (
+              <div className="flex items-center justify-end gap-2 mt-2">
+                <button onClick={() => setRecentPage(1)} disabled={recentPage === 1} className="px-2 py-1 text-sm rounded disabled:opacity-50">First</button>
+                <button onClick={() => setRecentPage(p => Math.max(1, p - 1))} disabled={recentPage === 1} className="px-2 py-1 text-sm rounded disabled:opacity-50">Prev</button>
+                <div className="px-2 text-sm">{recentPage} / {Math.ceil(recentExams.length / RECENT_PER_PAGE)}</div>
+                <button onClick={() => setRecentPage(p => Math.min(Math.ceil(recentExams.length / RECENT_PER_PAGE), p + 1))} disabled={recentPage === Math.ceil(recentExams.length / RECENT_PER_PAGE)} className="px-2 py-1 text-sm rounded disabled:opacity-50">Next</button>
+                <button onClick={() => setRecentPage(Math.ceil(recentExams.length / RECENT_PER_PAGE))} disabled={recentPage === Math.ceil(recentExams.length / RECENT_PER_PAGE)} className="px-2 py-1 text-sm rounded disabled:opacity-50">Last</button>
+              </div>
+            )}
           </div>
         </div>
       </div>

@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getExamsByParent } from '../../lib/database';
-import { Student, Exam, CA_TYPES, MONTHS } from '../../types';
+import { getStudentsByParent, getCurrentTerm, getMonthlyReport } from '../../lib/database';
+import { Student, MonthlyScore, MONTHS } from '../../types';
 import { Calendar } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 export function MonthlyReport() {
   const { session } = useRole();
   const [children, setChildren] = useState<Student[]>([]);
-  const [exams, setExams] = useState<Exam[]>([]);
+  const [reportData, setReportData] = useState<MonthlyScore[]>([]);
   const [selectedChild, setSelectedChild] = useState('');
   const [selectedMonth, setSelectedMonth] = useState(MONTHS[new Date().getMonth()]);
 
@@ -19,39 +19,35 @@ export function MonthlyReport() {
       const kids = await getStudentsByParent(session.userId);
       setChildren(kids);
       if (kids.length > 0) setSelectedChild(kids[0].id);
-      const examsData = await getExamsByParent(session.userId, 'approved');
-      setExams(examsData);
     };
 
     loadData();
   }, [session]);
 
-  // Monthly Report = CA-type exams for selected month, filtered per student
-  const monthlyExams = exams.filter(e =>
-    e.studentId === selectedChild &&
-    e.month === selectedMonth &&
-    CA_TYPES.includes(e.examType)
-  );
+  useEffect(() => {
+    if (!selectedChild) return;
 
-  // Group by subject
-  const subjects = [...new Set(monthlyExams.map(e => e.subject))];
-  const subjectData = subjects.map(sub => {
-    const subExams = monthlyExams.filter(e => e.subject === sub);
-    const scores = subExams.map(e => ({ type: e.examType, score: e.score, total: e.total, pct: Math.round(e.score / e.total * 100) }));
-    const avg = scores.length > 0 ? Math.round(scores.reduce((s, sc) => s + sc.pct, 0) / scores.length) : 0;
-    return { subject: sub, scores, avg };
-  });
+    const loadReport = async () => {
+      const term = await getCurrentTerm();
+      if (!term) return;
+      const report = await getMonthlyReport(selectedChild, term.id);
+      setReportData(report);
+    };
 
-  const overallAvg = subjectData.length > 0
-    ? Math.round(subjectData.reduce((s, d) => s + d.avg, 0) / subjectData.length)
+    loadReport();
+  }, [selectedChild]);
+
+  // Filter by selected month
+  const monthlyData = reportData.filter(d => d.month === selectedMonth);
+
+  const overallAvg = monthlyData.length > 0
+    ? Math.round(monthlyData.reduce((s, d) => s + d.average, 0) / monthlyData.length)
     : 0;
 
   const child = children.find(c => c.id === selectedChild);
 
-  // Find months that have CA data for selected child
-  const availableMonths = [...new Set(
-    exams.filter(e => e.studentId === selectedChild && CA_TYPES.includes(e.examType)).map(e => e.month)
-  )];
+  // Available months from data
+  const availableMonths = [...new Set(reportData.map(d => d.month))];
 
   return (
     <div className="space-y-6">
@@ -101,7 +97,7 @@ export function MonthlyReport() {
             </div>
           </div>
 
-          {subjectData.length > 0 ? (
+          {monthlyData.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
@@ -113,12 +109,12 @@ export function MonthlyReport() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {subjectData.map(row => (
+                  {monthlyData.map(row => (
                     <tr key={row.subject} className="hover:bg-slate-50">
                       <td className="px-5 py-4 font-semibold text-slate-800 text-sm">{row.subject}</td>
                       <td className="px-5 py-4 text-center">
                         <div className="flex flex-wrap gap-1.5 justify-center">
-                          {row.scores.map((sc, i) => (
+                          {row.details.map((sc, i) => (
                             <span key={i} className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-xs font-medium">
                               {sc.type}: {sc.score}/{sc.total}
                             </span>
@@ -127,14 +123,14 @@ export function MonthlyReport() {
                       </td>
                       <td className="px-5 py-4 text-center">
                         <span className={cn("text-lg font-bold",
-                          row.avg >= 80 ? 'text-emerald-600' : row.avg >= 60 ? 'text-amber-600' : 'text-red-600'
-                        )}>{row.avg}%</span>
+                          row.average >= 80 ? 'text-emerald-600' : row.average >= 60 ? 'text-amber-600' : 'text-red-600'
+                        )}>{row.average}%</span>
                       </td>
                       <td className="px-5 py-4 text-center text-sm">
-                        {row.avg >= 90 ? <span className="text-emerald-600 font-medium">Excellent</span> :
-                         row.avg >= 80 ? <span className="text-emerald-600 font-medium">Very Good</span> :
-                         row.avg >= 70 ? <span className="text-blue-600 font-medium">Good</span> :
-                         row.avg >= 60 ? <span className="text-amber-600 font-medium">Satisfactory</span> :
+                        {row.average >= 90 ? <span className="text-emerald-600 font-medium">Excellent</span> :
+                         row.average >= 80 ? <span className="text-emerald-600 font-medium">Very Good</span> :
+                         row.average >= 70 ? <span className="text-blue-600 font-medium">Good</span> :
+                         row.average >= 60 ? <span className="text-amber-600 font-medium">Satisfactory</span> :
                          <span className="text-red-600 font-medium">Needs Improvement</span>}
                       </td>
                     </tr>

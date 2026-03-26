@@ -1,17 +1,21 @@
 import { useState, useEffect } from 'react';
-import { getUsers, createUser, deleteUser, updateUser, getStudentsByParent, getStudents } from '../../lib/database';
+import { getUsersPaginated, createUser, deleteUser, updateUser, getStudentsByParent, getStudents } from '../../lib/database';
 import { User, Role, CLASSES, Student } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { Dialog } from '../../components/ui/Dialog';
+import { DataTable } from '../../components/ui/DataTable';
 import {
   Plus, Trash2, Edit, Eye, Phone, MapPin, CreditCard, Users as UsersIcon,
-  GraduationCap, Search
+  GraduationCap, Search, ChevronLeft, ChevronRight
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { ColumnDef } from '@tanstack/react-table';
 
 export function ManageUsers() {
   const { addToast } = useToast();
   const [users, setUsers] = useState<User[]>([]);
+  const [totalUsers, setTotalUsers] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
   const [students, setStudents] = useState<Student[]>([]);
   const [roleFilter, setRoleFilter] = useState<Role | 'all'>('all');
   const [search, setSearch] = useState('');
@@ -19,6 +23,8 @@ export function ManageUsers() {
   const [showDetail, setShowDetail] = useState<User | null>(null);
   const [showEdit, setShowEdit] = useState<User | null>(null);
   const [createRole, setCreateRole] = useState<Role>('teacher');
+
+  const USERS_PER_PAGE = 10;
 
   // Form state
   const [formName, setFormName] = useState('');
@@ -31,24 +37,125 @@ export function ManageUsers() {
   const [formClasses, setFormClasses] = useState<string[]>([]);
   const [formPassword, setFormPassword] = useState('');
 
-  const refresh = async () => {
+  const refresh = async (page: number = currentPage, searchTerm?: string) => {
     const [usersData, studentsData] = await Promise.all([
-      getUsers(),
+      getUsersPaginated(page, USERS_PER_PAGE, searchTerm || search),
       getStudents()
     ]);
-    setUsers(usersData);
+    setUsers(usersData.users);
+    setTotalUsers(usersData.total);
     setStudents(studentsData);
   };
 
   useEffect(() => {
     refresh();
-  }, []);
+  }, [currentPage]);
+
+  useEffect(() => {
+    refresh(1); // Reset to first page when search changes
+    setCurrentPage(1);
+  }, [search]);
+
+  const handlePageChange = (page: number) => {
+    setCurrentPage(page);
+  };
 
   const getChildren = (parentId: string) => students.filter(s => s.parentId === parentId);
 
-  const filtered = users
-    .filter(u => roleFilter === 'all' || u.role === roleFilter)
-    .filter(u => u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase()));
+  const filtered = users.filter(u => roleFilter === 'all' || u.role === roleFilter);
+
+  const columns: ColumnDef<User>[] = [
+    {
+      accessorKey: 'name',
+      header: 'Name',
+      cell: ({ row }) => {
+        const user = row.original;
+        return (
+          <div className="flex items-center gap-3">
+            <div className={cn("w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm text-white",
+              user.role === 'admin' ? 'bg-indigo-500' : user.role === 'teacher' ? 'bg-teal-500' : 'bg-violet-500'
+            )}>
+              {user.name.split(' ').map(n => n[0]).join('').substring(0, 2)}
+            </div>
+            <span className="font-medium text-gray-900">{user.name}</span>
+          </div>
+        );
+      },
+    },
+    {
+      accessorKey: 'email',
+      header: 'Email',
+    },
+    {
+      accessorKey: 'role',
+      header: 'Role',
+      cell: ({ row }) => {
+        const role = row.getValue('role') as Role;
+        return (
+          <span className={cn("inline-flex px-2 py-1 text-xs font-semibold rounded-full",
+            role === 'admin' ? 'bg-indigo-100 text-indigo-800' :
+            role === 'teacher' ? 'bg-teal-100 text-teal-800' :
+            'bg-violet-100 text-violet-800'
+          )}>
+            {role}
+          </span>
+        );
+      },
+    },
+    {
+      id: 'details',
+      header: 'Details',
+      cell: ({ row }) => {
+        const user = row.original;
+        const children = user.role === 'parent' ? getChildren(user.id) : [];
+        return (
+          <div className="text-sm text-gray-500">
+            {user.role === 'parent' && (
+              <div className="flex items-center gap-1">
+                <UsersIcon className="w-4 h-4" />
+                {children.length} children
+              </div>
+            )}
+            {user.role === 'teacher' && user.assignedClasses && (
+              <div className="flex items-center gap-1">
+                <GraduationCap className="w-4 h-4" />
+                {user.assignedClasses.length} classes
+              </div>
+            )}
+          </div>
+        );
+      },
+    },
+    {
+      id: 'actions',
+      header: 'Actions',
+      cell: ({ row }) => {
+        const user = row.original;
+        return (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setShowDetail(user)}
+              className="p-1 text-gray-400 hover:text-gray-600"
+            >
+              <Eye className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => openEdit(user)}
+              className="p-1 text-blue-400 hover:text-blue-600"
+            >
+              <Edit className="w-4 h-4" />
+            </button>
+            <button
+              onClick={() => handleDelete(user)}
+              className="p-1 text-red-400 hover:text-red-600"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
+        );
+      },
+    },
+  ];
 
   const resetForm = () => {
     setFormName(''); setFormEmail(''); setFormPhone1(''); setFormPhone2('');
@@ -177,86 +284,21 @@ export function ManageUsers() {
         </div>
       </div>
 
-      {/* User Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        {filtered.map(user => {
-          const children = user.role === 'parent' ? getChildren(user.id) : [];
-          return (
-            <div key={user.id} className="bg-white rounded-2xl border border-slate-200 p-5 hover:shadow-lg transition-shadow">
-              <div className="flex items-start justify-between mb-3">
-                <div className="flex items-center gap-3">
-                  <div className={cn("w-11 h-11 rounded-full flex items-center justify-center font-bold text-sm text-white",
-                    user.role === 'admin' ? 'bg-indigo-500' : user.role === 'teacher' ? 'bg-teal-500' : 'bg-violet-500'
-                  )}>
-                    {user.name.split(' ').map(n => n[0]).join('').substring(0, 2)}
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-slate-900 text-sm">{user.name}</h3>
-                    <p className="text-xs text-slate-500">{user.email}</p>
-                  </div>
-                </div>
-                <span className={cn("px-2.5 py-1 rounded-full text-xs font-semibold",
-                  user.role === 'admin' ? 'bg-indigo-100 text-indigo-700' :
-                  user.role === 'teacher' ? 'bg-teal-100 text-teal-700' :
-                  'bg-violet-100 text-violet-700'
-                )}>
-                  {user.role}
-                </span>
-              </div>
+      {/* Users Table */}
+      <DataTable
+        data={filtered}
+        columns={columns}
+        searchPlaceholder="Search users..."
+        searchValue={search}
+        onSearchChange={setSearch}
+      />
 
-              {/* Parent quick info */}
-              {user.role === 'parent' && (
-                <div className="space-y-1.5 mb-3 text-xs text-slate-600">
-                  {user.phone1 && (
-                    <div className="flex items-center gap-2">
-                      <Phone className="w-3.5 h-3.5 text-slate-400" />
-                      <span>{user.phone1}{user.phone2 ? ` · ${user.phone2}` : ''}</span>
-                    </div>
-                  )}
-                  {user.xafada && (
-                    <div className="flex items-center gap-2">
-                      <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                      <span>{user.xafada}{user.udow ? ` (near ${user.udow})` : ''}</span>
-                    </div>
-                  )}
-                  {children.length > 0 && (
-                    <div className="flex items-center gap-2">
-                      <GraduationCap className="w-3.5 h-3.5 text-slate-400" />
-                      <span>{children.map(c => c.name).join(', ')}</span>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* Teacher quick info */}
-              {user.role === 'teacher' && user.assignedClasses && user.assignedClasses.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {user.assignedClasses.map(cls => (
-                    <span key={cls} className="bg-teal-50 text-teal-700 px-2 py-0.5 rounded-md text-xs font-medium">{cls}</span>
-                  ))}
-                </div>
-              )}
-
-              {/* Actions */}
-              <div className="flex gap-2 pt-2 border-t border-slate-100">
-                {user.role === 'parent' && (
-                  <button onClick={() => setShowDetail(user)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-violet-600 bg-violet-50 rounded-lg hover:bg-violet-100 transition-colors">
-                    <Eye className="w-3.5 h-3.5" /> View
-                  </button>
-                )}
-                <button onClick={() => openEdit(user)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-blue-600 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors">
-                  <Edit className="w-3.5 h-3.5" /> Edit
-                </button>
-                {user.role !== 'admin' && (
-                  <button onClick={() => handleDelete(user)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 rounded-lg hover:bg-red-100 transition-colors">
-                    <Trash2 className="w-3.5 h-3.5" /> Delete
-                  </button>
-                )}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      {filtered.length === 0 && (
+        <div className="text-center py-12 text-slate-400">
+          <UsersIcon className="w-12 h-12 mx-auto mb-3 opacity-50" />
+          <p className="font-medium">No users found</p>
+        </div>
+      )}
 
       {filtered.length === 0 && (
         <div className="text-center py-12 text-slate-400">

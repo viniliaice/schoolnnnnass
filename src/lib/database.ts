@@ -1,4 +1,4 @@
-import { User, Student, Exam, ExamStatus, ExamType, Role } from '../types';
+import { User, Student, Exam, ExamStatus, ExamType, Role, AcademicYear, Term, Subject, GradeScale, ReportConfig, MonthlyScore, MidtermReport, FinalReport, getGrade } from '../types';
 import { supabase } from './supabase';
 
 // ── Authentication ──
@@ -119,6 +119,24 @@ export async function getUsers(): Promise<User[]> {
   return data || [];
 }
 
+export async function getUsersPaginated(page: number = 1, limit: number = 10, search?: string): Promise<{ users: User[], total: number }> {
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+
+  let query = supabase
+    .from('users')
+    .select('*', { count: 'exact' });
+
+  if (search && search.trim()) {
+    query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
+  }
+
+  const { data, error, count } = await query.range(from, to);
+
+  if (error) throw error;
+  return { users: data || [], total: count || 0 };
+}
+
 export async function getUsersByRole(role: Role): Promise<User[]> {
   const { data, error } = await supabase.from('users').select('*').eq('role', role);
   if (error) throw error;
@@ -160,11 +178,204 @@ export async function deleteUser(id: string): Promise<boolean> {
   return true;
 }
 
+// ── New Schema Functions ──
+export async function getAcademicYears(): Promise<AcademicYear[]> {
+  const { data, error } = await supabase.from('academic_years').select('*');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getCurrentTerm(): Promise<Term | null> {
+  const { data, error } = await supabase
+    .from('terms')
+    .select('*, academic_years(*)')
+    .eq('isCurrent', true)
+    .single();
+  if (error) return null;
+  return data;
+}
+
+export async function getSubjects(): Promise<Subject[]> {
+  const { data, error } = await supabase.from('subjects').select('*');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getGradeScales(): Promise<GradeScale[]> {
+  const { data, error } = await supabase.from('grade_scales').select('*');
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getReportConfig(): Promise<ReportConfig> {
+  const { data, error } = await supabase
+    .from('report_config')
+    .select('*')
+    .eq('id', 'default')
+    .single();
+  if (error) throw error;
+  return data;
+}
+
+// RPC functions for reports
+export async function getMonthlyReport(
+  studentId: string,
+  termId: string
+): Promise<MonthlyScore[]> {
+  const { data, error } = await supabase.rpc('get_monthly_report', {
+    p_student_id: studentId,
+    p_term_id: termId,
+  });
+  if (error) throw error;
+  return data;
+}
+
+export async function getMidtermReport(
+  studentId: string,
+  termId: string
+): Promise<MidtermReport> {
+  const { data, error } = await supabase.rpc('get_midterm_report', {
+    p_student_id: studentId,
+    p_term_id: termId,
+  });
+
+  if (!error) return data;
+
+  // Fallback when RPC function does not exist (404/PGRST202)
+  if (error.code === 'PGRST202' || (error.details && error.details.includes('get_midterm_report'))) {
+    return getMidtermReportFallback(studentId, termId);
+  }
+
+  throw error;
+}
+
+async function getMidtermReportFallback(studentId: string, termId: string): Promise<MidtermReport> {
+  const student = await getStudentById(studentId);
+  if (!student) {
+    return { scores: [], overall_rank: 0, total_students: 0 };
+  }
+
+  const { data: studentExams, error: studentError } = await supabase
+    .from<Exam>('exams')
+    .select('*')
+    .eq('studentId', studentId)
+    .eq('termId', termId)
+    .eq('examType', 'Midterm')
+    .eq('status', 'approved');
+
+  if (studentError) throw studentError;
+
+  const { data: classStudents, error: classError } = await supabase
+    .from<Student>('students')
+    .select('id')
+    .eq('className', student.className);
+
+  if (classError) throw classError;
+
+  const classStudentIds = classStudents?.map(s => s.id) ?? [];
+
+  const { data: classExams, error: classExamsError } = await supabase
+    .from<Exam>('exams')
+    .select('*')
+    .in('studentId', classStudentIds)
+    .eq('termId', termId)
+    .eq('examType', 'Midterm')
+    .eq('status', 'approved');
+
+  if (classExamsError) throw classExamsError;
+
+  const bySubject = new Map<string, MidtermScore>();
+
+  for (const e of studentExams ?? []) {
+    const percentage = e.total > 0 ? Math.round((e.score / e.total) * 100) : 0;
+    const grade = getGrade(percentage);
+    const remark = grade === 'A' ? 'Excellent' : grade === 'B' ? 'Very Good' : grade === 'C' ? 'Good' : grade === 'D' ? 'Satisfactory' : 'Needs Improvement';
+
+    const sameSubjectClass = (classExams ?? []).filter(ex => ex.subject === e.subject);
+    const classAvg = sameSubjectClass.length
+      ? Math.round(sameSubjectClass.reduce((sum, ex) => sum + (ex.total > 0 ? (ex.score / ex.total) * 100 : 0), 0) / sameSubjectClass.length)
+      : 0;
+
+    const highestInClass = sameSubjectClass.length
+      ? Math.max(...sameSubjectClass.map(ex => (ex.total > 0 ? Math.round((ex.score / ex.total) * 100) : 0)))
+      : 0;
+
+    const sortedSubject = [...sameSubjectClass]
+      .map(ex => (ex.total > 0 ? Math.round((ex.score / ex.total) * 100) : 0))
+      .sort((a, b) => b - a);
+
+    const subjectRank = sortedSubject.indexOf(percentage) + 1;
+
+    bySubject.set(e.subject, {
+      subject: e.subject,
+      score: e.score,
+      total: e.total,
+      percentage,
+      grade,
+      remark,
+      subject_rank: subjectRank || 1,
+      class_average: classAvg,
+      highest_in_class: highestInClass,
+    });
+  }
+
+  const scores = Array.from(bySubject.values());
+
+  const studentAverage = scores.length
+    ? Math.round(scores.reduce((sum, s) => sum + s.percentage, 0) / scores.length)
+    : 0;
+
+  const classAverages = new Map<string, number>();
+  for (const sid of classStudentIds) {
+    const exams = (classExams ?? []).filter(ex => ex.studentId === sid);
+    const pct = exams.length
+      ? Math.round(exams.reduce((sum, ex) => sum + (ex.total > 0 ? (ex.score / ex.total) * 100 : 0), 0) / exams.length)
+      : 0;
+    classAverages.set(sid, pct);
+  }
+
+  const sortedClassAverages = [...classAverages.values()].sort((a, b) => b - a);
+  const overall_rank = sortedClassAverages.indexOf(studentAverage) + 1;
+  const total_students = classAverages.size;
+
+  return { scores, overall_rank: overall_rank || 0, total_students };
+}
+
+export async function getFinalReport(
+  studentId: string,
+  termId: string
+): Promise<FinalReport> {
+  const { data, error } = await supabase.rpc('get_final_report', {
+    p_student_id: studentId,
+    p_term_id: termId,
+  });
+  if (error) throw error;
+  return data;
+}
+
 // ── Students ──
 export async function getStudents(): Promise<Student[]> {
   const { data, error } = await supabase.from('students').select('*');
   if (error) throw error;
   return data || [];
+}
+
+export async function getStudentsPaginated(page: number = 1, limit: number = 50, search?: string): Promise<{ students: Student[], total: number }> {
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+
+  let query = supabase
+    .from('students')
+    .select('*', { count: 'exact' });
+
+  if (search && search.trim()) {
+    query = query.ilike('name', `%${search}%`);
+  }
+
+  const { data, error, count } = await query.range(from, to);
+
+  if (error) throw error;
+  return { students: data || [], total: count || 0 };
 }
 
 export async function getStudentById(id: string): Promise<Student | undefined> {
@@ -191,6 +402,80 @@ export async function getStudentsByClasses(classNames: string[]): Promise<Studen
   const { data, error } = await supabase.from('students').select('*').in('className', classNames);
   if (error) throw error;
   return data || [];
+}
+
+// ── Subjects ──
+export async function getSubjectById(id: string): Promise<Subject | null> {
+  const { data, error } = await supabase.from('subjects').select('*').eq('id', id).single();
+  if (error) return null;
+  return data;
+}
+
+export async function createSubject(data: Omit<Subject, 'id' | 'createdAt'>): Promise<Subject> {
+  const timestamp = Date.now();
+  const id = `subject-${timestamp}-${Math.random().toString(36).slice(2, 8)}`;
+  const item = { id, ...data, createdAt: new Date().toISOString() };
+  const { data: created, error } = await supabase.from('subjects').insert(item).select().single();
+  if (error) throw error;
+  return created;
+}
+
+export async function updateSubject(id: string, data: Partial<Subject>): Promise<Subject | null> {
+  const { data: updated, error } = await supabase.from('subjects').update(data).eq('id', id).select().single();
+  if (error) return null;
+  return updated;
+}
+
+export async function deleteSubject(id: string): Promise<boolean> {
+  const { error } = await supabase.from('subjects').delete().eq('id', id);
+  return !error;
+}
+
+// ── Academic Years ──
+export async function createAcademicYear(data: Omit<AcademicYear, 'id' | 'createdAt'>): Promise<AcademicYear> {
+  const timestamp = Date.now();
+  const id = `year-${timestamp}-${Math.random().toString(36).slice(2, 8)}`;
+  const item = { id, ...data, createdAt: new Date().toISOString() };
+  const { data: created, error } = await supabase.from('academic_years').insert(item).select().single();
+  if (error) throw error;
+  return created;
+}
+
+export async function updateAcademicYear(id: string, data: Partial<AcademicYear>): Promise<AcademicYear | null> {
+  const { data: updated, error } = await supabase.from('academic_years').update(data).eq('id', id).select().single();
+  if (error) return null;
+  return updated;
+}
+
+export async function deleteAcademicYear(id: string): Promise<boolean> {
+  const { error } = await supabase.from('academic_years').delete().eq('id', id);
+  return !error;
+}
+
+// ── Terms ──
+export async function getTerms(): Promise<Term[]> {
+  const { data, error } = await supabase.from('terms').select('*, academic_years(*)').order('startDate', { ascending: false });
+  if (error) throw error;
+  return data || [];
+}
+
+export async function createTerm(data: Omit<Term, 'id' | 'createdAt' | 'months'>): Promise<Term> {
+  const timestamp = Date.now();
+  const id = `term-${timestamp}-${Math.random().toString(36).slice(2, 8)}`;
+  const item = { id, ...data, months: data.months || [], createdAt: new Date().toISOString() };
+  const { data: created, error } = await supabase.from('terms').insert(item).select().single();
+  if (error) throw error;
+  return created;
+}
+export async function updateTerm(id: string, data: Partial<Term>): Promise<Term | null> {
+  const { data: updated, error } = await supabase.from('terms').update(data).eq('id', id).select().single();
+  if (error) return null;
+  return updated;
+}
+
+export async function deleteTerm(id: string): Promise<boolean> {
+  const { error } = await supabase.from('terms').delete().eq('id', id);
+  return !error;
 }
 
 export async function createStudent(data: Omit<Student, 'id' | 'createdAt'>): Promise<Student> {

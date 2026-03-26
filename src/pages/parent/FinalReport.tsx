@@ -1,103 +1,51 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getExamsByParent, getStudents } from '../../lib/database';
-import { Student, Exam, CA_TYPES, getGrade, isPassing } from '../../types';
+import { getStudentsByParent, getCurrentTerm, getFinalReport } from '../../lib/database';
+import { Student, getGrade } from '../../types';
+import type { FinalReport } from '../../types';
 import { Award, CheckCircle, XCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 export function FinalReport() {
   const { session } = useRole();
   const [children, setChildren] = useState<Student[]>([]);
-  const [exams, setExams] = useState<Exam[]>([]);
+  const [reportData, setReportData] = useState<FinalReport | null>(null);
   const [selectedChild, setSelectedChild] = useState('');
-  const [allStudents, setAllStudents] = useState<Student[]>([]);
 
   useEffect(() => {
+    if (!session) return;
+
     const loadData = async () => {
-      if (!session) return;
       const kids = await getStudentsByParent(session.userId);
       setChildren(kids);
       if (kids.length > 0) setSelectedChild(kids[0].id);
-      const examsData = await getExamsByParent(session.userId, 'approved');
-      setExams(examsData);
-      const allStudentsData = await getStudents();
-      setAllStudents(allStudentsData);
     };
+
     loadData();
   }, [session]);
 
-  const child = children.find(c => c.id === selectedChild);
-  const childExams = exams.filter(e => e.studentId === selectedChild);
+  useEffect(() => {
+    if (!selectedChild) return;
 
-  // Get all subjects that have data
-  const allSubjects = [...new Set(childExams.map(e => e.subject))];
-
-  // For each subject, calculate Final Score = CA(30%) + Midterm(30%) + Final(40%)
-  const subjectData = allSubjects.map(sub => {
-    // CA average (all CA-type exams across all months)
-    const caExams = childExams.filter(e => e.subject === sub && CA_TYPES.includes(e.examType));
-    const caAvg = caExams.length > 0
-      ? Math.round(caExams.reduce((s, e) => s + (e.score / e.total) * 100, 0) / caExams.length)
-      : 0;
-
-    // Midterm score
-    const midExam = childExams.find(e => e.subject === sub && e.examType === 'Midterm');
-    const midScore = midExam ? Math.round(midExam.score / midExam.total * 100) : 0;
-
-    // Final exam score
-    const finalExam = childExams.find(e => e.subject === sub && e.examType === 'Final');
-    const finalExamScore = finalExam ? Math.round(finalExam.score / finalExam.total * 100) : 0;
-
-    // Weighted final: CA(30%) + Midterm(30%) + Final(40%)
-    const hasAllComponents = caExams.length > 0 && midExam && finalExam;
-    const finalScore = hasAllComponents
-      ? Math.round(caAvg * 0.3 + midScore * 0.3 + finalExamScore * 0.4)
-      : 0;
-
-    return {
-      subject: sub,
-      caAverage: caAvg,
-      midtermScore: midScore,
-      finalExamScore,
-      finalScore,
-      grade: getGrade(finalScore),
-      passed: isPassing(finalScore),
-      hasAllComponents: !!hasAllComponents,
+    const loadReport = async () => {
+      const term = await getCurrentTerm();
+      if (!term) return;
+      const report = await getFinalReport(selectedChild, term.id);
+      setReportData(report);
     };
-  }).filter(d => d.hasAllComponents);
 
-  // Overall
-  const overallFinal = subjectData.length > 0
-    ? Math.round(subjectData.reduce((s, d) => s + d.finalScore, 0) / subjectData.length)
+    loadReport();
+  }, [selectedChild]);
+
+  const child = children.find(c => c.id === selectedChild);
+
+  const overallFinal = reportData?.results.length
+    ? Math.round(reportData.results.reduce((s, r) => s + r.total, 0) / reportData.results.length)
     : 0;
-  const passedCount = subjectData.filter(d => d.passed).length;
-  const allPassed = subjectData.length > 0 && passedCount === subjectData.length;
 
-  // Rank
-  let rank = '—';
-  if (child && subjectData.length > 0) {
-    const classmates = allStudents.filter(s => s.className === child.className);
-    const classScores = classmates.map(cm => {
-      const cmExams = exams.filter(e => e.studentId === cm.id);
-      const cmSubjects = [...new Set(cmExams.map(e => e.subject))];
-      const cmFinals = cmSubjects.map(sub => {
-        const ca = cmExams.filter(e => e.subject === sub && CA_TYPES.includes(e.examType));
-        const caA = ca.length > 0 ? ca.reduce((s, e) => s + (e.score / e.total * 100), 0) / ca.length : 0;
-        const mid = cmExams.find(e => e.subject === sub && e.examType === 'Midterm');
-        const fin = cmExams.find(e => e.subject === sub && e.examType === 'Final');
-        if (!ca.length || !mid || !fin) return null;
-        return caA * 0.3 + (mid.score / mid.total * 100) * 0.3 + (fin.score / fin.total * 100) * 0.4;
-      }).filter(Boolean) as number[];
-      const avg = cmFinals.length > 0 ? cmFinals.reduce((s, f) => s + f, 0) / cmFinals.length : 0;
-      return { id: cm.id, avg: Math.round(avg) };
-    }).filter(c => c.avg > 0).sort((a, b) => b.avg - a.avg);
-
-    const pos = classScores.findIndex(c => c.id === selectedChild) + 1;
-    if (pos > 0) {
-      const suffix = pos === 1 ? 'st' : pos === 2 ? 'nd' : pos === 3 ? 'rd' : 'th';
-      rank = `${pos}${suffix} / ${classScores.length}`;
-    }
-  }
+  const passedCount = reportData?.results.filter(r => r.total >= 60).length || 0;
+  const allPassed = reportData?.results.length ? passedCount === reportData.results.length : false;
+  const rank = reportData ? `${reportData.overall_rank} / ${reportData.total_students}` : '—';
 
   return (
     <div className="space-y-6">
@@ -145,7 +93,7 @@ export function FinalReport() {
                   ) : (
                     <div className="flex flex-col items-center">
                       <XCircle className="w-8 h-8 text-white/80" />
-                      <p className="text-xs text-white/70 mt-1">{passedCount}/{subjectData.length}</p>
+                      <p className="text-xs text-white/70 mt-1">{passedCount}/{reportData?.results.length || 0}</p>
                     </div>
                   )}
                 </div>
@@ -156,47 +104,47 @@ export function FinalReport() {
           {/* Formula reminder */}
           <div className="bg-amber-50 border-b border-amber-100 px-5 py-3">
             <p className="text-xs text-amber-700 font-medium">
-              📊 Final Score = (CA Average × 30%) + (Midterm × 30%) + (Final Exam × 40%) &nbsp;|&nbsp; Pass mark: 60%
+              📊 Final Score = (CA × {reportData?.weights.ca}%) + (Midterm × {reportData?.weights.midterm}%) + (Final Exam × {reportData?.weights.final}%) &nbsp;|&nbsp; Pass mark: 60%
             </p>
           </div>
 
-          {subjectData.length > 0 ? (
+          {reportData && reportData.results.length > 0 ? (
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200">
                     <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject</th>
-                    <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">CA (30%)</th>
-                    <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Midterm (30%)</th>
-                    <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Final (40%)</th>
+                    <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">CA ({reportData.weights.ca}%)</th>
+                    <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Midterm ({reportData.weights.midterm}%)</th>
+                    <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Final ({reportData.weights.final}%)</th>
                     <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Final Score</th>
                     <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Grade</th>
                     <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Status</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {subjectData.map(row => (
-                    <tr key={row.subject} className="hover:bg-slate-50">
-                      <td className="px-5 py-4 font-semibold text-slate-800 text-sm">{row.subject}</td>
-                      <td className="px-5 py-4 text-center text-sm text-slate-600">{row.caAverage}%</td>
-                      <td className="px-5 py-4 text-center text-sm text-slate-600">{row.midtermScore}%</td>
-                      <td className="px-5 py-4 text-center text-sm text-slate-600">{row.finalExamScore}%</td>
+                  {reportData.results.map(result => (
+                    <tr key={result.subject} className="hover:bg-slate-50">
+                      <td className="px-5 py-4 font-semibold text-slate-800 text-sm">{result.subject}</td>
+                      <td className="px-5 py-4 text-center text-sm text-slate-600">{result.ca_avg}%</td>
+                      <td className="px-5 py-4 text-center text-sm text-slate-600">{result.midterm_score}%</td>
+                      <td className="px-5 py-4 text-center text-sm text-slate-600">{result.final_score}%</td>
                       <td className="px-5 py-4 text-center">
                         <span className={cn("text-lg font-bold",
-                          row.finalScore >= 80 ? 'text-emerald-600' : row.finalScore >= 60 ? 'text-amber-600' : 'text-red-600'
-                        )}>{row.finalScore}%</span>
+                          result.total >= 80 ? 'text-emerald-600' : result.total >= 60 ? 'text-amber-600' : 'text-red-600'
+                        )}>{result.total}%</span>
                       </td>
                       <td className="px-5 py-4 text-center">
                         <span className={cn("px-3 py-1 rounded-full text-xs font-bold",
-                          row.grade === 'A' ? 'bg-emerald-100 text-emerald-700' :
-                          row.grade === 'B' ? 'bg-blue-100 text-blue-700' :
-                          row.grade === 'C' ? 'bg-amber-100 text-amber-700' :
-                          row.grade === 'D' ? 'bg-orange-100 text-orange-700' :
+                          getGrade(result.total) === 'A' ? 'bg-emerald-100 text-emerald-700' :
+                          getGrade(result.total) === 'B' ? 'bg-blue-100 text-blue-700' :
+                          getGrade(result.total) === 'C' ? 'bg-amber-100 text-amber-700' :
+                          getGrade(result.total) === 'D' ? 'bg-orange-100 text-orange-700' :
                           'bg-red-100 text-red-700'
-                        )}>{row.grade}</span>
+                        )}>{getGrade(result.total)}</span>
                       </td>
                       <td className="px-5 py-4 text-center">
-                        {row.passed ? (
+                        {result.total >= 60 ? (
                           <span className="inline-flex items-center gap-1 text-emerald-600 text-xs font-semibold">
                             <CheckCircle className="w-4 h-4" /> Pass
                           </span>
@@ -213,13 +161,13 @@ export function FinalReport() {
                   <tr className="bg-slate-50 font-bold border-t-2 border-slate-200">
                     <td className="px-5 py-3 text-sm text-slate-800">OVERALL</td>
                     <td className="px-5 py-3 text-center text-sm text-slate-600">
-                      {Math.round(subjectData.reduce((s, d) => s + d.caAverage, 0) / subjectData.length)}%
+                      {Math.round(reportData.results.reduce((s, r) => s + r.ca_avg, 0) / reportData.results.length)}%
                     </td>
                     <td className="px-5 py-3 text-center text-sm text-slate-600">
-                      {Math.round(subjectData.reduce((s, d) => s + d.midtermScore, 0) / subjectData.length)}%
+                      {Math.round(reportData.results.reduce((s, r) => s + r.midterm_score, 0) / reportData.results.length)}%
                     </td>
                     <td className="px-5 py-3 text-center text-sm text-slate-600">
-                      {Math.round(subjectData.reduce((s, d) => s + d.finalExamScore, 0) / subjectData.length)}%
+                      {Math.round(reportData.results.reduce((s, r) => s + r.final_score, 0) / reportData.results.length)}%
                     </td>
                     <td className="px-5 py-3 text-center text-lg text-indigo-700 font-bold">{overallFinal}%</td>
                     <td className="px-5 py-3 text-center">
@@ -231,7 +179,7 @@ export function FinalReport() {
                       {allPassed ? (
                         <span className="text-emerald-600 text-xs font-bold">ALL PASSED</span>
                       ) : (
-                        <span className="text-amber-600 text-xs font-bold">{passedCount}/{subjectData.length}</span>
+                        <span className="text-amber-600 text-xs font-bold">{passedCount}/{reportData.results.length}</span>
                       )}
                     </td>
                   </tr>
