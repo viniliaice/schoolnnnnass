@@ -397,12 +397,21 @@ export async function getStudentsByClass(className: string): Promise<Student[]> 
   return data || [];
 }
 
-
-export async function getStudentsByClasses(classNames: string[]): Promise<Student[]> {
-  const { data, error } = await supabase.from('students').select('*').in('className', classNames);
+export async function getStudentsByClasses(classnames: string[], search?: string): Promise<Student[]> {
+  let query = supabase.from('students').select('*');
+  if (classnames && classnames.length > 0) {
+    query = query.in('className', classnames);
+  }
+  if (search && search.trim()) {
+    query = query.ilike('name', `%${search}%`);
+  }
+  const { data, error } = await query;
   if (error) throw error;
   return data || [];
 }
+
+
+
 
 // ── Subjects ──
 export async function getSubjectById(id: string): Promise<Subject | null> {
