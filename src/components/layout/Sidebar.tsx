@@ -22,12 +22,14 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
     { label: 'Exam Verification', icon: ClipboardCheck, path: '/admin/exams' },
+    { label: 'Exam Reports', icon: FileBarChart, path: '/admin/exam-reports' },
   ],
   teacher: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'My Classes', icon: GraduationCap, path: '/teacher/students' },
     { label: 'Upload Results', icon: Upload, path: '/teacher/results' },
     { label: 'My Submissions', icon: FileText, path: '/teacher/all-results' },
+    { label: 'Exam Reports', icon: FileBarChart, path: '/teacher/exam-reports' },
   ],
   parent: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },

@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { getUserById, getStudentsByClasses, getExamsByTeacher } from '../../lib/database';
-import { GraduationCap, FileText, Clock, CheckCircle, XCircle, BookOpen } from 'lucide-react';
+import { GraduationCap, FileText, Clock, CheckCircle, XCircle, BookOpen, FileBarChart } from 'lucide-react';
 
-export function TeacherDashboard() {
+export function TeacherDashboard({ navigate }: { navigate?: (path: string) => void }) {
   const { session } = useRole();
   const [stats, setStats] = useState({ classes: 0, students: 0, submissions: 0, pending: 0, approved: 0, rejected: 0 });
   const [assignedClasses, setAssignedClasses] = useState<string[]>([]);
@@ -37,13 +37,14 @@ export function TeacherDashboard() {
     loadData();
   }, [session]);
 
-  const cards = [
+  const cards: any[] = [
     { label: 'My Classes', value: stats.classes, icon: BookOpen, color: 'bg-teal-500', bg: 'bg-teal-50' },
     { label: 'Students', value: stats.students, icon: GraduationCap, color: 'bg-blue-500', bg: 'bg-blue-50' },
     { label: 'Submissions', value: stats.submissions, icon: FileText, color: 'bg-amber-500', bg: 'bg-amber-50' },
     { label: 'Pending', value: stats.pending, icon: Clock, color: 'bg-orange-500', bg: 'bg-orange-50' },
     { label: 'Approved', value: stats.approved, icon: CheckCircle, color: 'bg-emerald-500', bg: 'bg-emerald-50' },
     { label: 'Rejected', value: stats.rejected, icon: XCircle, color: 'bg-red-500', bg: 'bg-red-50' },
+    { label: 'Exam Reports', value: 'Open', icon: FileBarChart, color: 'bg-indigo-500', bg: 'bg-indigo-50', onClick: () => navigate?.('/teacher/exam-reports') },
   ];
 
   return (
@@ -55,7 +56,7 @@ export function TeacherDashboard() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">
         {cards.map(card => (
-          <div key={card.label} className={`${card.bg} rounded-2xl p-4 border border-white/50`}>
+          <div key={card.label} onClick={() => card.onClick?.()} className={`${card.bg} rounded-2xl p-4 border border-white/50 ${card.onClick ? 'cursor-pointer hover:shadow-md' : ''}`}>
             <div className={`w-10 h-10 ${card.color} rounded-xl flex items-center justify-center mb-3`}>
               <card.icon className="w-5 h-5 text-white" />
             </div>

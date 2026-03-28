@@ -21,6 +21,9 @@ import { TeacherStudents } from './pages/teacher/TeacherStudents';
 import { UploadResults } from './pages/teacher/UploadResults';
 import { AllResults } from './pages/teacher/AllResults';
 
+// Shared Reports
+import { ExamReport } from './pages/reports/ExamReport';
+
 // Parent Pages
 import { ParentDashboard } from './pages/parent/ParentDashboard';
 import { ChildrenView } from './pages/parent/ChildrenView';
@@ -75,28 +78,30 @@ function AppContent() {
 
   return (
     <DashboardLayout>
-      {(currentPath) => {
+      {(currentPath, navigate) => {
         // Admin routes
         if (session.role === 'admin') {
           switch (currentPath) {
-            case '/dashboard': return <AdminDashboard />;
+            case '/dashboard': return <AdminDashboard navigate={navigate} />;
             case '/admin/users': return <ManageUsers />;
             case '/admin/students': return <ManageStudents />;
             case '/admin/academic': return <ManageAcademic />;
             case '/admin/bulk': return <BulkUpload />;
             case '/admin/exams': return <ExamVerification />;
-            default: return <AdminDashboard />;
+            case '/admin/exam-reports': return <ExamReport />;
+            default: return <AdminDashboard navigate={navigate} />;
           }
         }
 
         // Teacher routes
         if (session.role === 'teacher') {
           switch (currentPath) {
-            case '/dashboard': return <TeacherDashboard />;
+            case '/dashboard': return <TeacherDashboard navigate={navigate} />;
             case '/teacher/students': return <TeacherStudents />;
             case '/teacher/results': return <UploadResults />;
             case '/teacher/all-results': return <AllResults />;
-            default: return <TeacherDashboard />;
+            case '/teacher/exam-reports': return <ExamReport />;
+            default: return <TeacherDashboard navigate={navigate} />;
           }
         }
 

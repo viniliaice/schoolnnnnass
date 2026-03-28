@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { getSystemStats, getStudents, getExams, getUsers } from '../../lib/database';
-import { Users, GraduationCap, FileText, CheckCircle, XCircle, Clock, TrendingUp, BookOpen } from 'lucide-react';
+import { Users, GraduationCap, FileText, CheckCircle, XCircle, Clock, TrendingUp, BookOpen, FileBarChart } from 'lucide-react';
 
-export function AdminDashboard() {
+export function AdminDashboard({ navigate }: { navigate?: (path: string) => void }) {
   const [stats, setStats] = useState<any>(null);
   const [recentExams, setRecentExams] = useState<any[]>([]);
   const [students, setStudents] = useState<any[]>([]);
@@ -90,7 +90,7 @@ export function AdminDashboard() {
   const classesPaged = classes.slice((classesPage - 1) * CLASSES_PER_PAGE, classesPage * CLASSES_PER_PAGE);
   const recentPaged = recentExams.slice((recentPage - 1) * RECENT_PER_PAGE, recentPage * RECENT_PER_PAGE);
 
-  const statCards = [
+  const statCards: any[] = [
     { label: 'Teachers', value: stats.totalTeachers, icon: Users, color: 'bg-teal-500', bg: 'bg-teal-50' },
     { label: 'Parents', value: stats.totalParents, icon: Users, color: 'bg-violet-500', bg: 'bg-violet-50' },
     { label: 'Students', value: stats.totalStudents, icon: GraduationCap, color: 'bg-blue-500', bg: 'bg-blue-50' },
@@ -99,6 +99,7 @@ export function AdminDashboard() {
     { label: 'Approved', value: stats.approvedExams, icon: CheckCircle, color: 'bg-emerald-500', bg: 'bg-emerald-50' },
     { label: 'Rejected', value: stats.rejectedExams, icon: XCircle, color: 'bg-red-500', bg: 'bg-red-50' },
     { label: 'Avg Score', value: `${stats.averageScore}%`, icon: TrendingUp, color: 'bg-indigo-500', bg: 'bg-indigo-50' },
+    { label: 'Exam Reports', value: 'Open', icon: FileBarChart, color: 'bg-indigo-500', bg: 'bg-indigo-50', onClick: () => navigate?.('/admin/exam-reports') },
   ];
 
   return (
@@ -110,7 +111,7 @@ export function AdminDashboard() {
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {statCards.map(card => (
-          <div key={card.label} className={`${card.bg} rounded-2xl p-4 border border-white/50`}>
+          <div key={card.label} onClick={() => card.onClick?.()} className={`${card.bg} rounded-2xl p-4 border border-white/50 ${card.onClick ? 'cursor-pointer hover:shadow-md' : ''}`}>
             <div className={`w-10 h-10 ${card.color} rounded-xl flex items-center justify-center mb-3`}>
               <card.icon className="w-5 h-5 text-white" />
             </div>
