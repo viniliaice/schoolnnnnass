@@ -1,3 +1,22 @@
+// DEBUG: Log all class_subjects rows
+export async function logAllClassSubjects() {
+  const { data, error } = await supabase.from('class_subjects').select('*');
+  if (error) {
+    console.error('Error fetching class_subjects:', error);
+    return;
+  }
+  console.log('class_subjects rows:', data);
+  return data;
+}
+// Get all class/subject assignments for a teacher
+export async function getClassAssignmentsForTeacher(teacherId: string): Promise<{ className: string, subjectId: string }[]> {
+  const { data, error } = await supabase
+    .from('class_subjects')
+    .select('className, subjectId')
+    .eq('teacherId', teacherId);
+  if (error) return [];
+  return data || [];
+}
 import { User, Student, Exam, ExamStatus, ExamType, Role, AcademicYear, Term, Subject, GradeScale, ReportConfig, MonthlyScore, MidtermReport, FinalReport, getGrade } from '../types';
 import { supabase } from './supabase';
 
@@ -71,7 +90,7 @@ export async function getCurrentUserProfile() {
 export async function createDemoAccounts() {
   const demoUsers = [
     { email: 'admin@scholo.com', password: 'admin123', name: 'Dr. Sarah Mitchell', role: 'admin' as const },
-    { email: 'teacher@scholo.com', password: 'teacher123', name: 'Prof. James Wilson', role: 'teacher' as const, assignedClasses: ['Grade 10-A', 'Grade 9-A', 'Grade 8-B'] },
+    { email: 'teacher@scholo.com', password: 'teacher123', name: 'Prof. James Wilson', role: 'teacher' as const, assignedClasses: ['Grade 10-A', 'Grade 9-A', 'Grade 8-B'], assignedSubjects: ['Mathematics', 'English', 'Science'] },
     { email: 'parent@scholo.com', password: 'parent123', name: 'Michael Johnson', role: 'parent' as const },
   ];
 
@@ -316,6 +335,7 @@ async function getMidtermReportFallback(studentId: string, termId: string): Prom
       subject_rank: subjectRank || 1,
       class_average: classAvg,
       highest_in_class: highestInClass,
+      examId: e.id,
     });
   }
 
@@ -408,6 +428,15 @@ export async function getStudentsByClasses(classnames: string[], search?: string
   const { data, error } = await query;
   if (error) throw error;
   return data || [];
+}
+
+// Return distinct list of classes from students table
+export async function getClasses(): Promise<string[]> {
+  const { data, error } = await supabase.from('students').select('className');
+  if (error) throw error;
+  const classes = Array.from(new Set((data || []).map((r: any) => r.className).filter(Boolean)));
+  classes.sort();
+  return classes;
 }
 
 
@@ -571,6 +600,111 @@ export async function createExam(data: Omit<Exam, 'id' | 'created_At'>): Promise
 
 export async function updateExamStatus(id: string, status: ExamStatus): Promise<Exam | null> {
   const { data: updated, error } = await supabase.from('exams').update({ status }).eq('id', id).select().single();
+  if (error) return null;
+  return updated;
+}
+
+// Approve all exams currently pending
+export async function approveAllPendingExams(): Promise<Exam[] | null> {
+  const { data, error } = await supabase.from('exams').update({ status: 'approved' }).eq('status', 'pending').select();
+  if (error) return null;
+  return data || [];
+}
+
+// Allow admin to edit an exam record
+export async function updateExam(id: string, data: Partial<Exam>): Promise<Exam | null> {
+  const { data: updated, error } = await supabase.from('exams').update(data).eq('id', id).select().single();
+  if (error) return null;
+  return updated;
+}
+
+// Report comments (teacher/principal remarks)
+export async function getReportComment(studentId: string, termId: string, examId?: string): Promise<ReportComment | null> {
+  let query = supabase.from('report_comments').select('*');
+  if (examId) query = query.eq('examId', examId);
+  else query = query.eq('studentId', studentId).eq('termId', termId);
+  const { data, error } = await query.maybeSingle();
+  if (error) return null;
+  return data || null;
+}
+
+export async function upsertReportComment(comment: Omit<ReportComment, 'id' | 'createdAt'>): Promise<ReportComment | null> {
+  // Always check for existing by studentId, termId, and examId (all required for unique comment per subject)
+  if (!comment.examId) {
+    throw new Error('examId is required to allow multiple comments for different subjects.');
+  }
+  const { data: existingRows, error: findError } = await supabase
+    .from('report_comments')
+    .select('*')
+    .eq('studentId', comment.studentId)
+    .eq('termId', comment.termId)
+    .eq('examId', comment.examId);
+  if (findError) return null;
+  const existing = (existingRows && existingRows.length > 0) ? existingRows[0] : null;
+
+  if (existing && existing.id) {
+    const { data, error } = await supabase.from('report_comments').update(comment).eq('id', existing.id).select().single();
+    if (error) return null;
+    return data || null;
+  }
+
+  const id = `rc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const item = { id, ...comment, createdAt: new Date().toISOString() } as any;
+  const { data, error } = await supabase.from('report_comments').insert(item).select().single();
+  if (error) return null;
+  return data || null;
+}
+
+// Return subjects for a class optionally filtered by teacher assignment
+export async function getClassSubjectsForTeacher(teacherId?: string, className?: string): Promise<Subject[]> {
+  // Attempt to join class_subjects -> subjects
+  let query = supabase.from('class_subjects').select('subjectId, teacherId, className, subjects(*)');
+  if (teacherId) query = query.eq('teacherId', teacherId);
+  if (className) query = query.eq('className', className);
+  const { data, error } = await query;
+  if (error) return [];
+  const rows: any[] = data || [];
+  const subjects = rows.map(r => r.subjects).filter(Boolean) as Subject[];
+  return subjects;
+}
+
+// CRUD for class_subjects
+export async function getClassSubjects(): Promise<any[]> {
+  const { data, error } = await supabase.from('class_subjects').select('id, className, teacherId, subjectId, subjects(name), users(name)');
+  if (error) return [];
+  return data || [];
+}
+
+export async function createClassSubject(item: { className: string; subjectId: string; teacherId?: string }) {
+  const id = `cs-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const payload = { id, ...item, createdAt: new Date().toISOString() } as any;
+  const { data, error } = await supabase.from('class_subjects').insert(payload).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function updateClassSubject(id: string, dataObj: Partial<{ className: string; subjectId: string; teacherId?: string }>) {
+  const { data, error } = await supabase.from('class_subjects').update(dataObj).eq('id', id).select().single();
+  if (error) throw error;
+  return data;
+}
+
+export async function deleteClassSubject(id: string) {
+  const { error } = await supabase.from('class_subjects').delete().eq('id', id);
+  if (error) throw error;
+  return true;
+}
+
+// Fetch all report comments for a student & term
+export async function getReportCommentsForStudentTerm(studentId: string, termId: string): Promise<ReportComment[]> {
+  const { data, error } = await supabase.from('report_comments').select('*').eq('studentId', studentId).eq('termId', termId);
+  if (error) return [];
+  return data || [];
+}
+
+// Update the report configuration (admin only)
+export async function updateReportConfig(data: Partial<ReportConfig>): Promise<ReportConfig | null> {
+  const { data: updated, error } = await supabase.from('report_config').update(data).eq('id', 'default').select().single();
   if (error) return null;
   return updated;
 }

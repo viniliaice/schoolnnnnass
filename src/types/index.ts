@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'teacher' | 'parent';
+export type Role = 'admin' | 'teacher' | 'parent' | 'supervisor';
 export type ExamStatus = 'pending' | 'approved' | 'rejected';
 export type ExamType = 'CA' | 'Homework' | 'Classwork' | 'Quiz' | 'Midterm' | 'Final';
 
@@ -12,7 +12,8 @@ export const MONTHS = [
 
 export const CLASSES = [
   // Kindergarten
-  'KG-A', 'KG-B',
+  'Foundation A','Foundation c','Foundation D', 'Foundation B',
+  'KG-A', 'KG-B', 'KG-C','KG-D','KG-E',
 
   // Primary School (Grades 1-6)
   'Grade 1-A', 'Grade 1-B', 'Grade 1-C',
@@ -43,6 +44,7 @@ export interface User {
   id: string;
   name: string;
   email: string;
+  password?: string;
   role: Role;
   // Parent-specific fields
   phone1?: string;
@@ -52,6 +54,7 @@ export interface User {
   paymentnumber?: string;
   // Teacher-specific fields
   assignedClasses?: string[];
+  assignedSubjects?: string[];
   createdAt: string;
 }
 
@@ -205,6 +208,7 @@ export interface ReportComment {
   teacherComment?: string;
   principalComment?: string;
   teacherId?: string;
+  examId?: string;
   createdAt: string;
 }
 
@@ -233,6 +237,7 @@ export interface Exam {
   teacherId: string;
   termId?: string;  // New
   subjectId?: string;  // New
+  comment?: string; // optional per-exam teacher comment
 }
 
 // Add report types
@@ -247,6 +252,7 @@ export interface MonthlyScore {
     total: number;
     percentage: number;
     date: string;
+    examId?: string;
   }[];
 }
 
@@ -260,6 +266,7 @@ export interface MidtermScore {
   subject_rank: number;
   class_average: number;
   highest_in_class: number;
+  examId?: string;
 }
 
 export interface MidtermReport {

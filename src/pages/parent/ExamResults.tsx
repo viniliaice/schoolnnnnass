@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getExamsByParent, getCurrentTerm } from '../../lib/database';
+import { getStudentsByParent, getExamsByParent, getCurrentTerm, getReportCommentsForStudentTerm } from '../../lib/database';
 import { Student, Exam, ExamType, EXAM_TYPES } from '../../types';
 import { BookOpen } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -11,6 +11,7 @@ export function ExamResults() {
   const [exams, setExams] = useState<Exam[]>([]);
   const [selectedChild, setSelectedChild] = useState('all');
   const [typeFilter, setTypeFilter] = useState<ExamType | 'all'>('all');
+  const [reportCommentsByExam, setReportCommentsByExam] = useState<Record<string, string>>({});
 
   useEffect(() => {
     if (!session) return;
@@ -29,6 +30,29 @@ export function ExamResults() {
 
     loadData();
   }, [session]);
+
+  useEffect(() => {
+    if (!session || selectedChild === 'all') {
+      setReportCommentsByExam({});
+      return;
+    }
+
+    const fetchComments = async () => {
+      const term = await getCurrentTerm();
+      if (!term) return;
+
+      const comments = await getReportCommentsForStudentTerm(selectedChild, term.id);
+      const map: Record<string, string> = {};
+      for (const comment of comments) {
+        if (comment.examId && comment.teacherComment) {
+          map[comment.examId] = comment.teacherComment;
+        }
+      }
+      setReportCommentsByExam(map);
+    };
+
+    fetchComments();
+  }, [session, selectedChild]);
 
   const filtered = exams
     .filter(e => selectedChild === 'all' || e.studentId === selectedChild)
@@ -73,6 +97,7 @@ export function ExamResults() {
                 <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Month</th>
                 <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Score</th>
                 <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">%</th>
+                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Teacher Comment</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -97,6 +122,7 @@ export function ExamResults() {
                         pct >= 80 ? 'text-emerald-600' : pct >= 60 ? 'text-amber-600' : 'text-red-600'
                       )}>{pct}%</span>
                     </td>
+                    <td className="px-5 py-3 text-sm text-slate-600">{reportCommentsByExam[exam.id] || '—'}</td>
                   </tr>
                 );
               })}

@@ -1,7 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getUserById, getStudentsByClasses, bulkCreateExams, getCurrentTerm, getSubjects } from '../../lib/database';
+import { getUserById, getStudentsByClasses, bulkCreateExams, getCurrentTerm, getSubjects, getClassSubjectsForTeacher, upsertReportComment, getClassAssignmentsForTeacher } from '../../lib/database';
 import { ExamType, EXAM_TYPES, MONTHS, SUBJECTS, Term, Subject } from '../../types';
+import { Dialog } from '../../components/ui/Dialog';
 import { useToast } from '../../context/ToastContext';
 import {
   Upload, CheckCircle, ChevronRight, ChevronLeft, Users,
@@ -16,18 +17,24 @@ interface StudentScore {
   parentId: string;
   score: string;
   included: boolean;
+  comment?: string;
 }
 
 type Step = 'config' | 'scores' | 'review';
 
 export function UploadResults() {
+    // DEBUG: Log all class_subjects rows
+    const handleDebugClassSubjects = async () => {
+      await logAllClassSubjects();
+      addToast({ type: 'info', title: 'Check console for class_subjects rows' });
+    };
   const { session } = useRole();
   const { addToast } = useToast();
 
   // Config state
   const [classes, setClasses] = useState<string[]>([]);
   const [selectedClass, setSelectedClass] = useState('');
-  const [subject, setSubject] = useState(SUBJECTS[0]);
+  // subject state removed in favor of `selectedSubject` (id)
   const [examType, setExamType] = useState<ExamType>('CA');
   const [month, setMonth] = useState(MONTHS[new Date().getMonth()]);
   const [total, setTotal] = useState('100');
@@ -44,27 +51,39 @@ export function UploadResults() {
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
 
+  // Per-exam comment modal state
+  const [commentModalOpen, setCommentModalOpen] = useState(false);
+  const [commentingStudentId, setCommentingStudentId] = useState<string | null>(null);
+  const [commentDraft, setCommentDraft] = useState('');
+
   // Quick fill
   const [quickFillValue, setQuickFillValue] = useState('');
 
   useEffect(() => {
     if (!session) return;
-
     const loadData = async () => {
-      const teacher = await getUserById(session.userId);
-      const cls = teacher?.assignedClasses || [];
-      setClasses(cls);
-      if (cls.length > 0) setSelectedClass(cls[0]);
+      // Get all class/subject assignments for this teacher
+      const assignments = await getClassAssignmentsForTeacher(session.userId);
+      const uniqueClasses = Array.from(new Set(assignments.map(a => a.className)));
+      setClasses(uniqueClasses);
+      if (uniqueClasses.length > 0) setSelectedClass(uniqueClasses[0]);
 
-      // Load current term and subjects
+      // Load current term
       const term = await getCurrentTerm();
-      const subj = await getSubjects();
       setCurrentTerm(term);
-      setSubjects(subj);
-      if (subj.length > 0) setSelectedSubject(subj[0].id);
-    };
 
+      // Set subjects for the first class (if any)
+      if (uniqueClasses.length > 0) {
+        const classSubs = await getClassSubjectsForTeacher(session.userId, uniqueClasses[0]);
+        setSubjects(classSubs);
+        if (classSubs.length > 0) setSelectedSubject(classSubs[0].id);
+      } else {
+        setSubjects([]);
+        setSelectedSubject('');
+      }
+    };
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [session]);
 
   const loadStudents = useCallback(async () => {
@@ -82,6 +101,18 @@ export function UploadResults() {
     );
   }, [selectedClass]);
 
+  // When selectedClass changes, update subjects to only those mapped for this teacher/class
+  useEffect(() => {
+    if (!session || !selectedClass) return;
+    const updateSubjects = async () => {
+      const classSubs = await getClassSubjectsForTeacher(session.userId, selectedClass);
+      setSubjects(classSubs);
+      if (classSubs.length > 0) setSelectedSubject(classSubs[0].id);
+      else setSelectedSubject('');
+    };
+    updateSubjects();
+  }, [session, selectedClass]);
+
   useEffect(() => {
     const load = async () => {
       await loadStudents();
@@ -92,6 +123,12 @@ export function UploadResults() {
   const updateScore = (studentId: string, score: string) => {
     setStudentScores(prev =>
       prev.map(s => s.studentId === studentId ? { ...s, score } : s)
+    );
+  };
+
+  const updateComment = (studentId: string, comment: string) => {
+    setStudentScores(prev =>
+      prev.map(s => s.studentId === studentId ? { ...s, comment } : s)
     );
   };
 
@@ -151,22 +188,43 @@ export function UploadResults() {
   const handleSubmitAll = async () => {
     setSubmitting(true);
 
-    const examsToCreate = filledStudents.map(s => ({
-      studentId: s.studentId,
-      subject: subjects.find(sub => sub.id === selectedSubject)?.name || subject,
-      score: parseInt(s.score),
-      total: totalNum,
-      examType,
-      month,
-      status: 'pending' as const,
-      parentId: s.parentId,
-      date,
-      teacherId: session!.userId,
-      termId: currentTerm?.id,
-      subjectId: selectedSubject,
-    }));
+      const examsToCreate = filledStudents.map(s => ({
+        studentId: s.studentId,
+        subject: subjects.find(sub => sub.id === selectedSubject)?.name || subjects[0]?.name || '',
+        score: parseInt(s.score),
+        total: totalNum,
+        examType,
+        month,
+        status: 'pending' as const,
+        parentId: s.parentId,
+        date,
+        teacherId: session!.userId,
+        termId: currentTerm?.id,
+        subjectId: selectedSubject,
+        // comment removed, handled in report_comments
+      }));
 
-    await bulkCreateExams(examsToCreate);
+    const created = await bulkCreateExams(examsToCreate);
+    // After creation, persist per-exam comments (link comment to examId)
+    if (created && created.length > 0) {
+      for (const ex of created) {
+        const local = filledStudents.find(s => s.studentId === ex.studentId);
+        if (local?.comment) {
+          try {
+            await upsertReportComment({
+              studentId: ex.studentId,
+              termId: ex.termId || currentTerm?.id || '',
+              examId: ex.id,
+              teacherComment: local.comment,
+              teacherId: session!.userId,
+            });
+          } catch (err) {
+            // ignore individual failures but log
+            console.error('Failed to upsert report comment', err);
+          }
+        }
+      }
+    }
 
     setSubmitting(false);
     setSubmitted(true);
@@ -202,6 +260,13 @@ export function UploadResults() {
   // ─── RENDER ───
   return (
     <div className="space-y-6">
+      {/* DEBUG: Button to log all class_subjects rows */}
+      <button
+        className="mb-2 px-3 py-1 bg-blue-100 text-blue-700 rounded hover:bg-blue-200"
+        onClick={handleDebugClassSubjects}
+      >
+        Debug: Log class_subjects
+      </button>
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Upload Exam Results</h1>
         <p className="text-slate-500 mt-1">
@@ -216,6 +281,8 @@ export function UploadResults() {
           { key: 'scores', label: 'Enter Scores', icon: Users },
           { key: 'review', label: 'Review & Submit', icon: Sparkles },
         ].map((s, i) => (
+
+          
           <div key={s.key} className="flex items-center gap-2">
             {i > 0 && <ChevronRight className="w-4 h-4 text-slate-300" />}
             <button
@@ -308,7 +375,7 @@ export function UploadResults() {
             <div className="bg-teal-50 border border-teal-200 rounded-xl p-4">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
                 <div><span className="text-teal-600 text-xs font-medium">Class</span><p className="font-bold text-teal-900">{selectedClass || '—'}</p></div>
-                <div><span className="text-teal-600 text-xs font-medium">Subject</span><p className="font-bold text-teal-900">{subject}</p></div>
+                <div><span className="text-teal-600 text-xs font-medium">Subject</span><p className="font-bold text-teal-900">{subjects.find(s => s.id === selectedSubject)?.name || '—'}</p></div>
                 <div><span className="text-teal-600 text-xs font-medium">Type</span><p className="font-bold text-teal-900">{examType}</p></div>
                 <div><span className="text-teal-600 text-xs font-medium">Students</span><p className="font-bold text-teal-900">{studentScores.length}</p></div>
               </div>
@@ -337,7 +404,7 @@ export function UploadResults() {
           <div className="bg-teal-50 border border-teal-200 rounded-xl px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
             <span><strong className="text-teal-800">{selectedClass}</strong></span>
             <span className="text-teal-600">•</span>
-            <span><strong className="text-teal-800">{subject}</strong></span>
+            <span><strong className="text-teal-800">{subjects.find(s => s.id === selectedSubject)?.name || '—'}</strong></span>
             <span className="text-teal-600">•</span>
             <span className="text-teal-700">{examType} — {month}</span>
             <span className="text-teal-600">•</span>
@@ -482,6 +549,14 @@ export function UploadResults() {
                           )}
                         </td>
                         <td className="px-4 py-3 text-center">
+                          <button onClick={() => {
+                            setCommentDraft(s.comment || '');
+                            setCommentingStudentId(s.studentId);
+                            setCommentModalOpen(true);
+                          }} className="px-2 py-1 text-xs rounded-lg bg-slate-50 hover:bg-slate-100">{s.comment ? 'Edit' : 'Add'}</button>
+                        </td>
+                        
+                        <td className="px-4 py-3 text-center">
                           {invalid ? (
                             <span className="inline-flex items-center gap-1 text-xs font-medium text-red-600">
                               <AlertCircle className="w-3.5 h-3.5" /> Invalid
@@ -546,7 +621,7 @@ export function UploadResults() {
                 <p className="text-xs text-teal-600 mt-1">Students</p>
               </div>
               <div className="bg-indigo-50 rounded-xl p-4 text-center">
-                <p className="text-2xl font-bold text-indigo-700">{subject}</p>
+                <p className="text-2xl font-bold text-indigo-700">{subjects.find(s => s.id === selectedSubject)?.name || '—'}</p>
                 <p className="text-xs text-indigo-600 mt-1">Subject</p>
               </div>
               <div className="bg-violet-50 rounded-xl p-4 text-center">
@@ -657,6 +732,40 @@ export function UploadResults() {
           </div>
         </div>
       )}
+
+      {/* Comment Modal */}
+      <Dialog open={commentModalOpen} onClose={() => setCommentModalOpen(false)} title="Add Comment" description="Add a comment for this student's exam result">
+        <div className="space-y-4">
+          <textarea
+            value={commentDraft}
+            onChange={e => setCommentDraft(e.target.value)}
+            placeholder="Enter your comment..."
+            rows={4}
+            className="w-full px-4 py-3 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-teal-200 focus:border-teal-400 outline-none resize-none"
+          />
+          <div className="flex justify-end gap-3">
+            <button
+              onClick={() => setCommentModalOpen(false)}
+              className="px-4 py-2 bg-slate-100 text-slate-700 rounded-xl text-sm font-medium hover:bg-slate-200 transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                if (commentingStudentId) {
+                  updateComment(commentingStudentId, commentDraft);
+                }
+                setCommentModalOpen(false);
+                setCommentingStudentId(null);
+                setCommentDraft('');
+              }}
+              className="px-4 py-2 bg-teal-600 text-white rounded-xl text-sm font-medium hover:bg-teal-700 transition-colors"
+            >
+              Save Comment
+            </button>
+          </div>
+        </div>
+      </Dialog>
     </div>
   );
 }

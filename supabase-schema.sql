@@ -3,14 +3,15 @@ CREATE TABLE users (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
-
-  role TEXT NOT NULL CHECK (role IN ('admin', 'teacher', 'parent')),
+  password TEXT,
+  role TEXT NOT NULL CHECK (role IN ('admin', 'teacher', 'parent', 'supervisor')),
   phone1 TEXT,
   phone2 TEXT,
   xafada TEXT,
   udow TEXT,
   paymentnumber TEXT,
-  "assignedClasses" JSONB,
+  "assignedClasses" JSONB DEFAULT '[]'::JSONB,
+  "assignedSubjects" JSONB DEFAULT '[]'::JSONB,
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -39,6 +40,14 @@ CREATE TABLE exams (
   "teacherId" TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE
 );
 
+-- Basic subjects table used for class_subjects and admin options
+CREATE TABLE IF NOT EXISTS subjects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  "shortName" TEXT,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 -- Create indexes for better performance
 CREATE INDEX idx_users_role ON users(role);
 CREATE INDEX idx_students_parentId ON students("parentId");
@@ -47,6 +56,31 @@ CREATE INDEX idx_exams_studentId ON exams("studentId");
 CREATE INDEX idx_exams_parentId ON exams("parentId");
 CREATE INDEX idx_exams_teacherId ON exams("teacherId");
 CREATE INDEX idx_exams_status ON exams(status);
+
+-- Class subject mapping for supervisors/teachers
+CREATE TABLE class_subjects (
+  id TEXT PRIMARY KEY,
+  "className" TEXT NOT NULL,
+  "subjectId" TEXT NOT NULL REFERENCES subjects(id) ON DELETE CASCADE,
+  "teacherId" TEXT REFERENCES users(id) ON DELETE SET NULL,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_class_subjects_class ON class_subjects("className");
+CREATE INDEX idx_class_subjects_teacher ON class_subjects("teacherId");
+CREATE INDEX idx_class_subjects_subject ON class_subjects("subjectId");
+
+-- Report comments storage
+CREATE TABLE report_comments (
+  id TEXT PRIMARY KEY,
+  "studentId" TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  "termId" TEXT NOT NULL REFERENCES terms(id) ON DELETE CASCADE,
+  "examId" TEXT REFERENCES exams(id) ON DELETE SET NULL,
+  "teacherComment" TEXT,
+  "principalComment" TEXT,
+  "teacherId" TEXT REFERENCES users(id) ON DELETE SET NULL,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_report_comments_student_term ON report_comments("studentId", "termId");
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
@@ -57,4 +91,35 @@ ALTER TABLE exams ENABLE ROW LEVEL SECURITY;
 -- For now, allow all operations (you may want to restrict this)
 CREATE POLICY "Allow all operations on users" ON users FOR ALL USING (true);
 CREATE POLICY "Allow all operations on students" ON students FOR ALL USING (true);
-CREATE POLICY "Allow all operations on exams" ON exams FOR ALL USING (true);
+-- Remove open policy and add secure RLS for teachers
+DROP POLICY IF EXISTS "Allow all operations on exams" ON exams;
+
+-- Allow teachers to insert/update only for their assigned subjects
+
+CREATE POLICY "Teachers can only insert exams for their assigned subjects" ON exams
+  FOR INSERT
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM users u
+      WHERE u.id = auth.uid()
+        AND (
+          exams.subjectId = ANY (SELECT jsonb_array_elements_text(u.assignedSubjects))
+        )
+    )
+  );
+
+-- Allow teachers to update exams only for their assigned subjects
+CREATE POLICY "Teachers can only update exams for their assigned subjects" ON exams
+  FOR UPDATE
+  USING (
+    EXISTS (
+      SELECT 1 FROM users u
+      WHERE u.id = auth.uid()
+        AND (
+          exams.subjectId = ANY (SELECT jsonb_array_elements_text(u.assignedSubjects))
+        )
+    )
+  );
+
+-- Allow select for all roles (adjust as needed)
+CREATE POLICY "Allow select on exams for all" ON exams FOR SELECT USING (true);

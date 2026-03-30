@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getCurrentTerm, getMidtermReport } from '../../lib/database';
+import { getStudentsByParent, getCurrentTerm, getMidtermReport, getReportCommentsForStudentTerm } from '../../lib/database';
 import { Student } from '../../types';
 import type { MidtermReport } from '../../types';
 import { FileBarChart } from 'lucide-react';
@@ -11,6 +11,7 @@ export function MidtermReport() {
   const [children, setChildren] = useState<Student[]>([]);
   const [reportData, setReportData] = useState<MidtermReport | null>(null);
   const [selectedChild, setSelectedChild] = useState('');
+  const [reportComments, setReportComments] = useState<string[]>([]);
 
   useEffect(() => {
     if (!session) return;
@@ -32,6 +33,9 @@ export function MidtermReport() {
       if (!term) return;
       const report = await getMidtermReport(selectedChild, term.id);
       setReportData(report);
+
+      const comments = await getReportCommentsForStudentTerm(selectedChild, term.id);
+      setReportComments(comments.map(comment => comment.teacherComment || '').filter(Boolean));
     };
 
     loadReport();

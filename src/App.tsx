@@ -10,10 +10,14 @@ import { DashboardLayout } from './components/layout/DashboardLayout';
 // Admin Pages
 import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { ManageUsers } from './pages/admin/ManageUsers';
+import { ManageClassSubjects } from './pages/admin/ManageClassSubjects';
 import { ManageStudents } from './pages/admin/ManageStudents';
 import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
 import { ExamVerification } from './pages/admin/ExamVerification';
+
+// Supervisor Pages
+import { SupervisorDashboard } from './pages/supervisor/SupervisorDashboard';
 
 // Teacher Pages
 import { TeacherDashboard } from './pages/teacher/TeacherDashboard';
@@ -84,6 +88,7 @@ function AppContent() {
           switch (currentPath) {
             case '/dashboard': return <AdminDashboard navigate={navigate} />;
             case '/admin/users': return <ManageUsers />;
+            case '/admin/class-subjects': return <ManageClassSubjects />;
             case '/admin/students': return <ManageStudents />;
             case '/admin/academic': return <ManageAcademic />;
             case '/admin/bulk': return <BulkUpload />;
@@ -92,6 +97,16 @@ function AppContent() {
             default: return <AdminDashboard navigate={navigate} />;
           }
         }
+
+          // Supervisor routes
+          if (session.role === 'supervisor') {
+            switch (currentPath) {
+              case '/dashboard': return <SupervisorDashboard />;
+              case '/supervisor/verifications': return <ExamVerification />;
+              case '/supervisor/reports': return <ExamReport />;
+              default: return <SupervisorDashboard />;
+            }
+          }
 
         // Teacher routes
         if (session.role === 'teacher') {

@@ -1,15 +1,22 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
+import { useToast } from '../../context/ToastContext';
 import {
   getStudents,
   getUserById,
   getStudentsByClasses,
   getStudentsByClass,
+  getStudentsByParent,
+  getClasses,
   getCurrentTerm,
   getMonthlyReport,
   getMidtermReport,
   getFinalReport,
+  getReportComment,
+  upsertReportComment,
+  getReportCommentsForStudentTerm,
 } from '../../lib/database';
+import type { ReportComment } from '../../types';
 import { Student, MONTHS, MonthlyScore, getGrade } from '../../types';
 import type { MidtermReport, FinalReport } from '../../types';
 import { Calendar, FileBarChart, FileText, Award } from 'lucide-react';
@@ -17,9 +24,13 @@ import { cn } from '../../utils/cn';
 
 export function ExamReport() {
   const { session } = useRole();
+  const { addToast } = useToast();
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(false);
   const [selectedStudent, setSelectedStudent] = useState('');
+  const [teacherComment, setTeacherComment] = useState('');
+  const [commentLoading, setCommentLoading] = useState(false);
+  const [reportComments, setReportComments] = useState<Record<string, ReportComment | undefined>>({});
 
   const [reportType, setReportType] = useState<'Monthly' | 'Midterm' | 'Final'>('Monthly');
   const [selectedMonth, setSelectedMonth] = useState(MONTHS[new Date().getMonth()]);
@@ -37,23 +48,21 @@ export function ExamReport() {
     const init = async () => {
       setLoading(true);
       try {
-        if (session.role === 'teacher') {
-          const teacher = await getUserById(session.userId);
-          const assigned = teacher?.assignedClasses || [];
+        if (session.role === 'teacher' || session.role === 'supervisor') {
+          const user = await getUserById(session.userId);
+          const assigned = user?.assignedClasses || [];
           if (assigned.length > 0) {
             setClasses(assigned);
-            // default to 'All' when teacher has multiple classes
+            // default to 'All' when there are multiple classes
             setSelectedClass(assigned.length > 1 ? 'All' : assigned[0]);
           } else {
-            // fallback: discover classes from students
-            const all = await getStudents();
-            const unique = [...new Set(all.map(s => s.className))].filter(Boolean);
+            // fallback: fetch classes from DB
+            const unique = await getClasses();
             setClasses(unique);
             setSelectedClass(unique[0] || 'All');
           }
         } else if (session.role === 'admin') {
-          const all = await getStudents();
-          const unique = [...new Set(all.map(s => s.className))].filter(Boolean);
+          const unique = await getClasses();
           setClasses(unique);
           setSelectedClass('All');
         }
@@ -73,10 +82,19 @@ export function ExamReport() {
     const loadByClass = async () => {
       setLoading(true);
       try {
+        // Parent: only load their children
+        if (session.role === 'parent') {
+          const list = await getStudentsByParent(session.userId);
+          const filtered = selectedClass === 'All' ? list : list.filter(s => s.className === selectedClass);
+          setStudents(filtered);
+          if (filtered.length > 0) setSelectedStudent(filtered[0].id);
+          return;
+        }
+
         if (selectedClass === 'All') {
-          if (session.role === 'teacher') {
-            const teacher = await getUserById(session.userId);
-            const classesList = teacher?.assignedClasses || [];
+          if (session.role === 'teacher' || session.role === 'supervisor') {
+            const user = await getUserById(session.userId);
+            const classesList = user?.assignedClasses || [];
             const list = classesList.length > 0 ? await getStudentsByClasses(classesList) : await getStudents();
             setStudents(list);
             if (list.length > 0) setSelectedStudent(list[0].id);
@@ -107,6 +125,19 @@ export function ExamReport() {
         const term = await getCurrentTerm();
         if (!term) return;
 
+        // Load existing teacher comment for this student and term
+        (async () => {
+          try {
+            setCommentLoading(true);
+            const c = await getReportComment(selectedStudent, term.id);
+            setTeacherComment(c?.teacherComment || '');
+          } catch (err) {
+            // ignore
+          } finally {
+            setCommentLoading(false);
+          }
+        })();
+
         if (reportType === 'Monthly') {
           const rep = await getMonthlyReport(selectedStudent, term.id);
           setMonthlyData(rep || []);
@@ -117,6 +148,18 @@ export function ExamReport() {
           const rep = await getFinalReport(selectedStudent, term.id);
           setFinalData(rep || null);
         }
+
+          // Load all report comments for this student/term (includes exam-linked comments)
+          try {
+            const comments = await getReportCommentsForStudentTerm(selectedStudent, term.id);
+            const map: Record<string, ReportComment | undefined> = {};
+            for (const c of comments) {
+              if (c.examId) map[c.examId] = c;
+            }
+            setReportComments(map);
+          } catch (err) {
+            // ignore
+          }
       } finally {
         setLoading(false);
       }
@@ -141,6 +184,278 @@ export function ExamReport() {
     ? Math.round(finalData.results.reduce((s, r) => s + r.total, 0) / finalData.results.length)
     : 0;
 
+  // Export report content as printable window (user can choose Save as PDF)
+  const exportReportAsPdf = () => {
+    const el = document.getElementById('report-content');
+    if (!el) {
+      addToast({ type: 'error', title: 'Export failed', description: 'Report content not available' });
+      return;
+    }
+    const printWindow = window.open('', '_blank', 'width=900,height=700');
+    if (!printWindow) {
+      addToast({ type: 'error', title: 'Export failed', description: 'Unable to open print window' });
+      return;
+    }
+    const title = `Report - ${student?.name || 'student'}`;
+    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; padding:20px; color:#0f172a} table{border-collapse:collapse; width:100%} th,td{padding:8px; border:1px solid #e6e6e6; text-align:left}</style></head><body>${el.innerHTML}</body></html>`);
+    printWindow.document.close();
+    printWindow.focus();
+    // Give a small delay for images/styles to load
+    setTimeout(() => {
+      printWindow.print();
+      // Do not auto-close so user can cancel/inspect; close after a short timeout
+      setTimeout(() => printWindow.close(), 1000);
+    }, 300);
+  };
+
+  // Save report content as an HTML file to the user's computer
+  const saveReportToFile = () => {
+    const el = document.getElementById('report-content');
+    if (!el) {
+      addToast({ type: 'error', title: 'Save failed', description: 'Report content not available' });
+      return;
+    }
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Report - ${student?.name || 'student'}</title></head><body>${el.innerHTML}</body></html>`;
+    const blob = new Blob([html], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const name = `report-${(student?.name || 'report').replace(/\s+/g, '_')}.html`;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    addToast({ type: 'success', title: 'Saved', description: `Report saved as ${name}` });
+  };
+
+  // Share via WhatsApp using parent's phone number(s)
+  const shareToWhatsApp = async () => {
+    if (!student) {
+      addToast({ type: 'error', title: 'Share failed', description: 'No student selected' });
+      return;
+    }
+    if (!student.parentId) {
+      addToast({ type: 'error', title: 'Share failed', description: 'Student has no parent linked' });
+      return;
+    }
+    try {
+      const parent = await getUserById(student.parentId);
+      if (!parent) {
+        addToast({ type: 'error', title: 'Share failed', description: 'Parent not found' });
+        return;
+      }
+      const phone = parent.phone1 || parent.phone2;
+      if (!phone) {
+        addToast({ type: 'error', title: 'Share failed', description: 'Parent has no phone number' });
+        return;
+      }
+      const overall = reportType === 'Monthly' ? `${overallMonthly}%` : reportType === 'Midterm' ? `${overallMidterm}%` : `${overallFinal}%`;
+      const text = `Exam report for ${student.name} (${student.className}) - ${reportType} overall: ${overall}. View details on the school portal.`;
+      const wa = `https://wa.me/${phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(text)}`;
+      window.open(wa, '_blank');
+    } catch (err) {
+      addToast({ type: 'error', title: 'Share failed', description: String(err) });
+    }
+  };
+
+  // Save teacher comment to DB
+  const saveTeacherComment = async () => {
+    if (!selectedStudent) {
+      addToast({ type: 'error', title: 'Save failed', description: 'No student selected' });
+      return;
+    }
+    setCommentLoading(true);
+    try {
+      const term = await getCurrentTerm();
+      if (!term) throw new Error('No current term');
+      const payload = {
+        studentId: selectedStudent,
+        termId: term.id,
+        teacherComment: teacherComment || '',
+        teacherId: session?.userId || undefined,
+      } as any;
+      const res = await upsertReportComment(payload);
+      if (res) {
+        addToast({ type: 'success', title: 'Saved', description: 'Teacher comment saved' });
+      } else {
+        addToast({ type: 'error', title: 'Save failed', description: 'Could not save comment' });
+      }
+    } catch (err) {
+      addToast({ type: 'error', title: 'Save failed', description: String(err) });
+    } finally {
+      setCommentLoading(false);
+    }
+  };
+
+  // Build report section (avoid deep inline ternaries to keep JSX clear)
+  const reportSection = !student ? (
+    <div className="text-center py-12 text-slate-400">{loading ? 'Loading...' : 'No students available'}</div>
+  ) : (
+    <div>
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
+        <div className="bg-gradient-to-r from-indigo-600 to-indigo-500 p-5">
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-bold text-white">{reportType} Report {reportType === 'Monthly' ? `— ${selectedMonth}` : ''}</h2>
+              <p className="text-sm text-white/80">{student?.name} · {student?.className}</p>
+            </div>
+            <div className="text-right flex items-center gap-3">
+              <p className="text-3xl font-bold text-white">{reportType === 'Monthly' ? `${overallMonthly}%` : reportType === 'Midterm' ? `${overallMidterm}%` : `${overallFinal}%`}</p>
+              <p className="text-xs text-white/70">{reportType === 'Monthly' ? 'Monthly Avg' : reportType === 'Midterm' ? 'Midterm Avg' : 'Final Avg'}</p>
+              <div className="ml-4 flex gap-2">
+                <button onClick={() => exportReportAsPdf()} className="px-3 py-1.5 rounded-lg bg-white text-indigo-700 text-xs font-medium">Export PDF</button>
+                <button onClick={() => saveReportToFile()} className="px-3 py-1.5 rounded-lg bg-white text-slate-700 text-xs font-medium">Save</button>
+                <button onClick={() => shareToWhatsApp()} className="px-3 py-1.5 rounded-lg bg-white text-green-700 text-xs font-medium">Send WhatsApp</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="report-content">
+          {/* Details */}
+          {reportType === 'Monthly' && (
+            monthlyFiltered.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Subject</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">Avg</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">Assessments</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {monthlyFiltered.map(m => (
+                      <tr key={m.subject} className="border-b last:border-b-0">
+                        <td className="px-4 py-3">{m.subject}</td>
+                        <td className="px-4 py-3 text-center font-semibold">{m.average}%</td>
+                        <td className="px-4 py-3 text-center">{m.assessment_count}</td>
+                        <td className="px-4 py-3">
+                          <div className="text-xs text-slate-600">
+                            {m.details.map((d, i) => (
+                              <div key={i} className="mb-1">
+                                <span className="font-semibold">{d.type}</span>: {d.score}/{d.total} ({d.percentage}%) — <span className="text-slate-500">{d.date}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-12 text-slate-400">
+                <Calendar className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                <p className="font-medium">No CA data available for {selectedMonth}</p>
+              </div>
+            )
+          )}
+          {reportType === 'Midterm' && (
+            midtermData && midtermData.scores.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Subject</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">Score</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">Total</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">%</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">Grade</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Remark</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {midtermData.scores.map(s => (
+                      <tr key={s.subject} className="border-b last:border-b-0">
+                        <td className="px-4 py-3">{s.subject}</td>
+                        <td className="px-4 py-3 text-center">{s.score}</td>
+                        <td className="px-4 py-3 text-center">{s.total}</td>
+                        <td className="px-4 py-3 text-center">{s.percentage}%</td>
+                        <td className="px-4 py-3 text-center">{s.grade}</td>
+                        <td className="px-4 py-3">{s.remark}
+                          {s.examId && reportComments[s.examId] && (
+                            <div className="mt-2 text-sm text-slate-700 bg-slate-50 p-2 rounded">Comment: {reportComments[s.examId]?.teacherComment}</div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-12 text-slate-400">No midterm results available</div>
+            )
+          )}
+          {reportType === 'Final' && (
+            finalData && finalData.results.length > 0 ? (
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200">
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Subject</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">CA Avg</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">Midterm</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">Final</th>
+                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">Total</th>
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Grade</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {finalData.results.map(r => (
+                      <tr key={r.subject} className="border-b last:border-b-0">
+                        <td className="px-4 py-3">{r.subject}</td>
+                        <td className="px-4 py-3 text-center">{r.ca_avg}</td>
+                        <td className="px-4 py-3 text-center">{r.midterm_score}</td>
+                        <td className="px-4 py-3 text-center">{r.final_score}</td>
+                        <td className="px-4 py-3 text-center">{r.total}</td>
+                        <td className="px-4 py-3">{r.grade || ''}
+                          {/* final RPC might not include examId per row; show general teacherComment if present */}
+                          {teacherComment && (
+                            <div className="mt-2 text-sm text-slate-700 bg-slate-50 p-2 rounded">Comment: {teacherComment}</div>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <div className="text-center py-12 text-slate-400">Final report not available yet</div>
+            )
+          )}
+        </div>
+      </div>
+
+      {/* Teacher comment editor for teachers */}
+      {session?.role === 'teacher' && (
+        <div className="p-4 border-t border-slate-100 bg-white">
+          <label className="text-sm font-semibold text-slate-600 mb-2 block">Teacher's Comment</label>
+          <textarea value={teacherComment} onChange={e => setTeacherComment(e.target.value)} className="w-full rounded-lg border p-3 min-h-[100px]" />
+          <div className="mt-2 flex justify-end">
+            <button
+              disabled={commentLoading}
+              onClick={() => saveTeacherComment()}
+              className="px-3 py-2 rounded-lg bg-indigo-600 text-white text-sm"
+            >
+              {commentLoading ? 'Saving...' : 'Save Comment'}
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Parent (and other viewers) see teacher comment */}
+      {session?.role === 'parent' && teacherComment && (
+        <div className="p-4 border-t border-slate-100 bg-white">
+          <label className="text-sm font-semibold text-slate-600 mb-2 block">Teacher's Comment</label>
+          <div className="w-full rounded-lg border p-3 min-h-[80px] text-slate-800 whitespace-pre-line">{teacherComment}</div>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="space-y-6">
       <div>
@@ -158,10 +473,10 @@ export function ExamReport() {
           </select>
         </div>
 
-        <div className="flex-1">
+        <div className="flex-1 min-w-0">
           <label className="text-xs font-semibold text-slate-500 uppercase mb-1.5 block">Select Student</label>
-          <select value={selectedStudent} onChange={e => setSelectedStudent(e.target.value)}
-            className="w-full px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm">
+          <select title={students.find(s => s.id === selectedStudent)?.name || ''} value={selectedStudent} onChange={e => setSelectedStudent(e.target.value)}
+            className="w-full px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm truncate">
             <option value="">-- Select student --</option>
             {students.map(s => (
               <option key={s.id} value={s.id}>{s.name} · {s.className}</option>
@@ -192,135 +507,7 @@ export function ExamReport() {
         )}
       </div>
 
-      {!student ? (
-        <div className="text-center py-12 text-slate-400">{loading ? 'Loading...' : 'No students available'}</div>
-      ) : (
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-          <div className="bg-gradient-to-r from-indigo-600 to-indigo-500 p-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <h2 className="text-lg font-bold text-white">{reportType} Report {reportType === 'Monthly' ? `— ${selectedMonth}` : ''}</h2>
-                <p className="text-sm text-white/80">{student.name} · {student.className}</p>
-              </div>
-              <div className="text-right">
-                <p className="text-3xl font-bold text-white">{reportType === 'Monthly' ? `${overallMonthly}%` : reportType === 'Midterm' ? `${overallMidterm}%` : `${overallFinal}%`}</p>
-                <p className="text-xs text-white/70">{reportType === 'Monthly' ? 'Monthly Avg' : reportType === 'Midterm' ? 'Midterm Avg' : 'Final Avg'}</p>
-              </div>
-            </div>
-          </div>
-
-          {/* Details */}
-          {reportType === 'Monthly' ? (
-            monthlyFiltered.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200">
-                      <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Assessments</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Monthly Average</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Remarks</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {monthlyFiltered.map(row => (
-                      <tr key={row.subject} className="hover:bg-slate-50">
-                        <td className="px-5 py-4 font-semibold text-slate-800 text-sm">{row.subject}</td>
-                        <td className="px-5 py-4 text-center">
-                          <div className="flex flex-wrap gap-1.5 justify-center">
-                            {row.details.map((d, i) => (
-                              <span key={i} className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-xs font-medium">{d.type}: {d.score}/{d.total}</span>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="px-5 py-4 text-center">
-                          <span className={cn('text-lg font-bold', row.average >= 80 ? 'text-emerald-600' : row.average >= 60 ? 'text-amber-600' : 'text-red-600')}>{row.average}%</span>
-                        </td>
-                        <td className="px-5 py-4 text-center text-sm">
-                          {row.average >= 90 ? <span className="text-emerald-600 font-medium">Excellent</span> :
-                           row.average >= 80 ? <span className="text-emerald-600 font-medium">Very Good</span> :
-                           row.average >= 70 ? <span className="text-blue-600 font-medium">Good</span> :
-                           row.average >= 60 ? <span className="text-amber-600 font-medium">Satisfactory</span> :
-                           <span className="text-red-600 font-medium">Needs Improvement</span>}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="text-center py-12 text-slate-400">
-                <Calendar className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p className="font-medium">No CA data available for {selectedMonth}</p>
-              </div>
-            )
-          ) : reportType === 'Midterm' ? (
-            midtermData && midtermData.scores.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200">
-                      <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Score</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Total</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Percentage</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Grade</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject Rank</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Class Avg</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {midtermData.scores.map(score => (
-                      <tr key={score.subject} className="hover:bg-slate-50">
-                        <td className="px-5 py-4 font-semibold text-slate-800 text-sm">{score.subject}</td>
-                        <td className="px-5 py-4 text-center font-bold text-slate-700">{score.score}</td>
-                        <td className="px-5 py-4 text-center text-slate-500">{score.total}</td>
-                        <td className="px-5 py-4 text-center"><span className={cn('font-bold', score.percentage >= 80 ? 'text-emerald-600' : score.percentage >= 60 ? 'text-amber-600' : 'text-red-600')}>{score.percentage}%</span></td>
-                        <td className="px-5 py-4 text-center"><span className={cn('px-3 py-1 rounded-full text-xs font-bold', score.grade === 'A' ? 'bg-emerald-100 text-emerald-700' : score.grade === 'B' ? 'bg-blue-100 text-blue-700' : score.grade === 'C' ? 'bg-amber-100 text-amber-700' : score.grade === 'D' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700')}>{score.grade}</span></td>
-                        <td className="px-5 py-4 text-center text-slate-600">{score.subject_rank}</td>
-                        <td className="px-5 py-4 text-center text-slate-600">{score.class_average}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="text-center py-12 text-slate-400">No midterm results available</div>
-            )
-          ) : (
-            finalData && finalData.results.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200">
-                      <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">CA</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Midterm</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Final</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Total</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Grade</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {finalData.results.map(r => (
-                      <tr key={r.subject} className="hover:bg-slate-50">
-                        <td className="px-5 py-4 font-semibold text-slate-800 text-sm">{r.subject}</td>
-                        <td className="px-5 py-4 text-center text-slate-600">{r.ca_avg}%</td>
-                        <td className="px-5 py-4 text-center text-slate-600">{r.midterm_score}%</td>
-                        <td className="px-5 py-4 text-center text-slate-600">{r.final_score}%</td>
-                        <td className="px-5 py-4 text-center"><span className={cn('text-lg font-bold', r.total >= 80 ? 'text-emerald-600' : r.total >= 60 ? 'text-amber-600' : 'text-red-600')}>{r.total}%</span></td>
-                        <td className="px-5 py-4 text-center"><span className={cn('px-3 py-1 rounded-full text-xs font-bold', getGrade(r.total) === 'A' ? 'bg-emerald-100 text-emerald-700' : getGrade(r.total) === 'B' ? 'bg-blue-100 text-blue-700' : getGrade(r.total) === 'C' ? 'bg-amber-100 text-amber-700' : getGrade(r.total) === 'D' ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-700')}>{getGrade(r.total)}</span></td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="text-center py-12 text-slate-400">Final report not available yet</div>
-            )
-          )}
-        </div>
-      )}
+      {reportSection}
     </div>
   );
 }

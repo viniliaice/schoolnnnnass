@@ -1,23 +1,41 @@
 import { useState, useEffect } from 'react';
-import { getExams, updateExamStatus, getStudentById, getUserById, getStudents, getUsersByRole } from '../../lib/database';
+import { useRole } from '../../context/RoleContext';
+import { getExams, updateExamStatus, getStudentById, getUserById, getStudents, getStudentsByClasses, getUsersByRole, approveAllPendingExams } from '../../lib/database';
 import { Exam, ExamStatus, Student, User } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { CheckCircle, XCircle, Clock, FileText } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 export function ExamVerification() {
+  const { session } = useRole();
   const { addToast } = useToast();
   const [exams, setExams] = useState<Exam[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<User[]>([]);
   const [statusFilter, setStatusFilter] = useState<ExamStatus | 'all'>('pending');
+  const [search, setSearch] = useState('');
 
   const refresh = async () => {
-    const [examsData, studentsData, teachersData] = await Promise.all([
+    const [allExams, studentsData, teachersData] = await Promise.all([
       getExams(),
       getStudents(),
       getUsersByRole('teacher')
     ]);
+
+    let examsData = allExams;
+
+    if (session?.role === 'supervisor') {
+      const supervisor = await getUserById(session.userId);
+      const assignedClasses = supervisor?.assignedClasses || [];
+      if (assignedClasses.length > 0) {
+        const supervisedStudents = await getStudentsByClasses(assignedClasses);
+        const supervisedIds = new Set(supervisedStudents.map(s => s.id));
+        examsData = allExams.filter(exam => supervisedIds.has(exam.studentId));
+      } else {
+        examsData = [];
+      }
+    }
+
     setExams(examsData);
     setStudents(studentsData);
     setTeachers(teachersData);
@@ -30,6 +48,17 @@ export function ExamVerification() {
 
   const filtered = exams
     .filter(e => statusFilter === 'all' || e.status === statusFilter)
+    .filter(e => {
+      if (!search.trim()) return true;
+      const s = search.toLowerCase();
+      const student = getStudent(e.studentId);
+      const teacher = getTeacher(e.teacherId);
+      return (
+        (student?.name || '').toLowerCase().includes(s) ||
+        (e.subject || '').toLowerCase().includes(s) ||
+        (teacher?.name || '').toLowerCase().includes(s)
+      );
+    })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   const handleAction = async (id: string, status: ExamStatus) => {
@@ -54,6 +83,26 @@ export function ExamVerification() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Exam Verification Center</h1>
         <p className="text-slate-500 mt-1">Review and approve/reject exam submissions</p>
+      </div>
+
+      <div className="flex gap-2 flex-wrap items-center">
+        <div className="relative w-64">
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search student, subject, teacher..."
+            className="w-full pl-3 pr-3 py-2 rounded-xl border border-slate-200 text-sm outline-none" />
+        </div>
+        <button onClick={async () => {
+          try {
+            const res = await approveAllPendingExams();
+            addToast({ type: 'success', title: `Approved ${res?.length || 0} pending exams` });
+            await refresh();
+          } catch (err) {
+            addToast({ type: 'error', title: 'Failed to approve all pending exams' });
+          }
+        }}
+          className="ml-2 px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700">
+          Approve All Pending
+        </button>
+
       </div>
 
       <div className="flex gap-2 flex-wrap">

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Listbox } from '@headlessui/react';
 import { getUsersPaginated, createUser, deleteUser, updateUser, getStudentsByParent, getStudents } from '../../lib/database';
-import { User, Role, CLASSES, Student } from '../../types';
+import { User, Role, CLASSES, Student, SUBJECTS } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { Dialog } from '../../components/ui/Dialog';
 import { DataTable } from '../../components/ui/DataTable';
@@ -38,6 +38,7 @@ export function ManageUsers() {
   const [formUdow, setFormUdow] = useState('');
   const [formPayment, setFormPayment] = useState('');
   const [formClasses, setFormClasses] = useState<string[]>([]);
+  const [formSubjects, setFormSubjects] = useState<string[]>([]);
   const [formPassword, setFormPassword] = useState('');
 
   const refresh = async (page: number = currentPage, searchTerm?: string) => {
@@ -82,7 +83,7 @@ export function ManageUsers() {
         return (
           <div className="flex items-center gap-3">
             <div className={cn("w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm text-white",
-              user.role === 'admin' ? 'bg-indigo-500' : user.role === 'teacher' ? 'bg-teal-500' : 'bg-violet-500'
+              user.role === 'admin' ? 'bg-indigo-500' : user.role === 'teacher' ? 'bg-teal-500' : user.role === 'supervisor' ? 'bg-amber-500' : 'bg-violet-500'
             )}>
               {user.name.split(' ').map(n => n[0]).join('').substring(0, 2)}
             </div>
@@ -101,9 +102,10 @@ export function ManageUsers() {
       cell: ({ row }) => {
         const role = row.getValue('role') as Role;
         return (
-          <span className={cn("inline-flex px-2 py-1 text-xs font-semibold rounded-full",
+            <span className={cn("inline-flex px-2 py-1 text-xs font-semibold rounded-full",
             role === 'admin' ? 'bg-indigo-100 text-indigo-800' :
             role === 'teacher' ? 'bg-teal-100 text-teal-800' :
+            role === 'supervisor' ? 'bg-amber-100 text-amber-800' :
             'bg-violet-100 text-violet-800'
           )}>
             {role}
@@ -125,10 +127,17 @@ export function ManageUsers() {
                 {children.length} children
               </div>
             )}
-            {user.role === 'teacher' && user.assignedClasses && (
-              <div className="flex items-center gap-1">
-                <GraduationCap className="w-4 h-4" />
-                {user.assignedClasses.length} classes
+            {(user.role === 'teacher' || user.role === 'supervisor') && (
+              <div>
+                <div className="flex items-center gap-1 mb-1">
+                  <GraduationCap className="w-4 h-4" />
+                  {user.assignedClasses?.length || 0} classes
+                </div>
+                {user.role === 'teacher' && (
+                  <div className="text-xs text-slate-500">
+                    Subjects: {user.assignedSubjects?.join(', ') || 'None'}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -169,6 +178,7 @@ export function ManageUsers() {
   const resetForm = () => {
     setFormName(''); setFormEmail(''); setFormPhone1(''); setFormPhone2('');
     setFormXafada(''); setFormUdow(''); setFormPayment(''); setFormClasses([]); setFormPassword('');
+    setFormSubjects([]);
   };
 
   const handleCreate = async () => {
@@ -184,8 +194,11 @@ export function ManageUsers() {
       data.xafada = formXafada; data.udow = formUdow;
       data.paymentnumber = formPayment;
     }
-    if (createRole === 'teacher') {
+    if (createRole === 'teacher' || createRole === 'supervisor') {
       data.assignedClasses = formClasses;
+      if (createRole === 'teacher') {
+        data.assignedSubjects = formSubjects;
+      }
     }
     try {
       await createUser(data);
@@ -205,8 +218,11 @@ export function ManageUsers() {
       data.xafada = formXafada; data.udow = formUdow;
       data.paymentnumber = formPayment;
     }
-    if (showEdit.role === 'teacher') {
+    if (showEdit.role === 'teacher' || showEdit.role === 'supervisor') {
       data.assignedClasses = formClasses;
+      if (showEdit.role === 'teacher') {
+        data.assignedSubjects = formSubjects;
+      }
     }
     try {
       await updateUser(showEdit.id, data);
@@ -237,6 +253,7 @@ export function ManageUsers() {
     setFormXafada(user.xafada || ''); setFormUdow(user.udow || '');
     setFormPayment(user.paymentnumber || '');
     setFormClasses(user.assignedClasses || []);
+    setFormSubjects(user.assignedSubjects || []);
     setFormPassword('');
     setShowEdit(user);
   };
@@ -250,6 +267,7 @@ export function ManageUsers() {
     { label: 'Teachers', value: 'teacher', color: 'bg-teal-100 text-teal-700' },
     { label: 'Parents', value: 'parent', color: 'bg-violet-100 text-violet-700' },
     { label: 'Admins', value: 'admin', color: 'bg-indigo-100 text-indigo-700' },
+    { label: 'Supervisors', value: 'supervisor', color: 'bg-amber-100 text-amber-700' },
   ];
 
   return (
@@ -317,13 +335,13 @@ export function ManageUsers() {
       )}
 
       {/* Create User Dialog */}
-      <Dialog open={showCreate} onClose={() => setShowCreate(false)} title="Add New User" description="Create a teacher, parent, or admin account">
-        <div className="space-y-4">
+      <Dialog open={showCreate} onClose={() => setShowCreate(false)} title="Add New User" description="Create a teacher, parent, supervisor, or admin account">
+          <div className="space-y-4">
           <div className="flex gap-2">
-            {(['teacher', 'parent', 'admin'] as Role[]).map(r => (
+            {(['teacher', 'parent', 'admin', 'supervisor'] as Role[]).map(r => (
               <button key={r} onClick={() => setCreateRole(r)}
                 className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
-                  createRole === r ? (r === 'teacher' ? 'bg-teal-100 text-teal-700' : r === 'parent' ? 'bg-violet-100 text-violet-700' : 'bg-indigo-100 text-indigo-700') : 'bg-slate-100 text-slate-500'
+                  createRole === r ? (r === 'teacher' ? 'bg-teal-100 text-teal-700' : r === 'parent' ? 'bg-violet-100 text-violet-700' : r === 'supervisor' ? 'bg-amber-100 text-amber-700' : 'bg-indigo-100 text-indigo-700') : 'bg-slate-100 text-slate-500'
                 )}
               >
                 {r.charAt(0).toUpperCase() + r.slice(1)}
@@ -356,7 +374,7 @@ export function ManageUsers() {
             </>
           )}
 
-          {createRole === 'teacher' && (
+          {(createRole === 'teacher' || createRole === 'supervisor') && (
             <div>
               <label className="text-sm font-semibold text-slate-700 mb-2 block">Assigned Classes</label>
               <Listbox value={formClasses} onChange={setFormClasses} multiple>
@@ -381,6 +399,33 @@ export function ManageUsers() {
                   </Listbox.Options>
                 </div>
               </Listbox>
+              {createRole === 'teacher' && (
+                <div className="mt-3">
+                  <label className="text-sm font-semibold text-slate-700 mb-2 block">Assigned Subjects</label>
+                  <Listbox value={formSubjects} onChange={setFormSubjects} multiple>
+                    <div className="relative">
+                      <Listbox.Button className="w-full text-left px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm flex items-center justify-between">
+                        <span className="truncate">{formSubjects.length === 0 ? 'No subjects selected' : formSubjects.join(', ')}</span>
+                        <svg className="w-4 h-4 text-slate-400" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                          <path d="M6 8l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </Listbox.Button>
+                      <Listbox.Options className="absolute z-20 mt-2 w-full max-h-56 overflow-auto bg-white border border-slate-200 rounded-xl p-2 shadow">
+                        {SUBJECTS.map(sub => (
+                          <Listbox.Option key={sub} value={sub} className={({ active }) => `px-3 py-2 rounded-lg text-sm cursor-pointer ${active ? 'bg-slate-50' : ''}`}>
+                            {({ selected }) => (
+                              <div className="flex items-center gap-3">
+                                <input type="checkbox" readOnly checked={formSubjects.includes(sub)} className="w-4 h-4" />
+                                <span className={cn(selected ? 'font-semibold' : 'text-slate-700')}>{sub}</span>
+                              </div>
+                            )}
+                          </Listbox.Option>
+                        ))}
+                      </Listbox.Options>
+                    </div>
+                  </Listbox>
+                </div>
+              )}
             </div>
           )}
 
@@ -445,6 +490,31 @@ export function ManageUsers() {
                   </Listbox.Options>
                 </div>
               </Listbox>
+                <div className="mt-3">
+                  <label className="text-sm font-semibold text-slate-700 mb-2 block">Assigned Subjects</label>
+                  <Listbox value={formSubjects} onChange={setFormSubjects} multiple>
+                    <div className="relative">
+                      <Listbox.Button className="w-full text-left px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm flex items-center justify-between">
+                        <span className="truncate">{formSubjects.length === 0 ? 'No subjects selected' : formSubjects.join(', ')}</span>
+                        <svg className="w-4 h-4 text-slate-400" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden>
+                          <path d="M6 8l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </Listbox.Button>
+                      <Listbox.Options className="absolute z-20 mt-2 w-full max-h-56 overflow-auto bg-white border border-slate-200 rounded-xl p-2 shadow">
+                        {SUBJECTS.map(sub => (
+                          <Listbox.Option key={sub} value={sub} className={({ active }) => `px-3 py-2 rounded-lg text-sm cursor-pointer ${active ? 'bg-slate-50' : ''}`}>
+                            {({ selected }) => (
+                              <div className="flex items-center gap-3">
+                                <input type="checkbox" readOnly checked={formSubjects.includes(sub)} className="w-4 h-4" />
+                                <span className={cn(selected ? 'font-semibold' : 'text-slate-700')}>{sub}</span>
+                              </div>
+                            )}
+                          </Listbox.Option>
+                        ))}
+                      </Listbox.Options>
+                    </div>
+                  </Listbox>
+                </div>
             </div>
           )}
 

@@ -20,6 +20,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Manage Users', icon: Users, path: '/admin/users' },
     { label: 'Manage Students', icon: GraduationCap, path: '/admin/students' },
     { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
+    { label: 'Manage Class Subjects', icon: School, path: '/admin/class-subjects' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
     { label: 'Exam Verification', icon: ClipboardCheck, path: '/admin/exams' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/admin/exam-reports' },
@@ -39,18 +40,25 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Midterm Reports', icon: FileBarChart, path: '/parent/midterm' },
     { label: 'Final Reports', icon: Award, path: '/parent/final' },
   ],
+  supervisor: [
+    { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
+    { label: 'Supervisor Panel', icon: Users, path: '/supervisor' },
+    { label: 'Exam Reports', icon: FileBarChart, path: '/supervisor/exam-reports' },
+  ],
 };
 
 const roleColors: Record<Role, string> = {
   admin: 'from-indigo-600 to-indigo-800',
   teacher: 'from-teal-600 to-teal-800',
   parent: 'from-violet-600 to-violet-800',
+  supervisor: 'from-amber-600 to-amber-800',
 };
 
 const roleBadgeColors: Record<Role, string> = {
   admin: 'bg-indigo-500/20 text-indigo-100',
   teacher: 'bg-teal-500/20 text-teal-100',
   parent: 'bg-violet-500/20 text-violet-100',
+  supervisor: 'bg-amber-500/20 text-amber-100',
 };
 
 interface SidebarProps {
@@ -68,7 +76,7 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
   const gradientClass = roleColors[session.role];
 
   const sidebarContent = (
-    <div className={cn("flex flex-col h-full bg-gradient-to-b", gradientClass)}>
+    <div className={cn("flex flex-col h-full bg-linear-to-b", gradientClass)}>
       {/* Logo */}
       <div className="p-5 pb-4">
         <div className="flex items-center gap-3">
@@ -114,7 +122,7 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
                   : "text-white/70 hover:text-white hover:bg-white/10"
               )}
             >
-              <item.icon className="w-5 h-5 flex-shrink-0" />
+              <item.icon className="w-5 h-5 shrink-0" />
               <span className="flex-1 text-left">{item.label}</span>
               {isActive && <ChevronRight className="w-4 h-4 opacity-60" />}
             </button>
@@ -162,7 +170,7 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
       )}
 
       {/* Desktop sidebar */}
-      <div className="hidden lg:block w-64 flex-shrink-0 h-screen sticky top-0">
+      <div className="hidden lg:block w-64 shrink-0 h-screen sticky top-0">
         {sidebarContent}
       </div>
     </>
