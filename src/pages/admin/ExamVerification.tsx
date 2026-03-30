@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getExams, updateExamStatus, getStudentById, getUserById, getStudents, getStudentsByClasses, getUsersByRole, approveAllPendingExams } from '../../lib/database';
+import { getExams, updateExamStatus, getStudentById, getUserById, getStudents, getStudentsByClasses, getUsersByRole, approveAllPendingExams, approvePendingExamsForClasses } from '../../lib/database';
 import { Exam, ExamStatus, Student, User } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { CheckCircle, XCircle, Clock, FileText } from 'lucide-react';
@@ -92,7 +92,14 @@ export function ExamVerification() {
         </div>
         <button onClick={async () => {
           try {
-            const res = await approveAllPendingExams();
+            let res = null;
+            if (session?.role === 'supervisor') {
+              const supervisor = await getUserById(session.userId);
+              const assigned = supervisor?.assignedClasses || [];
+              res = await approvePendingExamsForClasses(assigned);
+            } else {
+              res = await approveAllPendingExams();
+            }
             addToast({ type: 'success', title: `Approved ${res?.length || 0} pending exams` });
             await refresh();
           } catch (err) {

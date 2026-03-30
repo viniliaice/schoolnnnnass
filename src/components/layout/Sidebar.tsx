@@ -42,8 +42,9 @@ const navItems: Record<Role, NavItem[]> = {
   ],
   supervisor: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
-    { label: 'Supervisor Panel', icon: Users, path: '/supervisor' },
-    { label: 'Exam Reports', icon: FileBarChart, path: '/supervisor/exam-reports' },
+    { label: 'My Classes', icon: GraduationCap, path: '/supervisor/students' },
+    { label: 'Exam Verifications', icon: ClipboardCheck, path: '/supervisor/verifications' },
+    { label: 'Exam Reports', icon: FileBarChart, path: '/supervisor/reports' },
   ],
 };
 

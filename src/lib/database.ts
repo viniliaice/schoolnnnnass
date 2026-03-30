@@ -611,6 +611,24 @@ export async function approveAllPendingExams(): Promise<Exam[] | null> {
   return data || [];
 }
 
+export async function approvePendingExamsForClasses(classNames: string[]): Promise<Exam[] | null> {
+  if (!Array.isArray(classNames) || classNames.length === 0) return [];
+
+  const students = await getStudentsByClasses(classNames);
+  const studentIds = students.map(s => s.id);
+  if (studentIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('exams')
+    .update({ status: 'approved' })
+    .in('studentId', studentIds)
+    .eq('status', 'pending')
+    .select();
+
+  if (error) return null;
+  return data || [];
+}
+
 // Allow admin to edit an exam record
 export async function updateExam(id: string, data: Partial<Exam>): Promise<Exam | null> {
   const { data: updated, error } = await supabase.from('exams').update(data).eq('id', id).select().single();

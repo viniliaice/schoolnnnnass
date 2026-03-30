@@ -102,6 +102,7 @@ function AppContent() {
           if (session.role === 'supervisor') {
             switch (currentPath) {
               case '/dashboard': return <SupervisorDashboard />;
+              case '/supervisor/students': return <TeacherStudents />;
               case '/supervisor/verifications': return <ExamVerification />;
               case '/supervisor/reports': return <ExamReport />;
               default: return <SupervisorDashboard />;

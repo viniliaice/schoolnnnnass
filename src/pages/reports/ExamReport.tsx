@@ -18,9 +18,67 @@ import {
 } from '../../lib/database';
 import type { ReportComment } from '../../types';
 import { Student, MONTHS, MonthlyScore, getGrade } from '../../types';
+import { PDFDownloadLink, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 import type { MidtermReport, FinalReport } from '../../types';
 import { Calendar, FileBarChart, FileText, Award } from 'lucide-react';
 import { cn } from '../../utils/cn';
+
+const pdfStyles = StyleSheet.create({
+  page: { padding: 24, fontFamily: 'Helvetica', fontSize: 11, color: '#0f172a', backgroundColor: '#f8fafc' },
+  header: { marginBottom: 12, paddingBottom: 4, borderBottomWidth: 1, borderBottomColor: '#e2e8f0' },
+  title: { fontSize: 18, fontWeight: 'bold', color: '#1e40af' },
+  subtitle: { fontSize: 12, marginTop: 4, color: '#475569' },
+  section: { marginTop: 12 },
+  row: { display: 'flex', flexDirection: 'row', marginTop: 4 },
+  cellLabel: { width: '30%', fontWeight: 'bold' },
+  cellValue: { width: '70%' },
+});
+
+const ReportPdfDocument = ({
+  student,
+  reportType,
+  parentName,
+  parentPhone,
+  summary,
+  details,
+}: {
+  student: Student | null;
+  reportType: string;
+  parentName?: string;
+  parentPhone?: string;
+  summary: string;
+  details: { label: string; value: string }[];
+}) => (
+  <Document>
+    <Page size="A4" style={pdfStyles.page}>
+      <View style={pdfStyles.header}>
+        <Text style={pdfStyles.title}>{reportType} Student Report</Text>
+        <Text style={pdfStyles.subtitle}>{student?.name ?? 'Student'} • {student?.className ?? ''}</Text>
+      </View>
+
+      <View style={pdfStyles.section}>
+        <Text style={{ fontSize: 12, marginBottom: 8 }}>Parent contact</Text>
+        <View style={pdfStyles.row}><Text style={pdfStyles.cellLabel}>Name:</Text><Text style={pdfStyles.cellValue}>{parentName || 'N/A'}</Text></View>
+        <View style={pdfStyles.row}><Text style={pdfStyles.cellLabel}>Phone:</Text><Text style={pdfStyles.cellValue}>{parentPhone || 'N/A'}</Text></View>
+      </View>
+
+      <View style={pdfStyles.section}>
+        <Text style={{ fontSize: 12, marginBottom: 8 }}>Summary</Text>
+        <Text>{summary}</Text>
+      </View>
+
+      <View style={pdfStyles.section}>
+        <Text style={{ fontSize: 12, marginBottom: 8 }}>Details</Text>
+        {details.map((item, idx) => (
+          <View key={idx} style={pdfStyles.row}>
+            <Text style={pdfStyles.cellLabel}>{item.label}:</Text>
+            <Text style={pdfStyles.cellValue}>{item.value}</Text>
+          </View>
+        ))}
+      </View>
+    </Page>
+  </Document>
+);
 
 export function ExamReport() {
   const { session } = useRole();
@@ -34,6 +92,10 @@ export function ExamReport() {
 
   const [reportType, setReportType] = useState<'Monthly' | 'Midterm' | 'Final'>('Monthly');
   const [selectedMonth, setSelectedMonth] = useState(MONTHS[new Date().getMonth()]);
+
+  const [parentPhones, setParentPhones] = useState<string[]>([]);
+  const [selectedParentPhone, setSelectedParentPhone] = useState<string>('');
+  const [parentName, setParentName] = useState<string>('');
 
   const [monthlyData, setMonthlyData] = useState<MonthlyScore[]>([]);
   const [midtermData, setMidtermData] = useState<MidtermReport | null>(null);
@@ -170,6 +232,29 @@ export function ExamReport() {
 
   const student = students.find(s => s.id === selectedStudent);
 
+  useEffect(() => {
+    const loadParent = async () => {
+      if (!student?.parentId) {
+        setParentPhones([]);
+        setSelectedParentPhone('');
+        setParentName('');
+        return;
+      }
+      const parent = await getUserById(student.parentId);
+      if (!parent) {
+        setParentPhones([]);
+        setSelectedParentPhone('');
+        setParentName('');
+        return;
+      }
+      setParentName(parent.name || '');
+      const phones = [parent.phone1, parent.phone2].filter(phone => !!phone && phone.trim());
+      setParentPhones(phones as string[]);
+      setSelectedParentPhone(phones[0] || '');
+    };
+    loadParent();
+  }, [student]);
+
   // Monthly UI
   const monthlyFiltered = monthlyData.filter(d => d.month === selectedMonth);
   const overallMonthly = monthlyFiltered.length
@@ -197,7 +282,19 @@ export function ExamReport() {
       return;
     }
     const title = `Report - ${student?.name || 'student'}`;
-    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>body{font-family:Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; padding:20px; color:#0f172a} table{border-collapse:collapse; width:100%} th,td{padding:8px; border:1px solid #e6e6e6; text-align:left}</style></head><body>${el.innerHTML}</body></html>`);
+    const extraMeta = `<div><strong>Parent:</strong> ${parentName || 'N/A'}<br/><strong>Selected phone:</strong> ${selectedParentPhone || 'N/A'}</div>`;
+    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${title}</title><style>
+      body{font-family:Inter, ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial; padding:20px; background:#f8fafc; color:#0f172a;}
+      .report-container{max-width:960px;margin:auto;background:#ffffff;padding:24px;border:1px solid #e2e8f0;border-radius:14px;box-shadow:0 4px 20px rgba(15,23,42,.08);}
+      .header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;}
+      .header h1{font-size:28px;margin:0;color:#1e3a8a;}
+      .stats{font-size:14px;color:#475569;margin-top:4px;}
+      .meta{margin-bottom:16px;color:#334155;}
+      table{width:100%;border-collapse:collapse;background:#ffffff;}
+      th,td{padding:10px;border:1px solid #e2e8f0;text-align:left;}
+      th{background:#e0e7ff;color:#1e3a8a;font-weight:700;}
+      .footer{margin-top:20px;font-size:12px;color:#64748b;}
+    </style></head><body><div class="report-container"><div class="header"><h1>${title}</h1><div class="stats">${reportType} | ${selectedMonth}</div></div><div class="meta">${extraMeta}</div>${el.innerHTML}<div class="footer">Generated through Scholo report</div></div></body></html>`);
     printWindow.document.close();
     printWindow.focus();
     // Give a small delay for images/styles to load
@@ -245,13 +342,13 @@ export function ExamReport() {
         addToast({ type: 'error', title: 'Share failed', description: 'Parent not found' });
         return;
       }
-      const phone = parent.phone1 || parent.phone2;
+      const phone = selectedParentPhone || parent.phone1 || parent.phone2;
       if (!phone) {
-        addToast({ type: 'error', title: 'Share failed', description: 'Parent has no phone number' });
+        addToast({ type: 'error', title: 'Share failed', description: 'Parent has no phone number selected' });
         return;
       }
       const overall = reportType === 'Monthly' ? `${overallMonthly}%` : reportType === 'Midterm' ? `${overallMidterm}%` : `${overallFinal}%`;
-      const text = `Exam report for ${student.name} (${student.className}) - ${reportType} overall: ${overall}. View details on the school portal.`;
+      const text = `Exam report for ${student.name} (${student.className}) - ${reportType} overall: ${overall}. parent: ${parentName || ''}, phone: ${phone}.`;
       const wa = `https://wa.me/${phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(text)}`;
       window.open(wa, '_blank');
     } catch (err) {
@@ -300,13 +397,57 @@ export function ExamReport() {
               <h2 className="text-lg font-bold text-white">{reportType} Report {reportType === 'Monthly' ? `— ${selectedMonth}` : ''}</h2>
               <p className="text-sm text-white/80">{student?.name} · {student?.className}</p>
             </div>
-            <div className="text-right flex items-center gap-3">
-              <p className="text-3xl font-bold text-white">{reportType === 'Monthly' ? `${overallMonthly}%` : reportType === 'Midterm' ? `${overallMidterm}%` : `${overallFinal}%`}</p>
-              <p className="text-xs text-white/70">{reportType === 'Monthly' ? 'Monthly Avg' : reportType === 'Midterm' ? 'Midterm Avg' : 'Final Avg'}</p>
-              <div className="ml-4 flex gap-2">
+            <div className="text-right flex flex-col sm:flex-row sm:items-center gap-3">
+              <div>
+                <p className="text-3xl font-bold text-white">{reportType === 'Monthly' ? `${overallMonthly}%` : reportType === 'Midterm' ? `${overallMidterm}%` : `${overallFinal}%`}</p>
+                <p className="text-xs text-white/70">{reportType === 'Monthly' ? 'Monthly Avg' : reportType === 'Midterm' ? 'Midterm Avg' : 'Final Avg'}</p>
+              </div>
+              <div className="flex gap-2 flex-wrap items-center">
                 <button onClick={() => exportReportAsPdf()} className="px-3 py-1.5 rounded-lg bg-white text-indigo-700 text-xs font-medium">Export PDF</button>
                 <button onClick={() => saveReportToFile()} className="px-3 py-1.5 rounded-lg bg-white text-slate-700 text-xs font-medium">Save</button>
+                <PDFDownloadLink
+                  document={<ReportPdfDocument
+                    student={student}
+                    reportType={reportType}
+                    parentName={parentName}
+                    parentPhone={selectedParentPhone}
+                    summary={`${reportType} report for ${student?.name || ''}`}
+                    details={
+                      reportType === 'Monthly' ? monthlyFiltered.map(m => ({label: m.subject, value: `${m.average}%`})) :
+                      reportType === 'Midterm' ? midtermData?.scores.map(s => ({label: s.subject, value: `${s.percentage}%`})) || [] :
+                      finalData?.results.map(r => ({label: r.subject, value: `${r.total}`})) || []
+                    }
+                  />}
+                  fileName={`${student?.name?.replace(/\s+/g,'_') || 'report'}_${reportType}.pdf`}
+                >
+                  {({ loading }) => (
+                    <button
+                      className="px-3 py-1.5 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-medium"
+                      disabled={loading}
+                    >
+                      {loading ? 'Generating PDF...' : 'Download PDF'}
+                    </button>
+                  )}
+                </PDFDownloadLink>
                 <button onClick={() => shareToWhatsApp()} className="px-3 py-1.5 rounded-lg bg-white text-green-700 text-xs font-medium">Send WhatsApp</button>
+              </div>
+
+              <div className="flex items-center gap-2 mt-3 text-sm text-white">
+                <label htmlFor="parent-phone" className="font-medium">Parent number to send:</label>
+                <select
+                  id="parent-phone"
+                  value={selectedParentPhone}
+                  onChange={e => setSelectedParentPhone(e.target.value)}
+                  className="rounded-lg px-2 py-1 text-slate-800 text-xs"
+                >
+                  {parentPhones.length === 0 ? (
+                    <option value="">No parent phones</option>
+                  ) : (
+                    parentPhones.map((phone, idx) => (
+                      <option key={`${phone}-${idx}`} value={phone}>{phone}</option>
+                    ))
+                  )}
+                </select>
               </div>
             </div>
           </div>
