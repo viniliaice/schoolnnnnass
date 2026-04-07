@@ -89,8 +89,10 @@ export function UploadResults() {
   const loadStudents = useCallback(async () => {
     if (!selectedClass) return;
     const students = await getStudentsByClasses([selectedClass]);
+    // Ensure students are in alphabetical order by name for easier entry
+    const sorted = (students || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
     setStudentScores(
-      students.map(s => ({
+      sorted.map(s => ({
         studentId: s.id,
         studentName: s.name,
         className: s.className,

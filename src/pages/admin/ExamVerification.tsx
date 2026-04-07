@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getExams, updateExamStatus, getStudentById, getUserById, getStudents, getStudentsByClasses, getUsersByRole, approveAllPendingExams, approvePendingExamsForClasses } from '../../lib/database';
-import { Exam, ExamStatus, Student, User } from '../../types';
+import { getExams, updateExamStatus, updateExam, getStudentById, getUserById, getStudents, getStudentsByClasses, getUsersByRole, approveAllPendingExams, approvePendingExamsForClasses } from '../../lib/database';
+import { Exam, ExamStatus, Student, User, EXAM_TYPES, MONTHS } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { CheckCircle, XCircle, Clock, FileText } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -14,6 +14,12 @@ export function ExamVerification() {
   const [teachers, setTeachers] = useState<User[]>([]);
   const [statusFilter, setStatusFilter] = useState<ExamStatus | 'all'>('pending');
   const [search, setSearch] = useState('');
+  // Editing state for admins
+  const [editingExamId, setEditingExamId] = useState<string | null>(null);
+  const [editScore, setEditScore] = useState<number | ''>('');
+  const [editMonth, setEditMonth] = useState<string>('');
+  const [editType, setEditType] = useState<string>('');
+  const [editSubmitting, setEditSubmitting] = useState(false);
 
   const refresh = async () => {
     const [allExams, studentsData, teachersData] = await Promise.all([
@@ -69,6 +75,44 @@ export function ExamVerification() {
     } catch (error) {
       addToast({ type: 'error', title: 'Failed to update exam status' });
     }
+  };
+
+  const startEdit = (exam: Exam) => {
+    setEditingExamId(exam.id);
+    setEditScore(typeof exam.score === 'number' ? exam.score : Number(exam.score) || '');
+    setEditMonth(exam.month || '');
+    setEditType(exam.examType || '');
+  };
+
+  const cancelEdit = () => {
+    setEditingExamId(null);
+    setEditScore('');
+    setEditMonth('');
+    setEditType('');
+  };
+
+  const saveEdit = async (examId: string) => {
+    if (editScore === '' || isNaN(Number(editScore))) {
+      addToast({ type: 'error', title: 'Enter a valid score' });
+      return;
+    }
+    setEditSubmitting(true);
+    try {
+      const payload: Partial<Exam> = {
+        score: Number(editScore),
+        month: editMonth,
+        examType: editType as any,
+      };
+      const updated = await updateExam(examId, payload);
+      if (!updated) throw new Error('Update failed');
+      addToast({ type: 'success', title: 'Exam updated' });
+      await refresh();
+      cancelEdit();
+    } catch (err) {
+      console.error(err);
+      addToast({ type: 'error', title: 'Failed to update exam' });
+    }
+    setEditSubmitting(false);
   };
 
   const tabs: { label: string; value: ExamStatus | 'all'; count: number }[] = [
@@ -154,10 +198,33 @@ export function ExamVerification() {
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-600">{exam.subject}</td>
                     <td className="px-5 py-3">
-                      <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-xs font-medium">{exam.examType}</span>
+                      {editingExamId === exam.id ? (
+                        <select value={editType} onChange={e => setEditType(e.target.value)}
+                          className="px-2 py-1 rounded-md text-sm border border-slate-200 bg-white">
+                          {EXAM_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+                        </select>
+                      ) : (
+                        <span className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-xs font-medium">{exam.examType}</span>
+                      )}
                     </td>
-                    <td className="px-5 py-3 text-sm text-slate-600">{exam.month}</td>
-                    <td className="px-5 py-3 text-center font-bold text-sm text-slate-800">{exam.score}/{exam.total}</td>
+                    <td className="px-5 py-3 text-sm text-slate-600">
+                      {editingExamId === exam.id ? (
+                        <select value={editMonth} onChange={e => setEditMonth(e.target.value)}
+                          className="px-2 py-1 rounded-md text-sm border border-slate-200 bg-white">
+                          {MONTHS.map(m => <option key={m} value={m}>{m}</option>)}
+                        </select>
+                      ) : (
+                        exam.month
+                      )}
+                    </td>
+                    <td className="px-5 py-3 text-center font-bold text-sm text-slate-800">
+                      {editingExamId === exam.id ? (
+                        <input type="number" value={editScore as any} onChange={e => setEditScore(e.target.value === '' ? '' : Number(e.target.value))}
+                          className="w-20 text-center px-2 py-1 rounded-md border border-slate-200" />
+                      ) : (
+                        `${exam.score}/${exam.total}`
+                      )}
+                    </td>
                     <td className="px-5 py-3 text-sm text-slate-600">{teacher?.name || '—'}</td>
                     <td className="px-5 py-3 text-center">
                       <span className={cn("inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold",
@@ -170,19 +237,38 @@ export function ExamVerification() {
                       </span>
                     </td>
                     <td className="px-5 py-3 text-center">
-                      {exam.status === 'pending' ? (
-                        <div className="flex justify-center gap-1.5">
-                          <button onClick={() => handleAction(exam.id, 'approved')}
-                            className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100 transition-colors" title="Approve">
-                            <CheckCircle className="w-4 h-4" />
+                      {editingExamId === exam.id ? (
+                        <div className="flex items-center justify-center gap-2">
+                          <button onClick={() => saveEdit(exam.id)} disabled={editSubmitting}
+                            className="px-3 py-1 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700">
+                            Save
                           </button>
-                          <button onClick={() => handleAction(exam.id, 'rejected')}
-                            className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors" title="Reject">
-                            <XCircle className="w-4 h-4" />
+                          <button onClick={cancelEdit} disabled={editSubmitting}
+                            className="px-3 py-1 rounded-xl bg-slate-100 text-slate-700 text-sm font-medium hover:bg-slate-200">
+                            Cancel
                           </button>
                         </div>
                       ) : (
-                        <span className="text-xs text-slate-400">—</span>
+                        <div className="flex items-center justify-center gap-1.5">
+                          {exam.status === 'pending' && (
+                            <>
+                              <button onClick={() => handleAction(exam.id, 'approved')}
+                                className="p-1.5 bg-emerald-50 text-emerald-600 rounded-lg hover:bg-emerald-100 transition-colors" title="Approve">
+                                <CheckCircle className="w-4 h-4" />
+                              </button>
+                              <button onClick={() => handleAction(exam.id, 'rejected')}
+                                className="p-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 transition-colors" title="Reject">
+                                <XCircle className="w-4 h-4" />
+                              </button>
+                            </>
+                          )}
+                          {session?.role === 'admin' && (
+                            <button onClick={() => startEdit(exam)}
+                              className="px-2 py-1 text-xs rounded-lg bg-slate-50 text-slate-700 hover:bg-slate-100">
+                              Edit
+                            </button>
+                          )}
+                        </div>
                       )}
                     </td>
                   </tr>

@@ -274,33 +274,33 @@ async function getMidtermReportFallback(studentId: string, termId: string): Prom
     return { scores: [], overall_rank: 0, total_students: 0 };
   }
 
-  const { data: studentExams, error: studentError } = await supabase
-    .from<Exam>('exams')
-    .select('*')
-    .eq('studentId', studentId)
-    .eq('termId', termId)
-    .eq('examType', 'Midterm')
-    .eq('status', 'approved');
-
+const { data: studentExams, error: studentError } = await supabase
+  .from('exams')
+  .select('*')
+  .eq('studentId', studentId)
+  .eq('termId', termId)
+  .eq('examType', 'Midterm')
+  .eq('status', 'approved')
+  .returns<Exam[]>();
   if (studentError) throw studentError;
 
-  const { data: classStudents, error: classError } = await supabase
-    .from<Student>('students')
-    .select('id')
-    .eq('className', student.className);
-
+const { data: classStudents, error: classError } = await supabase
+  .from('students')
+  .select('id')
+  .eq('className', student.className)
+  .returns<{ id: string }[]>();
   if (classError) throw classError;
 
   const classStudentIds = classStudents?.map(s => s.id) ?? [];
 
   const { data: classExams, error: classExamsError } = await supabase
-    .from<Exam>('exams')
-    .select('*')
-    .in('studentId', classStudentIds)
-    .eq('termId', termId)
-    .eq('examType', 'Midterm')
-    .eq('status', 'approved');
-
+  .from('exams')
+  .select('*')
+  .in('studentId', classStudentIds)
+  .eq('termId', termId)
+  .eq('examType', 'Midterm')
+  .eq('status', 'approved')
+  .returns<Exam[]>();
   if (classExamsError) throw classExamsError;
 
   const bySubject = new Map<string, MidtermScore>();
