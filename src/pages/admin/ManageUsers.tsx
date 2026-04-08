@@ -465,7 +465,7 @@ export function ManageUsers() {
             </>
           )}
 
-          {showEdit?.role === 'teacher' && (
+          {(showEdit?.role === 'teacher' || showEdit?.role === 'supervisor') && (
             <div>
               <label className="text-sm font-semibold text-slate-700 mb-2 block">Assigned Classes</label>
               <Listbox value={formClasses} onChange={setFormClasses} multiple>

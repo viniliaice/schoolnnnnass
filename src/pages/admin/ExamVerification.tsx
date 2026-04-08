@@ -1,7 +1,9 @@
 import { useState, useEffect } from 'react';
+import { Listbox } from '@headlessui/react';
 import { useRole } from '../../context/RoleContext';
-import { getExams, updateExamStatus, updateExam, getStudentById, getUserById, getStudents, getStudentsByClasses, getUsersByRole, approveAllPendingExams, approvePendingExamsForClasses } from '../../lib/database';
-import { Exam, ExamStatus, Student, User, EXAM_TYPES, MONTHS } from '../../types';
+import { getExams, updateExamStatus, updateExam, deleteExam, getStudentById, getUserById, getStudents, getStudentsByClasses, getUsersByRole, approveAllPendingExams, approvePendingExamsForClasses } from '../../lib/database';
+import { Exam, ExamStatus, Student, User, EXAM_TYPES, MONTHS, CLASSES } from '../../types';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useToast } from '../../context/ToastContext';
 import { CheckCircle, XCircle, Clock, FileText } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -13,8 +15,13 @@ export function ExamVerification() {
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<User[]>([]);
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
-  const [classFilterValue, setClassFilterValue] = useState<string>('All');
+  const [classFilterValue, setClassFilterValue] = useState<string[]>([]); // empty = All
+  const [supervisorClasses, setSupervisorClasses] = useState<string[] | null>(null);
   const [subjectFilterValue, setSubjectFilterValue] = useState<string>('All');
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState<number>(60);
+  const pageOptions = [10, 20, 60, 100];
+  const [studentSort, setStudentSort] = useState<'none' | 'asc' | 'desc'>('none');
   const [statusFilter, setStatusFilter] = useState<ExamStatus | 'all'>('pending');
   const [search, setSearch] = useState('');
   // Editing state for admins
@@ -36,6 +43,7 @@ export function ExamVerification() {
     if (session?.role === 'supervisor') {
       const supervisor = await getUserById(session.userId);
       const assignedClasses = supervisor?.assignedClasses || [];
+      setSupervisorClasses(assignedClasses.length > 0 ? assignedClasses : []);
       if (assignedClasses.length > 0) {
         const supervisedStudents = await getStudentsByClasses(assignedClasses);
         const supervisedIds = new Set(supervisedStudents.map(s => s.id));
@@ -43,6 +51,8 @@ export function ExamVerification() {
       } else {
         examsData = [];
       }
+    } else {
+      setSupervisorClasses(null);
     }
 
     setExams(examsData);
@@ -52,13 +62,15 @@ export function ExamVerification() {
   };
 
   useEffect(() => { refresh(); }, []);
+  // Reset page when filters or pageSize change
+  useEffect(() => { setPage(1); }, [statusFilter, classFilterValue, subjectFilterValue, pageSize, search, studentSort]);
 
   const getStudent = (studentId: string) => students.find(s => s.id === studentId);
   const getTeacher = (teacherId: string) => teachers.find(t => t.id === teacherId);
 
   const filtered = exams
     .filter(e => statusFilter === 'all' || e.status === statusFilter)
-    .filter(e => classFilterValue === 'All' || getStudent(e.studentId)?.className === classFilterValue)
+    .filter(e => classFilterValue.length === 0 || classFilterValue.includes(getStudent(e.studentId)?.className || ''))
     .filter(e => subjectFilterValue === 'All' || e.subject === subjectFilterValue)
     .filter(e => {
       if (!search.trim()) return true;
@@ -73,7 +85,27 @@ export function ExamVerification() {
     })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  const classes = Array.from(new Set(students.map(s => s.className))).filter(Boolean).sort();
+  // Apply student name sorting if requested
+  const filteredSorted = (() => {
+    if (studentSort === 'none') return filtered;
+    const copy = [...filtered];
+    copy.sort((a, b) => {
+      const an = (getStudent(a.studentId)?.name || '').toLowerCase();
+      const bn = (getStudent(b.studentId)?.name || '').toLowerCase();
+      if (an === bn) return 0;
+      return studentSort === 'asc' ? (an < bn ? -1 : 1) : (an > bn ? -1 : 1);
+    });
+    return copy;
+  })();
+
+  const totalItems = filteredSorted.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  // Clamp page
+  if (page > totalPages) setPage(1);
+  const paged = filteredSorted.slice((page - 1) * pageSize, page * pageSize);
+
+  // Use the canonical class list so classes without students still appear
+  const classes = CLASSES.slice().sort();
   const subjects = Array.from(new Set(exams.map(e => e.subject))).filter(Boolean).sort();
 
   const handleAction = async (id: string, status: ExamStatus) => {
@@ -114,6 +146,18 @@ export function ExamVerification() {
 
   const toggleSelect = (id: string) => {
     setSelectedIds(prev => ({ ...prev, [id]: !prev[id] }));
+  };
+
+  const handleDelete = async (id: string) => {
+    if (!window.confirm('Delete this exam entry? This cannot be undone.')) return;
+    try {
+      const ok = await deleteExam(id);
+      if (!ok) throw new Error('Delete failed');
+      addToast({ type: 'success', title: 'Exam deleted' });
+      await refresh();
+    } catch (err) {
+      addToast({ type: 'error', title: 'Failed to delete exam' });
+    }
   };
 
   const startEdit = (exam: Exam) => {
@@ -174,18 +218,57 @@ export function ExamVerification() {
             className="w-full pl-3 pr-3 py-2 rounded-xl border border-slate-200 text-sm outline-none" />
         </div>
         <div>
-          <select value={classFilterValue} onChange={e => setClassFilterValue(e.target.value)}
-            className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white">
-            <option value="All">All classes</option>
-            {classes.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
+          <Listbox value={classFilterValue} onChange={(v:any)=>{
+            if (Array.isArray(v)) setClassFilterValue(v as string[]);
+            else setClassFilterValue(v ? [v] : []);
+          }} multiple>
+            <div className="relative">
+              <Listbox.Button className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white w-48 text-left">
+                {classFilterValue.length === 0 ? 'All classes' : classFilterValue.join(', ')}
+              </Listbox.Button>
+              <Listbox.Options className="absolute z-20 mt-2 w-48 max-h-56 overflow-auto bg-white border border-slate-200 rounded-xl p-2 shadow">
+                <Listbox.Option value={[]} key="__all" className={({active})=>`px-3 py-2 rounded-lg text-sm cursor-pointer ${active?'bg-slate-50':''}`}>
+                  {() => (
+                    <div className="flex items-center gap-3">
+                      <input type="checkbox" readOnly checked={classFilterValue.length===0} className="w-4 h-4" />
+                      <span className={cn(classFilterValue.length===0 ? 'font-semibold' : 'text-slate-700')}>All Classes</span>
+                    </div>
+                  )}
+                </Listbox.Option>
+                {(supervisorClasses ?? classes).map(cls => (
+                  <Listbox.Option key={cls} value={cls} className={({ active }) => `px-3 py-2 rounded-lg text-sm cursor-pointer ${active ? 'bg-slate-50' : ''}`}>
+                    {({ selected }) => (
+                      <div className="flex items-center gap-3">
+                        <input type="checkbox" readOnly checked={classFilterValue.includes(cls)} className="w-4 h-4" />
+                        <span className={cn(selected ? 'font-semibold' : 'text-slate-700')}>{cls}</span>
+                      </div>
+                    )}
+                  </Listbox.Option>
+                ))}
+              </Listbox.Options>
+            </div>
+          </Listbox>
         </div>
         <div>
-          <select value={subjectFilterValue} onChange={e => setSubjectFilterValue(e.target.value)}
-            className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white">
-            <option value="All">All subjects</option>
-            {subjects.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
+          <Listbox value={subjectFilterValue} onChange={(v:any)=> setSubjectFilterValue(v || 'All')}>
+            <div className="relative">
+              <Listbox.Button className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white w-48 text-left">
+                {subjectFilterValue === 'All' ? 'All subjects' : subjectFilterValue}
+              </Listbox.Button>
+              <Listbox.Options className="absolute z-20 mt-2 w-48 max-h-56 overflow-auto bg-white border border-slate-200 rounded-xl p-2 shadow">
+                <Listbox.Option value={'All'} key="__all_sub" className={({active})=>`px-3 py-2 rounded-lg text-sm cursor-pointer ${active?'bg-slate-50':''}`}>
+                  {() => <div className="text-slate-700">All subjects</div>}
+                </Listbox.Option>
+                {subjects.map(s => (
+                  <Listbox.Option key={s} value={s} className={({ active }) => `px-3 py-2 rounded-lg text-sm cursor-pointer ${active ? 'bg-slate-50' : ''}`}>
+                    {({ selected }) => (
+                      <div className={cn(selected ? 'font-semibold' : 'text-slate-700')}>{s}</div>
+                    )}
+                  </Listbox.Option>
+                ))}
+              </Listbox.Options>
+            </div>
+          </Listbox>
         </div>
         <button onClick={async () => {
           try {
@@ -221,7 +304,7 @@ export function ExamVerification() {
 
       </div>
 
-      <div className="flex gap-2 flex-wrap">
+        <div className="flex gap-2 flex-wrap items-center">
         {tabs.map(tab => (
           <button key={tab.value} onClick={() => setStatusFilter(tab.value)}
             className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
@@ -232,6 +315,17 @@ export function ExamVerification() {
             {tab.label} ({tab.count})
           </button>
         ))}
+          <div className="ml-auto flex items-center gap-2">
+            <label className="text-sm text-slate-500">Show</label>
+            <select value={pageSize} onChange={e => { setPageSize(Number(e.target.value)); setPage(1); }} className="px-2 py-1 rounded-lg border border-slate-200 bg-white text-sm">
+              {pageOptions.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} className="p-1 rounded-md bg-slate-50"><ChevronLeft className="w-4 h-4" /></button>
+              <div className="text-sm text-slate-600">Page {page} / {totalPages}</div>
+              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} className="p-1 rounded-md bg-slate-50"><ChevronRight className="w-4 h-4" /></button>
+            </div>
+          </div>
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
@@ -239,10 +333,15 @@ export function ExamVerification() {
           <table className="w-full">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">
-                    <input type="checkbox" checked={filtered.length > 0 && filtered.every(e => selectedIds[e.id])} onChange={e => toggleSelectAll(e.target.checked)} />
-                  </th>
-                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Student</th>
+                    <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">
+                      <input type="checkbox" checked={paged.length > 0 && paged.every(e => selectedIds[e.id])} onChange={e => toggleSelectAll(e.target.checked)} />
+                    </th>
+                    <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">
+                      <button onClick={() => setStudentSort(s => s === 'none' ? 'asc' : s === 'asc' ? 'desc' : 'none')} className="flex items-center gap-2">
+                        <span>Student</span>
+                        {studentSort === 'asc' ? <span className="text-xs">▲</span> : studentSort === 'desc' ? <span className="text-xs">▼</span> : null}
+                      </button>
+                    </th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Type</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Month</th>
@@ -253,7 +352,7 @@ export function ExamVerification() {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filtered.map(exam => {
+              {paged.map(exam => {
                 const student = getStudent(exam.studentId);
                 const teacher = getTeacher(exam.teacherId);
                 return (
@@ -339,6 +438,12 @@ export function ExamVerification() {
                               Edit
                             </button>
                           )}
+                          {session?.role === 'admin' && (
+                            <button onClick={() => handleDelete(exam.id)}
+                              className="px-2 py-1 text-xs rounded-lg bg-red-50 text-red-600 hover:bg-red-100">
+                              Delete
+                            </button>
+                          )}
                         </div>
                       )}
                     </td>
@@ -352,6 +457,15 @@ export function ExamVerification() {
           <div className="text-center py-12 text-slate-400">
             <FileText className="w-12 h-12 mx-auto mb-3 opacity-50" />
             <p className="font-medium">No exams to review</p>
+          </div>
+        )}
+        {totalItems > pageSize && (
+          <div className="p-4 flex items-center justify-end gap-2">
+            <div className="text-sm text-slate-500">Showing {(page-1)*pageSize+1}–{Math.min(page*pageSize, totalItems)} of {totalItems}</div>
+            <div className="flex items-center gap-2">
+              <button onClick={() => setPage(p => Math.max(1, p - 1))} className="px-3 py-1 rounded-md bg-slate-50">Prev</button>
+              <button onClick={() => setPage(p => Math.min(totalPages, p + 1))} className="px-3 py-1 rounded-md bg-slate-50">Next</button>
+            </div>
           </div>
         )}
       </div>
