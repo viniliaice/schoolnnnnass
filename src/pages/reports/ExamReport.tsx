@@ -4,6 +4,7 @@ import { useToast } from '../../context/ToastContext';
 import {
   getStudents,
   getUserById,
+  getStudentById,
   getStudentsByClasses,
   getStudentsByClass,
   getStudentsByParent,
@@ -80,12 +81,12 @@ const ReportPdfDocument = ({
   </Document>
 );
 
-export function ExamReport() {
+export function ExamReport({ initialStudentId }: { initialStudentId?: string } = {}) {
   const { session } = useRole();
   const { addToast } = useToast();
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(false);
-  const [selectedStudent, setSelectedStudent] = useState('');
+  const [selectedStudent, setSelectedStudent] = useState(initialStudentId || '');
   const [teacherComment, setTeacherComment] = useState('');
   const [commentLoading, setCommentLoading] = useState(false);
   const [reportComments, setReportComments] = useState<Record<string, ReportComment | undefined>>({});
@@ -102,6 +103,7 @@ export function ExamReport() {
   const [finalData, setFinalData] = useState<FinalReport | null>(null);
   const [classes, setClasses] = useState<string[]>([]);
   const [selectedClass, setSelectedClass] = useState('All');
+  const isSingleView = Boolean(initialStudentId);
 
   // Load available classes and set default selected class
   useEffect(() => {
@@ -110,15 +112,24 @@ export function ExamReport() {
     const init = async () => {
       setLoading(true);
       try {
+        if (isSingleView && initialStudentId) {
+          const s = await getStudentById(initialStudentId);
+          if (s) {
+            setStudents([s]);
+            setSelectedStudent(s.id);
+            setClasses([s.className]);
+            setSelectedClass(s.className);
+          }
+          return;
+        }
+
         if (session.role === 'teacher' || session.role === 'supervisor') {
           const user = await getUserById(session.userId);
           const assigned = user?.assignedClasses || [];
           if (assigned.length > 0) {
             setClasses(assigned);
-            // default to 'All' when there are multiple classes
             setSelectedClass(assigned.length > 1 ? 'All' : assigned[0]);
           } else {
-            // fallback: fetch classes from DB
             const unique = await getClasses();
             setClasses(unique);
             setSelectedClass(unique[0] || 'All');
@@ -134,13 +145,12 @@ export function ExamReport() {
     };
 
     init();
-  }, [session]);
+  }, [session, initialStudentId, isSingleView]);
 
   // Load students when selected class changes
   useEffect(() => {
     if (!session) return;
     if (!selectedClass) return;
-
     const loadByClass = async () => {
       setLoading(true);
       try {
@@ -159,7 +169,11 @@ export function ExamReport() {
             const classesList = user?.assignedClasses || [];
             const list = classesList.length > 0 ? await getStudentsByClasses(classesList) : await getStudents();
             setStudents(list);
-            if (list.length > 0) setSelectedStudent(list[0].id);
+            if (initialStudentId && list.find(s => s.id === initialStudentId)) {
+              setSelectedStudent(initialStudentId);
+            } else if (list.length > 0) {
+              setSelectedStudent(list[0].id);
+            }
           } else {
             const list = await getStudents();
             setStudents(list);
@@ -176,7 +190,7 @@ export function ExamReport() {
     };
 
     loadByClass();
-  }, [selectedClass, session]);
+  }, [selectedClass, session, initialStudentId, isSingleView]);
 
   useEffect(() => {
     if (!selectedStudent) return;
@@ -187,18 +201,15 @@ export function ExamReport() {
         const term = await getCurrentTerm();
         if (!term) return;
 
-        // Load existing teacher comment for this student and term
-        (async () => {
-          try {
-            setCommentLoading(true);
-            const c = await getReportComment(selectedStudent, term.id);
-            setTeacherComment(c?.teacherComment || '');
-          } catch (err) {
-            // ignore
-          } finally {
-            setCommentLoading(false);
-          }
-        })();
+        setCommentLoading(true);
+        try {
+          const c = await getReportComment(selectedStudent, term.id);
+          setTeacherComment(c?.teacherComment || '');
+        } catch (err) {
+          // ignore
+        } finally {
+          setCommentLoading(false);
+        }
 
         if (reportType === 'Monthly') {
           const rep = await getMonthlyReport(selectedStudent, term.id);
@@ -211,17 +222,16 @@ export function ExamReport() {
           setFinalData(rep || null);
         }
 
-          // Load all report comments for this student/term (includes exam-linked comments)
-          try {
-            const comments = await getReportCommentsForStudentTerm(selectedStudent, term.id);
-            const map: Record<string, ReportComment | undefined> = {};
-            for (const c of comments) {
-              if (c.examId) map[c.examId] = c;
-            }
-            setReportComments(map);
-          } catch (err) {
-            // ignore
+        try {
+          const comments = await getReportCommentsForStudentTerm(selectedStudent, term.id);
+          const map: Record<string, ReportComment | undefined> = {};
+          for (const c of comments) {
+            if (c.examId) map[c.examId] = c;
           }
+          setReportComments(map);
+        } catch (err) {
+          // ignore
+        }
       } finally {
         setLoading(false);
       }
@@ -605,25 +615,34 @@ export function ExamReport() {
       </div>
 
       <div className="flex flex-col sm:flex-row gap-4 items-end">
-        <div className="w-56">
-          <label className="text-xs font-semibold text-slate-500 uppercase mb-1.5 block">Class</label>
-          <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)}
-            className="w-full px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm">
-            <option value="All">All classes</option>
-            {classes.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-        </div>
+        {!isSingleView ? (
+          <>
+            <div className="w-56">
+              <label className="text-xs font-semibold text-slate-500 uppercase mb-1.5 block">Class</label>
+              <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)}
+                className="w-full px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm">
+                <option value="All">All classes</option>
+                {classes.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
 
-        <div className="flex-1 min-w-0">
-          <label className="text-xs font-semibold text-slate-500 uppercase mb-1.5 block">Select Student</label>
-          <select title={students.find(s => s.id === selectedStudent)?.name || ''} value={selectedStudent} onChange={e => setSelectedStudent(e.target.value)}
-            className="w-full px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm truncate">
-            <option value="">-- Select student --</option>
-            {students.map(s => (
-              <option key={s.id} value={s.id}>{s.name} · {s.className}</option>
-            ))}
-          </select>
-        </div>
+            <div className="flex-1 min-w-0">
+              <label className="text-xs font-semibold text-slate-500 uppercase mb-1.5 block">Select Student</label>
+              <select title={students.find(s => s.id === selectedStudent)?.name || ''} value={selectedStudent} onChange={e => setSelectedStudent(e.target.value)}
+                className="w-full px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm truncate">
+                <option value="">-- Select student --</option>
+                {students.map(s => (
+                  <option key={s.id} value={s.id}>{s.name} · {s.className}</option>
+                ))}
+              </select>
+            </div>
+          </>
+        ) : (
+          <div className="flex-1 min-w-0">
+            <label className="text-xs font-semibold text-slate-500 uppercase mb-1.5 block">Student</label>
+            <div className="px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm">{students[0]?.name} · {students[0]?.className}</div>
+          </div>
+        )}
 
         <div>
           <label className="text-xs font-semibold text-slate-500 uppercase mb-1.5 block">Report Type</label>
@@ -653,4 +672,3 @@ export function ExamReport() {
   );
 }
 
-// Generated by Copilot

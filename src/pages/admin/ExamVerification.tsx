@@ -12,6 +12,9 @@ export function ExamVerification() {
   const [exams, setExams] = useState<Exam[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<User[]>([]);
+  const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
+  const [classFilterValue, setClassFilterValue] = useState<string>('All');
+  const [subjectFilterValue, setSubjectFilterValue] = useState<string>('All');
   const [statusFilter, setStatusFilter] = useState<ExamStatus | 'all'>('pending');
   const [search, setSearch] = useState('');
   // Editing state for admins
@@ -45,6 +48,7 @@ export function ExamVerification() {
     setExams(examsData);
     setStudents(studentsData);
     setTeachers(teachersData);
+    setSelectedIds({});
   };
 
   useEffect(() => { refresh(); }, []);
@@ -54,6 +58,8 @@ export function ExamVerification() {
 
   const filtered = exams
     .filter(e => statusFilter === 'all' || e.status === statusFilter)
+    .filter(e => classFilterValue === 'All' || getStudent(e.studentId)?.className === classFilterValue)
+    .filter(e => subjectFilterValue === 'All' || e.subject === subjectFilterValue)
     .filter(e => {
       if (!search.trim()) return true;
       const s = search.toLowerCase();
@@ -67,6 +73,9 @@ export function ExamVerification() {
     })
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
+  const classes = Array.from(new Set(students.map(s => s.className))).filter(Boolean).sort();
+  const subjects = Array.from(new Set(exams.map(e => e.subject))).filter(Boolean).sort();
+
   const handleAction = async (id: string, status: ExamStatus) => {
     try {
       await updateExamStatus(id, status);
@@ -75,6 +84,36 @@ export function ExamVerification() {
     } catch (error) {
       addToast({ type: 'error', title: 'Failed to update exam status' });
     }
+  };
+
+  const handleBulkAction = async (status: ExamStatus) => {
+    const ids = Object.keys(selectedIds).filter(id => selectedIds[id]);
+    if (ids.length === 0) {
+      addToast({ type: 'error', title: 'No exams selected' });
+      return;
+    }
+    try {
+      await Promise.all(ids.map(id => updateExamStatus(id, status)));
+      addToast({ type: 'success', title: `${status} ${ids.length} exams` });
+      setSelectedIds({});
+      await refresh();
+    } catch (err) {
+      addToast({ type: 'error', title: 'Failed to update selected exams' });
+    }
+  };
+
+  const toggleSelectAll = (checked: boolean) => {
+    if (checked) {
+      const map: Record<string, boolean> = {};
+      for (const e of filtered) map[e.id] = true;
+      setSelectedIds(map);
+    } else {
+      setSelectedIds({});
+    }
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
   const startEdit = (exam: Exam) => {
@@ -134,6 +173,20 @@ export function ExamVerification() {
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search student, subject, teacher..."
             className="w-full pl-3 pr-3 py-2 rounded-xl border border-slate-200 text-sm outline-none" />
         </div>
+        <div>
+          <select value={classFilterValue} onChange={e => setClassFilterValue(e.target.value)}
+            className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white">
+            <option value="All">All classes</option>
+            {classes.map(c => <option key={c} value={c}>{c}</option>)}
+          </select>
+        </div>
+        <div>
+          <select value={subjectFilterValue} onChange={e => setSubjectFilterValue(e.target.value)}
+            className="px-3 py-2 rounded-xl border border-slate-200 text-sm bg-white">
+            <option value="All">All subjects</option>
+            {subjects.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+        </div>
         <button onClick={async () => {
           try {
             let res = null;
@@ -153,6 +206,18 @@ export function ExamVerification() {
           className="ml-2 px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700">
           Approve All Pending
         </button>
+        {Object.values(selectedIds).some(Boolean) && (
+          <div className="flex gap-2">
+            <button onClick={() => handleBulkAction('approved')}
+              className="ml-2 px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700">
+              Approve Selected
+            </button>
+            <button onClick={() => handleBulkAction('rejected')}
+              className="ml-2 px-3 py-2 rounded-xl bg-red-600 text-white text-sm font-medium hover:bg-red-700">
+              Reject Selected
+            </button>
+          </div>
+        )}
 
       </div>
 
@@ -174,7 +239,10 @@ export function ExamVerification() {
           <table className="w-full">
             <thead>
               <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Student</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">
+                    <input type="checkbox" checked={filtered.length > 0 && filtered.every(e => selectedIds[e.id])} onChange={e => toggleSelectAll(e.target.checked)} />
+                  </th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Student</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Type</th>
                 <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Month</th>
@@ -190,6 +258,9 @@ export function ExamVerification() {
                 const teacher = getTeacher(exam.teacherId);
                 return (
                   <tr key={exam.id} className="hover:bg-slate-50 transition-colors">
+                    <td className="px-5 py-3">
+                      <input type="checkbox" checked={!!selectedIds[exam.id]} onChange={() => toggleSelect(exam.id)} />
+                    </td>
                     <td className="px-5 py-3">
                       <div>
                         <p className="text-sm font-medium text-slate-800">{student?.name || '—'}</p>

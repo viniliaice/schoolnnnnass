@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
 import { Listbox } from '@headlessui/react';
-import { getStudentsPaginated, getStudentsByClasses, getUsersByRole, createStudent, updateStudent, deleteStudent } from '../../lib/database';
-import { Student, User, CLASSES } from '../../types';
+import { getStudentsPaginated, getStudentsByClasses, getUsersByRole, createStudent, updateStudent, deleteStudent, getExamsByStudent, getStudentById, getReportCommentsForStudentTerm, getCurrentTerm } from '../../lib/database';
+import { Student, User, CLASSES, Exam } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { Dialog } from '../../components/ui/Dialog';
+import { ExamReport } from '../reports/ExamReport';
 import { DataTable } from '../../components/ui/DataTable';
 import { Plus, Trash2, Edit, GraduationCap, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -21,11 +22,51 @@ export function ManageStudents() {
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [showEdit, setShowEdit] = useState<Student | null>(null);
+  const [showExamDialog, setShowExamDialog] = useState(false);
+  const [examStudentId, setExamStudentId] = useState<string | null>(null);
+  const [examEntries, setExamEntries] = useState<Exam[]>([]);
+  const [examLoading, setExamLoading] = useState(false);
+  const [examReportComments, setExamReportComments] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    if (!showExamDialog || !examStudentId) return;
+    let mounted = true;
+    const loadExams = async () => {
+      setExamLoading(true);
+      try {
+        const exams = await getExamsByStudent(examStudentId);
+        if (!mounted) return;
+        setExamEntries(exams || []);
+
+        // Try to fetch report comments for the current term
+        const term = await getCurrentTerm();
+        if (term) {
+          const comments = await getReportCommentsForStudentTerm(examStudentId, term.id);
+          const map: Record<string, string> = {};
+          for (const c of comments) {
+            if (c.examId && c.teacherComment) map[c.examId] = c.teacherComment;
+          }
+          if (!mounted) return;
+          setExamReportComments(map);
+        } else {
+          setExamReportComments({});
+        }
+      } catch (err) {
+        setExamEntries([]);
+        setExamReportComments({});
+      } finally {
+        if (mounted) setExamLoading(false);
+      }
+    };
+    loadExams();
+    return () => { mounted = false; };
+  }, [showExamDialog, examStudentId]);
 
   const [formName, setFormName] = useState('');
   const [formClass, setFormClass] = useState(CLASSES[0]);
   const [formParent, setFormParent] = useState('');
   const [parentSearch, setParentSearch] = useState('');
+  const [parentFocused, setParentFocused] = useState(false);
 
   const STUDENTS_PER_PAGE = 50;
 
@@ -135,6 +176,13 @@ export function ManageStudents() {
         const student = row.original;
         return (
           <div className="flex items-center gap-2">
+            <button
+              onClick={() => { setExamStudentId(student.id); setShowExamDialog(true); }}
+              title="View Exam Entry"
+              className="p-1 text-slate-500 hover:text-slate-700"
+            >
+              <Search className="w-4 h-4" />
+            </button>
             <button
               onClick={() => openEdit(student)}
               className="p-1 text-blue-400 hover:text-blue-600"
@@ -305,10 +353,12 @@ export function ManageStudents() {
                 placeholder="Search parents by name or email..."
                 value={parentSearch}
                 onChange={e => setParentSearch(e.target.value)}
+                onFocus={() => setParentFocused(true)}
+                onBlur={() => setTimeout(() => setParentFocused(false), 150)}
                 className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none"
               />
-              {parentSearch && (
-                <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+              {parentSearch && parentFocused && (
+                <div className="mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
                   <button
                     onClick={() => { setFormParent(''); setParentSearch(''); }}
                     className="w-full px-4 py-2 text-left text-sm text-slate-500 hover:bg-slate-50"
@@ -359,10 +409,12 @@ export function ManageStudents() {
                 placeholder="Search parents by name or email..."
                 value={parentSearch}
                 onChange={e => setParentSearch(e.target.value)}
+                onFocus={() => setParentFocused(true)}
+                onBlur={() => setTimeout(() => setParentFocused(false), 150)}
                 className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none"
               />
-              {parentSearch && (
-                <div className="absolute z-10 w-full mt-1 bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
+              {parentSearch && parentFocused && (
+                <div className="mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
                   <button
                     onClick={() => { setFormParent(''); setParentSearch(''); }}
                     className="w-full px-4 py-2 text-left text-sm text-slate-500 hover:bg-slate-50"
@@ -392,6 +444,92 @@ export function ManageStudents() {
           </button>
         </div>
       </Dialog>
+      {/* Exam Entry Dialog */}
+      <Dialog open={showExamDialog} onClose={() => { setShowExamDialog(false); setExamStudentId(null); setExamEntries([]); setExamReportComments({}); }} title="Exam Entries">
+        <div className="w-full h-[70vh] overflow-auto">
+          {/* Load and show each exam entry for the selected student */}
+          <ExamEntriesDialogContent
+            studentId={examStudentId}
+            entries={examEntries}
+            loading={examLoading}
+            reportComments={examReportComments}
+          />
+        </div>
+      </Dialog>
+    </div>
+  );
+}
+
+function ExamEntriesDialogContent({ studentId, entries, loading, reportComments }: { studentId: string | null; entries: Exam[]; loading: boolean; reportComments: Record<string, string> }) {
+  const [studentName, setStudentName] = useState<string>('');
+
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      if (!studentId) return;
+      try {
+        const s = await getStudentById(studentId);
+        if (!mounted) return;
+        setStudentName(s?.name || 'Student');
+      } catch (err) {
+        // ignore
+      }
+    };
+    load();
+    return () => { mounted = false; };
+  }, [studentId]);
+
+  const rows = entries.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-lg font-semibold">{studentName} — Exam Entries</h3>
+        <p className="text-sm text-slate-500">Showing individual exam records for the selected student</p>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200">
+        {loading ? (
+          <div className="p-6 text-center text-slate-500">Loading...</div>
+        ) : rows.length === 0 ? (
+          <div className="text-center py-12 text-slate-400">
+            <GraduationCap className="w-12 h-12 mx-auto mb-3 opacity-50" />
+            <p className="font-medium">No exam entries found for this student</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-200">
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Type</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Month</th>
+                  <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Score</th>
+                  <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">%</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Status</th>
+                  <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Teacher Comment</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {rows.map(e => {
+                  const pct = e.total > 0 ? Math.round((e.score / e.total) * 100) : 0;
+                  return (
+                    <tr key={e.id} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-5 py-3 text-sm text-slate-700">{e.subject}</td>
+                      <td className="px-5 py-3 text-sm text-slate-600">{e.examType}</td>
+                      <td className="px-5 py-3 text-sm text-slate-600">{e.month}</td>
+                      <td className="px-5 py-3 text-center font-bold text-sm text-slate-800">{e.score}/{e.total}</td>
+                      <td className="px-5 py-3 text-center"><span className={cn('text-sm font-bold', pct >= 80 ? 'text-emerald-600' : pct >= 60 ? 'text-amber-600' : 'text-red-600')}>{pct}%</span></td>
+                      <td className="px-5 py-3 text-sm text-slate-600">{e.status}</td>
+                      <td className="px-5 py-3 text-sm text-slate-600">{reportComments[e.id] || '—'}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
