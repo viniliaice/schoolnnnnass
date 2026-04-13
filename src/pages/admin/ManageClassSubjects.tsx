@@ -47,7 +47,9 @@ export function ManageClassSubjects() {
         await Promise.all(
           validSubjectIds.map(subjectId => {
             const payload = { className: formClass, subjectId, teacherId: formTeacherId };
-            console.log('Creating class_subjects row:', payload);
+            if (import.meta.env && import.meta.env.MODE !== 'production') {
+              console.debug('Creating class_subjects row:', payload);
+            }
             return createClassSubject(payload);
           })
         );
