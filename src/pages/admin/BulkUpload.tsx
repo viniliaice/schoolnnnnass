@@ -135,9 +135,12 @@ export function BulkUpload() {
   // Load data on mount
   useEffect(() => {
     const loadData = async () => {
-      const parentsData = await getUsersByRole('parent');
-      const teachersData = await getUsersByRole('teacher');
-      const studentsData = await getStudents();
+      // Parallelize independent fetches
+      const [parentsData, teachersData, studentsData] = await Promise.all([
+        getUsersByRole('parent'),
+        getUsersByRole('teacher'),
+        getStudents(),
+      ]);
       setParents(parentsData);
       setTeachers(teachersData);
       setStudents(studentsData);

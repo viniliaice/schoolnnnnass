@@ -1,16 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-// Mock the supabase client module before importing the functions under test
-const mockFrom = vi.fn();
-const mockSupabase = {
-  from: mockFrom,
-};
-
 vi.mock('../supabase', () => ({
-  supabase: mockSupabase,
+  supabase: {
+    from: vi.fn(),
+  },
 }));
 
+import { supabase } from '../supabase';
 import { getUsers, getStudents, logAllClassSubjects } from '../database';
+
+const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   mockFrom.mockReset();

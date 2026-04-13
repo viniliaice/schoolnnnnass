@@ -16,10 +16,13 @@ export function AdminDashboard({ navigate }: { navigate?: (path: string) => void
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      const statsData = await getSystemStats();
-      const examsData = await getExams();
-      const studentsData = await getStudents();
-      const usersData = await getUsers();
+      // Parallelize independent fetches to avoid waterfalls
+      const [statsData, examsData, studentsData, usersData] = await Promise.all([
+        getSystemStats(),
+        getExams(),
+        getStudents(),
+        getUsers(),
+      ]);
 
       setStats(statsData);
       // limit recent exams to last 15
