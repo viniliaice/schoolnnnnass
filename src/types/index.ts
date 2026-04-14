@@ -108,6 +108,26 @@ export interface Exam {
   teacherId: string;
 }
 
+export interface TeacherExamProgress {
+  teacherId: string;
+  teacherName: string;
+  className: string;
+  subjectId: string;
+  subjectName: string;
+  month: string;
+  requiredEntries: number;
+  completedEntries: number;
+  completionStatus: 'complete' | 'incomplete';
+  completionPercent: number;
+  homeworkEntered: number;
+  caEntered: number;
+  classworkEntered: number;
+  attendanceEntered: number;
+  quizEntered: number;
+  totalStudents: number;
+  missingExamTypes: string[];
+}
+
 export interface RoleSession {
   role: Role;
   userId: string;
