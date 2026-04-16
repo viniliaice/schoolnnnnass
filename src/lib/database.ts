@@ -636,8 +636,9 @@ async function getTeacherExamProgressFallback(filters: {
       const caEntered = new Set(relevantExams.filter(e => e.examType === 'CA').map(e => e.studentId)).size;
       const homeworkEntered = new Set(relevantExams.filter(e => e.examType === 'Homework').map(e => e.studentId)).size;
       const classworkEntered = new Set(relevantExams.filter(e => e.examType === 'Classwork').map(e => e.studentId)).size;
+        const quizEntered = new Set(relevantExams.filter(e => e.examType === 'Quiz').map(e => e.studentId)).size;
       const attendanceEntered = new Set(relevantExams.filter(e => e.examType === 'Attendance').map(e => e.studentId)).size;
-      const quizEntered = new Set(relevantExams.filter(e => e.examType === 'Quiz').map(e => e.studentId)).size;
+    
 
       // If CA has entries, treat CA as satisfying the requirement and hide other CA types
       if (caEntered > 0) {
