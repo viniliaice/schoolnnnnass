@@ -271,11 +271,11 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
     ? Math.round(monthlyFiltered.reduce((s, d) => s + d.average, 0) / monthlyFiltered.length)
     : 0;
 
-  const overallMidterm = midtermData?.scores.length
+  const overallMidterm = Array.isArray(midtermData?.scores) && midtermData.scores.length > 0
     ? Math.round(midtermData.scores.reduce((s, sc) => s + sc.percentage, 0) / midtermData.scores.length)
     : 0;
 
-  const overallFinal = finalData?.results.length
+  const overallFinal = Array.isArray(finalData?.results) && finalData.results.length > 0
     ? Math.round(finalData.results.reduce((s, r) => s + r.total, 0) / finalData.results.length)
     : 0;
 
@@ -425,7 +425,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
                     details={
                       reportType === 'Monthly' ? monthlyFiltered.map(m => ({label: m.subject, value: `${m.average}%`})) :
                       reportType === 'Midterm' ? midtermData?.scores.map(s => ({label: s.subject, value: `${s.percentage}%`})) || [] :
-                      finalData?.results.map(r => ({label: r.subject, value: `${r.total}`})) || []
+                      (Array.isArray(finalData?.results) ? finalData.results.map(r => ({ label: r.subject, value: `${r.total}` })) : [])
                     }
                   />}
                   fileName={`${student?.name?.replace(/\s+/g,'_') || 'report'}_${reportType}.pdf`}
@@ -541,7 +541,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
             )
           )}
           {reportType === 'Final' && (
-            finalData && finalData.results.length > 0 ? (
+            finalData?.results && finalData.results.length > 0 ? (
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
@@ -555,7 +555,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
                     </tr>
                   </thead>
                   <tbody>
-                    {finalData.results.map(r => (
+                    {finalData?.results.map(r => (
                       <tr key={r.subject} className="border-b last:border-b-0">
                         <td className="px-4 py-3">{r.subject}</td>
                         <td className="px-4 py-3 text-center">{r.ca_avg}</td>

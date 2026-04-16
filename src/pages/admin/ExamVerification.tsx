@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Listbox } from '@headlessui/react';
 import { useRole } from '../../context/RoleContext';
-import { getExams, updateExamStatus, updateExam, deleteExam, getStudentById, getUserById, getStudents, getStudentsByClasses, getUsersByRole, approveAllPendingExams, approvePendingExamsForClasses } from '../../lib/database';
+import { getClasses, getExamCount, getExamsPaginated, getStudentsByClasses, getStudentsByIds, getUserById, getUsersByRole, updateExamStatus, updateExam, deleteExam, approveAllPendingExams, approvePendingExamsForClasses } from '../../lib/database';
 import { Exam, ExamStatus, Student, User, EXAM_TYPES, MONTHS, CLASSES } from '../../types';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useToast } from '../../context/ToastContext';
@@ -14,6 +14,9 @@ export function ExamVerification() {
   const [exams, setExams] = useState<Exam[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [teachers, setTeachers] = useState<User[]>([]);
+  const [classes, setClasses] = useState<string[]>([]);
+  const [totalItems, setTotalItems] = useState(0);
+  const [statusCounts, setStatusCounts] = useState({ all: 0, pending: 0, approved: 0, rejected: 0 });
   const [selectedIds, setSelectedIds] = useState<Record<string, boolean>>({});
   const [classFilterValue, setClassFilterValue] = useState<string[]>([]); // empty = All
   const [supervisorClasses, setSupervisorClasses] = useState<string[] | null>(null);
@@ -31,82 +34,96 @@ export function ExamVerification() {
   const [editType, setEditType] = useState<string>('');
   const [editSubmitting, setEditSubmitting] = useState(false);
 
-  const refresh = async () => {
-    const [allExams, studentsData, teachersData] = await Promise.all([
-      getExams(),
-      getStudents(),
-      getUsersByRole('teacher')
+  const refresh = useCallback(async () => {
+    const [teachersData, classData] = await Promise.all([
+      getUsersByRole('teacher'),
+      getClasses(),
     ]);
+    setTeachers(teachersData);
+    setClasses(classData);
 
-    let examsData = allExams;
-
+    let effectiveClasses = classFilterValue.length === 0 ? classData : classFilterValue;
     if (session?.role === 'supervisor') {
       const supervisor = await getUserById(session.userId);
       const assignedClasses = supervisor?.assignedClasses || [];
       setSupervisorClasses(assignedClasses.length > 0 ? assignedClasses : []);
       if (assignedClasses.length > 0) {
-        const supervisedStudents = await getStudentsByClasses(assignedClasses);
-        const supervisedIds = new Set(supervisedStudents.map(s => s.id));
-        examsData = allExams.filter(exam => supervisedIds.has(exam.studentId));
+        effectiveClasses = assignedClasses;
       } else {
-        examsData = [];
+        setExams([]);
+        setStudents([]);
+        setTotalItems(0);
+        setStatusCounts({ all: 0, pending: 0, approved: 0, rejected: 0 });
+        setSelectedIds({});
+        return;
       }
     } else {
       setSupervisorClasses(null);
     }
 
-    setExams(examsData);
-    setStudents(studentsData);
-    setTeachers(teachersData);
-    setSelectedIds({});
-  };
+    const selectedStudentIds = (classFilterValue.length > 0 || session?.role === 'supervisor')
+      ? (await getStudentsByClasses(effectiveClasses, undefined, 1000)).map(s => s.id)
+      : [];
 
-  useEffect(() => { refresh(); }, []);
+    const examPage = await getExamsPaginated(
+      page,
+      pageSize,
+      statusFilter,
+      selectedStudentIds.length > 0 ? selectedStudentIds : undefined,
+      subjectFilterValue,
+      search
+    );
+
+    const studentIds = examPage.exams.map(e => e.studentId);
+    const currentStudents = studentIds.length > 0 ? await getStudentsByIds(studentIds) : [];
+
+    const [allCount, pendingCount, approvedCount, rejectedCount] = await Promise.all([
+      getExamCount('all', selectedStudentIds.length > 0 ? selectedStudentIds : undefined, subjectFilterValue, search),
+      getExamCount('pending', selectedStudentIds.length > 0 ? selectedStudentIds : undefined, subjectFilterValue, search),
+      getExamCount('approved', selectedStudentIds.length > 0 ? selectedStudentIds : undefined, subjectFilterValue, search),
+      getExamCount('rejected', selectedStudentIds.length > 0 ? selectedStudentIds : undefined, subjectFilterValue, search),
+    ]);
+
+    setExams(examPage.exams);
+    setStudents(currentStudents);
+    setTotalItems(examPage.total);
+    setStatusCounts({ all: allCount, pending: pendingCount, approved: approvedCount, rejected: rejectedCount });
+    setSelectedIds({});
+  }, [session, classFilterValue, page, pageSize, statusFilter, subjectFilterValue, search]);
+
+  useEffect(() => { refresh(); }, [refresh]);
   // Reset page when filters or pageSize change
-  useEffect(() => { setPage(1); }, [statusFilter, classFilterValue, subjectFilterValue, pageSize, search, studentSort]);
+  useEffect(() => { setPage(1); }, [statusFilter, classFilterValue, subjectFilterValue, pageSize, search]);
 
   const getStudent = (studentId: string) => students.find(s => s.id === studentId);
   const getTeacher = (teacherId: string) => teachers.find(t => t.id === teacherId);
 
-  const filtered = exams
-    .filter(e => statusFilter === 'all' || e.status === statusFilter)
-    .filter(e => classFilterValue.length === 0 || classFilterValue.includes(getStudent(e.studentId)?.className || ''))
-    .filter(e => subjectFilterValue === 'All' || e.subject === subjectFilterValue)
-    .filter(e => {
-      if (!search.trim()) return true;
-      const s = search.toLowerCase();
-      const student = getStudent(e.studentId);
-      const teacher = getTeacher(e.teacherId);
-      return (
-        (student?.name || '').toLowerCase().includes(s) ||
-        (e.subject || '').toLowerCase().includes(s) ||
-        (teacher?.name || '').toLowerCase().includes(s)
-      );
-    })
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-  // Apply student name sorting if requested
-  const filteredSorted = (() => {
-    if (studentSort === 'none') return filtered;
-    const copy = [...filtered];
-    copy.sort((a, b) => {
+  const paged = useMemo(() => {
+    const rows = [...exams];
+    if (studentSort === 'none') return rows;
+    rows.sort((a, b) => {
       const an = (getStudent(a.studentId)?.name || '').toLowerCase();
       const bn = (getStudent(b.studentId)?.name || '').toLowerCase();
       if (an === bn) return 0;
       return studentSort === 'asc' ? (an < bn ? -1 : 1) : (an > bn ? -1 : 1);
     });
-    return copy;
-  })();
+    return rows;
+  }, [exams, studentSort, students]);
 
-  const totalItems = filteredSorted.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   // Clamp page
   if (page > totalPages) setPage(1);
-  const paged = filteredSorted.slice((page - 1) * pageSize, page * pageSize);
 
   // Use the canonical class list so classes without students still appear
-  const classes = CLASSES.slice().sort();
-  const subjects = Array.from(new Set(exams.map(e => e.subject))).filter(Boolean).sort();
+  const classOptions = classes.length > 0 ? classes.slice().sort() : CLASSES.slice().sort();
+  const subjects = useMemo(() => Array.from(new Set(exams.map(e => e.subject))).filter(Boolean).sort(), [exams]);
+
+  const tabs = useMemo(() => [
+    { label: 'All', value: 'all', count: statusCounts.all },
+    { label: 'Pending', value: 'pending', count: statusCounts.pending },
+    { label: 'Approved', value: 'approved', count: statusCounts.approved },
+    { label: 'Rejected', value: 'rejected', count: statusCounts.rejected },
+  ], [statusCounts]);
 
   const handleAction = async (id: string, status: ExamStatus) => {
     try {
@@ -137,7 +154,7 @@ export function ExamVerification() {
   const toggleSelectAll = (checked: boolean) => {
     if (checked) {
       const map: Record<string, boolean> = {};
-      for (const e of filtered) map[e.id] = true;
+      for (const e of paged) map[e.id] = true;
       setSelectedIds(map);
     } else {
       setSelectedIds({});
@@ -198,13 +215,6 @@ export function ExamVerification() {
     setEditSubmitting(false);
   };
 
-  const tabs: { label: string; value: ExamStatus | 'all'; count: number }[] = [
-    { label: 'All', value: 'all', count: exams.length },
-    { label: 'Pending', value: 'pending', count: exams.filter(e => e.status === 'pending').length },
-    { label: 'Approved', value: 'approved', count: exams.filter(e => e.status === 'approved').length },
-    { label: 'Rejected', value: 'rejected', count: exams.filter(e => e.status === 'rejected').length },
-  ];
-
   return (
     <div className="space-y-6">
       <div>
@@ -235,7 +245,7 @@ export function ExamVerification() {
                     </div>
                   )}
                 </Listbox.Option>
-                {(supervisorClasses ?? classes).map(cls => (
+                {(supervisorClasses ?? classOptions).map(cls => (
                   <Listbox.Option key={cls} value={cls} className={({ active }) => `px-3 py-2 rounded-lg text-sm cursor-pointer ${active ? 'bg-slate-50' : ''}`}>
                     {({ selected }) => (
                       <div className="flex items-center gap-3">
@@ -453,7 +463,7 @@ export function ExamVerification() {
             </tbody>
           </table>
         </div>
-        {filtered.length === 0 && (
+        {paged.length === 0 && (
           <div className="text-center py-12 text-slate-400">
             <FileText className="w-12 h-12 mx-auto mb-3 opacity-50" />
             <p className="font-medium">No exams to review</p>

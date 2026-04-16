@@ -1,14 +1,45 @@
-// DEBUG: Log all class_subjects rows
-export async function logAllClassSubjects() {
-  const { data, error } = await supabase.from('class_subjects').select('*');
+import { User, Student, Exam, ExamStatus, ExamType, Role, AcademicYear, Term, Subject, TeacherExamProgress, GradeScale, ReportConfig, MonthlyScore, MidtermReport, MidtermScore, FinalReport, getGrade, ReportComment } from '../types';
+import { supabase } from './supabase';
+
+const isDev = import.meta.env?.MODE !== 'production';
+const MAX_QUERY_LIMIT = 500;
+
+function debug(...args: unknown[]) {
+  if (isDev) console.debug(...args);
+}
+
+function devLog(...args: unknown[]) {
+  if (isDev) console.log(...args);
+}
+
+const REQUIRED_MONTHLY_EXAM_TYPES = ['CA', 'Homework', 'Classwork', 'Quiz'] as const;
+
+type RequiredMonthlyExamType = (typeof REQUIRED_MONTHLY_EXAM_TYPES)[number];
+
+function applyLimit(query: any, limit: number) {
+  if (typeof query.limit === 'function') {
+    return query.limit(Math.min(limit, MAX_QUERY_LIMIT));
+  }
+  return query;
+}
+
+export async function logAllClassSubjects(limit: number = 100) {
+  if (!isDev) {
+    console.warn('logAllClassSubjects is disabled in production');
+    return [];
+  }
+
+  const from = 0;
+  const to = Math.max(0, limit - 1);
+  const { data, error } = await supabase.from('class_subjects').select('*').range(from, to);
   if (error) {
     console.error('Error fetching class_subjects:', error);
-    return;
+    return [];
   }
-  console.log('class_subjects rows:', data);
-  return data;
+  debug(`class_subjects rows (first ${limit}):`, data);
+  return data || [];
 }
-// Get all class/subject assignments for a teacher
+
 export async function getClassAssignmentsForTeacher(teacherId: string): Promise<{ className: string, subjectId: string }[]> {
   const { data, error } = await supabase
     .from('class_subjects')
@@ -17,8 +48,6 @@ export async function getClassAssignmentsForTeacher(teacherId: string): Promise<
   if (error) return [];
   return data || [];
 }
-import { User, Student, Exam, ExamStatus, ExamType, Role, AcademicYear, Term, Subject, GradeScale, ReportConfig, MonthlyScore, MidtermReport, FinalReport, getGrade } from '../types';
-import { supabase } from './supabase';
 
 // ── Authentication ──
 export async function signIn(email: string, password: string) {
@@ -104,7 +133,7 @@ export async function createDemoAccounts() {
         .maybeSingle();
 
       if (existing) {
-        console.log(`Demo account for ${user.email} already exists`);
+        debug(`Demo account for ${user.email} already exists`);
         continue; // Skip if already exists
       }
 
@@ -124,7 +153,7 @@ export async function createDemoAccounts() {
 
       if (profileError) throw profileError;
 
-      console.log(`Created demo account for ${user.email}`);
+      debug(`Created demo account for ${user.email}`);
     } catch (error) {
       console.error(`Error creating demo account for ${user.email}:`, error);
     }
@@ -132,8 +161,8 @@ export async function createDemoAccounts() {
 }
 
 // ── Users ──
-export async function getUsers(): Promise<User[]> {
-  const { data, error } = await supabase.from('users').select('*');
+export async function getUsers(limit: number = MAX_QUERY_LIMIT): Promise<User[]> {
+  const { data, error } = await applyLimit(supabase.from('users').select('*'), limit);
   if (error) throw error;
   return data || [];
 }
@@ -156,8 +185,11 @@ export async function getUsersPaginated(page: number = 1, limit: number = 10, se
   return { users: data || [], total: count || 0 };
 }
 
-export async function getUsersByRole(role: Role): Promise<User[]> {
-  const { data, error } = await supabase.from('users').select('*').eq('role', role);
+export async function getUsersByRole(role: Role, page: number = 1, limit: number = 100): Promise<User[]> {
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+
+  const { data, error } = await supabase.from('users').select('*', { count: 'exact' }).eq('role', role).range(from, to);
   if (error) throw error;
   return data || [];
 }
@@ -260,8 +292,12 @@ export async function getMidtermReport(
 
   if (!error) return data;
 
-  // Fallback when RPC function does not exist (404/PGRST202)
-  if (error.code === 'PGRST202' || (error.details && error.details.includes('get_midterm_report'))) {
+  const isMissingRpc = error.code === 'PGRST202'
+    || error.status === 404
+    || (typeof error.message === 'string' && error.message.includes('Not Found'))
+    || (typeof error.details === 'string' && error.details.includes('get_midterm_report'));
+
+  if (isMissingRpc) {
     return getMidtermReportFallback(studentId, termId);
   }
 
@@ -274,33 +310,41 @@ async function getMidtermReportFallback(studentId: string, termId: string): Prom
     return { scores: [], overall_rank: 0, total_students: 0 };
   }
 
-const { data: studentExams, error: studentError } = await supabase
-  .from('exams')
-  .select('*')
-  .eq('studentId', studentId)
-  .eq('termId', termId)
-  .eq('examType', 'Midterm')
-  .eq('status', 'approved')
-  .returns<Exam[]>();
-  if (studentError) throw studentError;
+  const [studentExamsResult, classStudentsResult] = await Promise.all([
+    supabase
+      .from('exams')
+      .select('id, studentId, subject, score, total')
+      .eq('studentId', studentId)
+      .eq('termId', termId)
+      .eq('examType', 'Midterm')
+      .eq('status', 'approved')
+      .returns<Exam[]>(),
+    supabase
+      .from('students')
+      .select('id')
+      .eq('className', student.className)
+      .returns<{ id: string }[]>(),
+  ]);
 
-const { data: classStudents, error: classError } = await supabase
-  .from('students')
-  .select('id')
-  .eq('className', student.className)
-  .returns<{ id: string }[]>();
+  const { data: studentExams, error: studentError } = studentExamsResult;
+  const { data: classStudents, error: classError } = classStudentsResult;
+
+  if (studentError) throw studentError;
   if (classError) throw classError;
 
   const classStudentIds = classStudents?.map(s => s.id) ?? [];
 
-  const { data: classExams, error: classExamsError } = await supabase
-  .from('exams')
-  .select('*')
-  .in('studentId', classStudentIds)
-  .eq('termId', termId)
-  .eq('examType', 'Midterm')
-  .eq('status', 'approved')
-  .returns<Exam[]>();
+  const { data: classExams, error: classExamsError } = classStudentIds.length > 0
+    ? await supabase
+        .from('exams')
+        .select('id, studentId, subject, score, total')
+        .in('studentId', classStudentIds)
+        .eq('termId', termId)
+        .eq('examType', 'Midterm')
+        .eq('status', 'approved')
+        .returns<Exam[]>()
+    : { data: [], error: null };
+
   if (classExamsError) throw classExamsError;
 
   const bySubject = new Map<string, MidtermScore>();
@@ -374,8 +418,8 @@ export async function getFinalReport(
 }
 
 // ── Students ──
-export async function getStudents(): Promise<Student[]> {
-  const { data, error } = await supabase.from('students').select('*');
+export async function getStudents(limit: number = MAX_QUERY_LIMIT): Promise<Student[]> {
+  const { data, error } = await applyLimit(supabase.from('students').select('*'), limit);
   if (error) throw error;
   return data || [];
 }
@@ -411,14 +455,21 @@ export async function getStudentsByParent(parentId: string): Promise<Student[]> 
 }
 
 
-export async function getStudentsByClass(className: string): Promise<Student[]> {
-  const { data, error } = await supabase.from('students').select('*').eq('className', className);
+export async function getStudentsByClass(className: string, limit: number = 100): Promise<Student[]> {
+  const { data, error } = await applyLimit(supabase.from('students').select('*').eq('className', className), limit);
   if (error) throw error;
   return data || [];
 }
 
-export async function getStudentsByClasses(classnames: string[], search?: string): Promise<Student[]> {
-  let query = supabase.from('students').select('*');
+export async function getStudentsByIds(ids: string[], limit: number = MAX_QUERY_LIMIT): Promise<Student[]> {
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+  const { data, error } = await applyLimit(supabase.from('students').select('*').in('id', ids), limit);
+  if (error) throw error;
+  return data || [];
+}
+
+export async function getStudentsByClasses(classnames: string[], search?: string, limit: number = MAX_QUERY_LIMIT): Promise<Student[]> {
+  let query = applyLimit(supabase.from('students').select('*'), limit);
   if (classnames && classnames.length > 0) {
     query = query.in('className', classnames);
   }
@@ -434,9 +485,217 @@ export async function getStudentsByClasses(classnames: string[], search?: string
 export async function getClasses(): Promise<string[]> {
   const { data, error } = await supabase.from('students').select('className');
   if (error) throw error;
-  const classes = Array.from(new Set((data || []).map((r: any) => r.className).filter(Boolean)));
+  const rows = (data || []) as Array<{ className?: string }>;
+  const classes = Array.from(new Set(rows.map(r => r.className).filter(Boolean)));
   classes.sort();
   return classes;
+}
+
+function hasProgressCountColumns(row: TeacherExamProgress): boolean {
+  return (
+    typeof row.homeworkEntered === 'number' &&
+    typeof row.caEntered === 'number' &&
+    typeof row.classworkEntered === 'number' &&
+    typeof row.attendanceEntered === 'number' &&
+    typeof row.quizEntered === 'number' &&
+    typeof row.totalStudents === 'number'
+  );
+}
+
+const teacherExamProgressCache = new Map<string, Promise<TeacherExamProgress[]>>();
+
+export async function getTeacherExamProgress(filters: {
+  month?: string;
+  className?: string;
+  classNames?: string[];
+  teacherId?: string;
+}): Promise<TeacherExamProgress[]> {
+  const month = filters.month;
+  const cacheKey = JSON.stringify(filters);
+  if (teacherExamProgressCache.has(cacheKey)) {
+    return teacherExamProgressCache.get(cacheKey)!;
+  }
+
+  const fetchPromise = (async () => {
+    try {
+      let query = supabase.from<TeacherExamProgress>('teacher_exam_progress').select('*');
+      if (month) query = query.eq('month', month);
+      if (filters.className) query = query.eq('className', filters.className);
+      if (filters.classNames && filters.classNames.length > 0) query = query.in('className', filters.classNames);
+      if (filters.teacherId) query = query.eq('teacherId', filters.teacherId);
+      const { data, error } = await query.order('completionPercent', { ascending: false });
+      if (error) throw error;
+      const rows = data || [];
+      if (rows.length > 0 && rows.some(row => !hasProgressCountColumns(row))) {
+        return getTeacherExamProgressFallback(filters);
+      }
+
+      // Adjust rows so that if CA is entered we treat it as satisfying the monthly requirement
+      const adjustedRows = rows.map(row => {
+        if (typeof row.caEntered === 'number' && row.caEntered > 0) {
+          return {
+            ...row,
+            requiredEntries: 1,
+            completedEntries: 1,
+            completionStatus: 'complete' as const,
+            completionPercent: 100,
+            missingExamTypes: [],
+          };
+        }
+        return row;
+      });
+
+      return adjustedRows;
+    } catch (error: any) {
+      if (error?.code === 'PGRST205' || /teacher_exam_progress/.test(error?.message)) {
+        return getTeacherExamProgressFallback(filters);
+      }
+      throw error;
+    }
+  })();
+
+  teacherExamProgressCache.set(cacheKey, fetchPromise);
+  try {
+    return await fetchPromise;
+  } catch (error) {
+    teacherExamProgressCache.delete(cacheKey);
+    throw error;
+  }
+}
+
+async function getTeacherExamProgressFallback(filters: {
+  month?: string;
+  className?: string;
+  classNames?: string[];
+  teacherId?: string;
+}): Promise<TeacherExamProgress[]> {
+  const classNames = filters.classNames?.length
+    ? filters.classNames
+    : filters.className
+    ? [filters.className]
+    : undefined;
+
+  let classSubjectQuery: any = supabase.from('class_subjects').select('id,className,subjectId,teacherId,subjects(name)');
+  if (filters.teacherId) classSubjectQuery = classSubjectQuery.eq('teacherId', filters.teacherId);
+  if (classNames && classNames.length > 0) classSubjectQuery = classSubjectQuery.in('className', classNames);
+  const { data: csData, error: csError } = await classSubjectQuery;
+  if (csError) throw csError;
+  const classSubjects = (csData || []) as Array<{
+    id: string;
+    className: string;
+    subjectId: string;
+    teacherId: string;
+    subjects?: { name: string };
+  }>;
+  if (classSubjects.length === 0) return [];
+
+  const classList = Array.from(new Set(classSubjects.map(cs => cs.className)));
+  const { data: students, error: studentError } = await supabase.from('students').select('id,className').in('className', classList);
+  if (studentError) throw studentError;
+  const studentMap = new Map((students || []).map((s: any) => [s.id, s.className]));
+  const studentIds = students?.map((s: any) => s.id) || [];
+
+  if (studentIds.length === 0) return [];
+
+  let examQuery: any = supabase.from('exams').select('*').in('studentId', studentIds);
+  if (filters.month) examQuery = examQuery.eq('month', filters.month);
+  if (filters.teacherId) examQuery = examQuery.eq('teacherId', filters.teacherId);
+  const { data: exams, error: examError } = await examQuery;
+  if (examError) throw examError;
+  const examRows = (exams || []) as Array<Exam>;
+  const months = filters.month ? [filters.month] : Array.from(new Set(examRows.map(e => e.month)));
+  if (months.length === 0) return [];
+
+  const groups = new Map<string, TeacherExamProgress>();
+  for (const cs of classSubjects) {
+    const subjectName = cs.subjects?.name || cs.subjectId;
+    const teacherId = cs.teacherId;
+    const className = cs.className;
+
+    const groupedRows = months.length > 0 ? months : [''];
+    for (const monthValue of groupedRows) {
+      const rowKey = `${teacherId}:${className}:${cs.subjectId}:${monthValue}`;
+      const relevantExams = examRows.filter(e =>
+        e.teacherId === teacherId &&
+        (e.subject === subjectName || e.subject === cs.subjectId) &&
+        studentMap.get(e.studentId) === className &&
+        (!monthValue || e.month === monthValue)
+      );
+
+      const completedTypes = new Set<string>(
+        relevantExams
+          .map(e => e.examType)
+          .filter((value): value is string => REQUIRED_MONTHLY_EXAM_TYPES.includes(value as RequiredMonthlyExamType))
+      );
+      const missingExamTypes = REQUIRED_MONTHLY_EXAM_TYPES.filter(type => !completedTypes.has(type));
+      const uniqueStudentsInClass = new Set(
+        students
+          .filter((student: any) => student.className === className)
+          .map((student: any) => student.id)
+      );
+      const caEntered = new Set(relevantExams.filter(e => e.examType === 'CA').map(e => e.studentId)).size;
+      const homeworkEntered = new Set(relevantExams.filter(e => e.examType === 'Homework').map(e => e.studentId)).size;
+      const classworkEntered = new Set(relevantExams.filter(e => e.examType === 'Classwork').map(e => e.studentId)).size;
+        const quizEntered = new Set(relevantExams.filter(e => e.examType === 'Quiz').map(e => e.studentId)).size;
+      const attendanceEntered = new Set(relevantExams.filter(e => e.examType === 'Attendance').map(e => e.studentId)).size;
+    
+
+      // If CA has entries, treat CA as satisfying the requirement and hide other CA types
+      if (caEntered > 0) {
+        groups.set(rowKey, {
+          teacherId,
+          teacherName: '',
+          className,
+          subjectId: cs.subjectId,
+          subjectName,
+          month: monthValue || '',
+          requiredEntries: 1,
+          completedEntries: 1,
+          completionStatus: 'complete',
+          completionPercent: 100,
+          caEntered,
+          homeworkEntered,
+          classworkEntered,
+          attendanceEntered,
+          quizEntered,
+          totalStudents: uniqueStudentsInClass.size,
+          missingExamTypes: [],
+        });
+      } else {
+        groups.set(rowKey, {
+          teacherId,
+          teacherName: '',
+          className,
+          subjectId: cs.subjectId,
+          subjectName,
+          month: monthValue || '',
+          requiredEntries: REQUIRED_MONTHLY_EXAM_TYPES.length,
+          completedEntries: completedTypes.size,
+          completionStatus: completedTypes.size === REQUIRED_MONTHLY_EXAM_TYPES.length ? 'complete' : 'incomplete',
+          completionPercent: Math.round((100.0 * completedTypes.size) / REQUIRED_MONTHLY_EXAM_TYPES.length * 100) / 100,
+          caEntered,
+          homeworkEntered,
+          classworkEntered,
+          attendanceEntered,
+          quizEntered,
+          totalStudents: uniqueStudentsInClass.size,
+          missingExamTypes,
+        });
+      }
+    }
+  }
+
+  if (groups.size === 0) return [];
+
+  const teacherIds = Array.from(new Set(classSubjects.map(cs => cs.teacherId)));
+  const { data: teachers, error: teacherError } = await supabase.from('users').select('id,name').in('id', teacherIds);
+  if (teacherError) throw teacherError;
+  const teacherMap = new Map((teachers || []).map((t: any) => [t.id, t.name]));
+
+  return Array.from(groups.values()).map(entry => ({
+    ...entry,
+    teacherName: teacherMap.get(entry.teacherId) || '',
+  }));
 }
 
 
@@ -497,7 +756,7 @@ export async function getTerms(): Promise<Term[]> {
   return data || [];
 }
 
-export async function createTerm(data: Omit<Term, 'id' | 'createdAt' | 'months'>): Promise<Term> {
+export async function createTerm(data: Omit<Term, 'id' | 'createdAt'>): Promise<Term> {
   const timestamp = Date.now();
   const id = `term-${timestamp}-${Math.random().toString(36).slice(2, 8)}`;
   const item = { id, ...data, months: data.months || [], createdAt: new Date().toISOString() };
@@ -555,9 +814,49 @@ export async function deleteStudent(id: string): Promise<boolean> {
 
 // ── Exams ──
 export async function getExams(): Promise<Exam[]> {
-  const { data, error } = await supabase.from('exams').select('*');
+  const { data, error } = await applyLimit(supabase.from('exams').select('*'), 100);
   if (error) throw error;
   return data || [];
+}
+
+export async function getExamsPaginated(
+  page: number = 1,
+  limit: number = 100,
+  statusFilter: ExamStatus | 'all' = 'all',
+  studentIds?: string[],
+  subjectFilter?: string,
+  search?: string
+): Promise<{ exams: Exam[]; total: number }> {
+  const from = (page - 1) * limit;
+  const to = from + limit - 1;
+  let query: any = supabase.from('exams').select('*', { count: 'exact' });
+
+  if (statusFilter !== 'all') query = query.eq('status', statusFilter);
+  if (studentIds && studentIds.length > 0) query = query.in('studentId', studentIds);
+  if (subjectFilter && subjectFilter !== 'All') query = query.eq('subject', subjectFilter);
+  if (search && search.trim()) query = query.ilike('subject', `%${search}%`);
+
+  const { data, error, count } = await query.range(from, to);
+  if (error) throw error;
+  return { exams: data || [], total: count || 0 };
+}
+
+export async function getExamCount(
+  statusFilter: ExamStatus | 'all' = 'all',
+  studentIds?: string[],
+  subjectFilter?: string,
+  search?: string
+): Promise<number> {
+  let query: any = supabase.from('exams').select('id', { count: 'exact', head: true });
+
+  if (statusFilter !== 'all') query = query.eq('status', statusFilter);
+  if (studentIds && studentIds.length > 0) query = query.in('studentId', studentIds);
+  if (subjectFilter && subjectFilter !== 'All') query = query.eq('subject', subjectFilter);
+  if (search && search.trim()) query = query.ilike('subject', `%${search}%`);
+
+  const { count, error } = await query;
+  if (error) throw error;
+  return count || 0;
 }
 
 export async function getExamsByStudent(studentId: string): Promise<Exam[]> {
@@ -638,29 +937,29 @@ export async function updateExam(id: string, data: Partial<Exam>): Promise<Exam 
 
 // Report comments (teacher/principal remarks)
 export async function getReportComment(studentId: string, termId: string, examId?: string): Promise<ReportComment | null> {
-  let query = supabase.from('report_comments').select('*');
+  let query = supabase.from('report_comments').select('*').eq('studentId', studentId).eq('termId', termId);
   if (examId) query = query.eq('examId', examId);
-  else query = query.eq('studentId', studentId).eq('termId', termId);
   const { data, error } = await query.maybeSingle();
   if (error) return null;
   return data || null;
 }
 
 export async function upsertReportComment(comment: Omit<ReportComment, 'id' | 'createdAt'>): Promise<ReportComment | null> {
-  // Always check for existing by studentId, termId, and examId (all required for unique comment per subject)
   if (!comment.examId) {
     throw new Error('examId is required to allow multiple comments for different subjects.');
   }
-  const { data: existingRows, error: findError } = await supabase
+
+  const { data: existing, error: findError } = await supabase
     .from('report_comments')
-    .select('*')
+    .select('id')
     .eq('studentId', comment.studentId)
     .eq('termId', comment.termId)
-    .eq('examId', comment.examId);
-  if (findError) return null;
-  const existing = (existingRows && existingRows.length > 0) ? existingRows[0] : null;
+    .eq('examId', comment.examId)
+    .maybeSingle();
 
-  if (existing && existing.id) {
+  if (findError) return null;
+
+  if (existing?.id) {
     const { data, error } = await supabase.from('report_comments').update(comment).eq('id', existing.id).select().single();
     if (error) return null;
     return data || null;
@@ -715,7 +1014,11 @@ export async function deleteClassSubject(id: string) {
 
 // Fetch all report comments for a student & term
 export async function getReportCommentsForStudentTerm(studentId: string, termId: string): Promise<ReportComment[]> {
-  const { data, error } = await supabase.from('report_comments').select('*').eq('studentId', studentId).eq('termId', termId);
+  const { data, error } = await supabase
+    .from('report_comments')
+    .select('id, studentId, termId, examId, teacherComment, principalComment, teacherId, createdAt')
+    .eq('studentId', studentId)
+    .eq('termId', termId);
   if (error) return [];
   return data || [];
 }
@@ -771,216 +1074,46 @@ export async function bulkCreateExams(dataList: Omit<Exam, 'id' | 'createdAt'>[]
 
 // ── Stats ──
 export async function getSystemStats() {
-  const [users, students, exams] = await Promise.all([
-    getUsers(),
-    getStudents(),
-    getExams()
+  const [teachersResult, parentsResult, totalStudentsResult, totalExamsResult, pendingExamsResult, approvedExamsResult, rejectedExamsResult, examScoreResult] = await Promise.all([
+    supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'teacher'),
+    supabase.from('users').select('id', { count: 'exact', head: true }).eq('role', 'parent'),
+    supabase.from('students').select('id', { count: 'exact', head: true }),
+    supabase.from('exams').select('id', { count: 'exact', head: true }),
+    supabase.from('exams').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+    supabase.from('exams').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
+    supabase.from('exams').select('id', { count: 'exact', head: true }).eq('status', 'rejected'),
+    supabase.from('exams').select('score, total'),
   ]);
 
+  if (teachersResult.error) throw teachersResult.error;
+  if (parentsResult.error) throw parentsResult.error;
+  if (totalStudentsResult.error) throw totalStudentsResult.error;
+  if (totalExamsResult.error) throw totalExamsResult.error;
+  if (pendingExamsResult.error) throw pendingExamsResult.error;
+  if (approvedExamsResult.error) throw approvedExamsResult.error;
+  if (rejectedExamsResult.error) throw rejectedExamsResult.error;
+  if (examScoreResult.error) throw examScoreResult.error;
+
+  const scoreRows = examScoreResult.data || [];
+  const averageScore = scoreRows.length > 0
+    ? Math.round(scoreRows.reduce((sum, exam) => sum + (exam.total > 0 ? (exam.score / exam.total) * 100 : 0), 0) / scoreRows.length)
+    : 0;
+
   return {
-    totalTeachers: users.filter(u => u.role === 'teacher').length,
-    totalParents: users.filter(u => u.role === 'parent').length,
-    totalStudents: students.length,
-    totalExams: exams.length,
-    pendingExams: exams.filter(e => e.status === 'pending').length,
-    approvedExams: exams.filter(e => e.status === 'approved').length,
-    rejectedExams: exams.filter(e => e.status === 'rejected').length,
-    averageScore: exams.length > 0
-      ? Math.round(exams.reduce((sum, e) => sum + (e.score / e.total) * 100, 0) / exams.length)
-      : 0,
+    totalTeachers: teachersResult.count ?? 0,
+    totalParents: parentsResult.count ?? 0,
+    totalStudents: totalStudentsResult.count ?? 0,
+    totalExams: totalExamsResult.count ?? 0,
+    pendingExams: pendingExamsResult.count ?? 0,
+    approvedExams: approvedExamsResult.count ?? 0,
+    rejectedExams: rejectedExamsResult.count ?? 0,
+    averageScore,
   };
 }
 
 // ── Seeding ──
 export async function isSeeded(): Promise<boolean> {
-  const users = await getUsers();
-  return users.length > 0;
-}
-
-export async function seedDatabase(): Promise<void> {
-  // Clear existing data
-  await supabase.from('exams').delete().neq('id', ''); // Delete all
-  await supabase.from('students').delete().neq('id', '');
-  await supabase.from('users').delete().neq('id', '');
-
-  const now = new Date().toISOString();
-
-  // Users
-  const admin: User = {
-    id: 'admin-001', name: 'Dr. Sarah Mitchell', email: 'admin@campus.edu',
-    role: 'admin', createdAt: now,
-  };
-
-  const teacher1: User = {
-    id: 'teacher-001', name: 'Prof. James Wilson', email: 'jwilson@campus.edu',
-    role: 'teacher', assignedClasses: ['Grade 10-A', 'Grade 9-A', 'Grade 8-B'],
-    createdAt: now,
-  };
-
-  const teacher2: User = {
-    id: 'teacher-002', name: 'Ms. Emily Chen', email: 'echen@campus.edu',
-    role: 'teacher', assignedClasses: ['Grade 7-C', 'Grade 10-A'],
-    createdAt: now,
-  };
-
-  const parent1: User = {
-    id: 'parent-001', name: 'Michael Johnson', email: 'mjohnson@email.com',
-    role: 'parent', phone1: '0612345678', phone2: '0612345679',
-    xafada: 'Hodan', udow: 'Bakaaraha', 
-    createdAt: now,
-  };
-
-  const parent2: User = {
-    id: 'parent-002', name: 'Lisa Rodriguez', email: 'lrodriguez@email.com',
-    role: 'parent', phone1: '0617654321', phone2: '0617654322',
-    xafada: 'Warta Nabadda', udow: 'Km4 Junction',
-createdAt: now,
-  };
-
-  const parent3: User = {
-    id: 'parent-003', name: 'David Thompson', email: 'dthompson@email.com',
-    role: 'parent', phone1: '0615551234', phone2: '0615551235',
-    xafada: 'Dharkenley', udow: 'Ex-Control', 
-    createdAt: now,
-  };
-
-  const users = [admin, teacher1, teacher2, parent1, parent2, parent3];
-
-  // Students
-  const students: Student[] = [
-    { id: 'student-001', name: 'Emma Johnson', className: 'Grade 10-A', parentId: 'parent-001', createdAt: now },
-    { id: 'student-002', name: 'Liam Johnson', className: 'Grade 8-B', parentId: 'parent-001', createdAt: now },
-    { id: 'student-003', name: 'Sofia Rodriguez', className: 'Grade 10-A', parentId: 'parent-002', createdAt: now },
-    { id: 'student-004', name: 'Noah Thompson', className: 'Grade 9-A', parentId: 'parent-003', createdAt: now },
-    { id: 'student-005', name: 'Ava Thompson', className: 'Grade 7-C', parentId: 'parent-003', createdAt: now },
-  ];
-
-  // Comprehensive exam data for reports
-  const subjects = ['Mathematics', 'English', 'Science', 'Somali', 'Islamic Studies'];
-  const exams: Exam[] = [];
-  let examCounter = 1;
-
-  function addExam(
-    studentId: string, subject: string, score: number, total: number,
-    examType: ExamType, month: string, status: ExamStatus,
-    parentId: string, teacherId: string, dateStr: string
-  ) {
-    exams.push({
-      id: `exam-${String(examCounter++).padStart(3, '0')}`,
-      studentId, subject, score, total, examType, month, status,
-      parentId, date: dateStr, createdAt: now, teacherId,
-    });
-  }
-
-  // ─── Student 1: Emma Johnson (Grade 10-A, parent-001) ───
-  // January CA work
-  subjects.forEach((sub, i) => {
-    addExam('student-001', sub, [85, 78, 92, 88, 76][i], 100, 'CA', 'January', 'approved', 'parent-001', 'teacher-001', '2025-01-15');
-    addExam('student-001', sub, [80, 82, 88, 85, 70][i], 100, 'Homework', 'January', 'approved', 'parent-001', 'teacher-001', '2025-01-20');
-  });
-  // February CA work
-  subjects.forEach((sub, i) => {
-    addExam('student-001', sub, [90, 85, 95, 82, 80][i], 100, 'CA', 'February', 'approved', 'parent-001', 'teacher-001', '2025-02-10');
-    addExam('student-001', sub, [88, 80, 90, 86, 78][i], 100, 'Classwork', 'February', 'approved', 'parent-001', 'teacher-002', '2025-02-18');
-    addExam('student-001', sub, [82, 76, 88, 84, 72][i], 100, 'Quiz', 'February', 'approved', 'parent-001', 'teacher-001', '2025-02-25');
-  });
-  // March - Midterm
-  subjects.forEach((sub, i) => {
-    addExam('student-001', sub, [88, 82, 94, 86, 78][i], 100, 'Midterm', 'March', 'approved', 'parent-001', 'teacher-001', '2025-03-15');
-  });
-  // April CA
-  subjects.forEach((sub, i) => {
-    addExam('student-001', sub, [92, 88, 96, 90, 82][i], 100, 'CA', 'April', 'approved', 'parent-001', 'teacher-001', '2025-04-10');
-    addExam('student-001', sub, [86, 84, 90, 88, 80][i], 100, 'Homework', 'April', 'approved', 'parent-001', 'teacher-002', '2025-04-20');
-  });
-  // May - Final
-  subjects.forEach((sub, i) => {
-    addExam('student-001', sub, [90, 86, 95, 88, 80][i], 100, 'Final', 'May', 'approved', 'parent-001', 'teacher-001', '2025-05-20');
-  });
-
-  // ─── Student 2: Liam Johnson (Grade 8-B, parent-001) ───
-  subjects.forEach((sub, i) => {
-    addExam('student-002', sub, [72, 68, 80, 75, 65][i], 100, 'CA', 'January', 'approved', 'parent-001', 'teacher-001', '2025-01-15');
-    addExam('student-002', sub, [70, 72, 78, 74, 60][i], 100, 'Homework', 'January', 'approved', 'parent-001', 'teacher-001', '2025-01-22');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-002', sub, [78, 74, 82, 80, 68][i], 100, 'CA', 'February', 'approved', 'parent-001', 'teacher-001', '2025-02-12');
-    addExam('student-002', sub, [75, 70, 80, 76, 66][i], 100, 'Quiz', 'February', 'approved', 'parent-001', 'teacher-001', '2025-02-26');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-002', sub, [76, 72, 84, 78, 66][i], 100, 'Midterm', 'March', 'approved', 'parent-001', 'teacher-001', '2025-03-15');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-002', sub, [80, 76, 86, 82, 70][i], 100, 'CA', 'April', 'approved', 'parent-001', 'teacher-001', '2025-04-12');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-002', sub, [78, 74, 85, 80, 68][i], 100, 'Final', 'May', 'approved', 'parent-001', 'teacher-001', '2025-05-22');
-  });
-
-  // ─── Student 3: Sofia Rodriguez (Grade 10-A, parent-002) ───
-  subjects.forEach((sub, i) => {
-    addExam('student-003', sub, [95, 90, 88, 92, 86][i], 100, 'CA', 'January', 'approved', 'parent-002', 'teacher-001', '2025-01-15');
-    addExam('student-003', sub, [92, 88, 85, 90, 84][i], 100, 'Homework', 'January', 'approved', 'parent-002', 'teacher-002', '2025-01-21');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-003', sub, [96, 92, 90, 94, 88][i], 100, 'CA', 'February', 'approved', 'parent-002', 'teacher-001', '2025-02-14');
-    addExam('student-003', sub, [90, 86, 88, 92, 82][i], 100, 'Classwork', 'February', 'approved', 'parent-002', 'teacher-002', '2025-02-20');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-003', sub, [94, 90, 92, 96, 88][i], 100, 'Midterm', 'March', 'approved', 'parent-002', 'teacher-001', '2025-03-15');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-003', sub, [98, 94, 92, 96, 90][i], 100, 'CA', 'April', 'approved', 'parent-002', 'teacher-001', '2025-04-10');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-003', sub, [96, 92, 94, 98, 90][i], 100, 'Final', 'May', 'approved', 'parent-002', 'teacher-001', '2025-05-20');
-  });
-
-  // ─── Student 4: Noah Thompson (Grade 9-A, parent-003) ───
-  subjects.forEach((sub, i) => {
-    addExam('student-004', sub, [65, 70, 58, 72, 60][i], 100, 'CA', 'January', 'approved', 'parent-003', 'teacher-001', '2025-01-16');
-    addExam('student-004', sub, [60, 68, 55, 70, 58][i], 100, 'Homework', 'January', 'approved', 'parent-003', 'teacher-001', '2025-01-23');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-004', sub, [70, 72, 62, 76, 64][i], 100, 'CA', 'February', 'approved', 'parent-003', 'teacher-001', '2025-02-11');
-    addExam('student-004', sub, [68, 74, 60, 72, 62][i], 100, 'Quiz', 'February', 'approved', 'parent-003', 'teacher-001', '2025-02-24');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-004', sub, [72, 76, 64, 78, 66][i], 100, 'Midterm', 'March', 'approved', 'parent-003', 'teacher-001', '2025-03-16');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-004', sub, [74, 78, 66, 80, 68][i], 100, 'CA', 'April', 'pending', 'parent-003', 'teacher-001', '2025-04-14');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-004', sub, [70, 74, 62, 76, 64][i], 100, 'Final', 'May', 'pending', 'parent-003', 'teacher-001', '2025-05-21');
-  });
-
-  // ─── Student 5: Ava Thompson (Grade 7-C, parent-003) ───
-  subjects.forEach((sub, i) => {
-    addExam('student-005', sub, [88, 82, 90, 84, 78][i], 100, 'CA', 'January', 'approved', 'parent-003', 'teacher-002', '2025-01-17');
-    addExam('student-005', sub, [85, 80, 88, 82, 76][i], 100, 'Classwork', 'January', 'approved', 'parent-003', 'teacher-002', '2025-01-24');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-005', sub, [90, 86, 92, 88, 82][i], 100, 'CA', 'February', 'approved', 'parent-003', 'teacher-002', '2025-02-13');
-    addExam('student-005', sub, [86, 82, 90, 84, 78][i], 100, 'Quiz', 'February', 'approved', 'parent-003', 'teacher-002', '2025-02-27');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-005', sub, [88, 84, 92, 86, 80][i], 100, 'Midterm', 'March', 'approved', 'parent-003', 'teacher-002', '2025-03-17');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-005', sub, [92, 88, 94, 90, 84][i], 100, 'CA', 'April', 'approved', 'parent-003', 'teacher-002', '2025-04-11');
-  });
-  subjects.forEach((sub, i) => {
-    addExam('student-005', sub, [90, 86, 94, 88, 82][i], 100, 'Final', 'May', 'approved', 'parent-003', 'teacher-002', '2025-05-22');
-  });
-
-  await bulkCreateUsers(users);
-  await bulkCreateStudents(students);
-  await bulkCreateExams(exams);
-}
-
-export async function clearDatabase(): Promise<void> {
-  await supabase.from('exams').delete().neq('id', '');
-  await supabase.from('students').delete().neq('id', '');
-  await supabase.from('users').delete().neq('id', '');
+  const { data, error } = await supabase.from('users').select('id').limit(1);
+  if (error) return false;
+  return Boolean(data?.length);
 }

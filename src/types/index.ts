@@ -1,9 +1,9 @@
 export type Role = 'admin' | 'teacher' | 'parent' | 'supervisor';
 export type ExamStatus = 'pending' | 'approved' | 'rejected';
-export type ExamType = 'CA' | 'Homework' | 'Classwork' | 'Quiz' | 'Midterm' | 'Final';
+export type ExamType = 'CA' | 'Homework' | 'Classwork' | 'Quiz' | 'Midterm' | 'Final'| 'Attendance';
 
-export const EXAM_TYPES: ExamType[] = ['CA', 'Homework', 'Classwork', 'Quiz', 'Midterm', 'Final'];
-export const CA_TYPES: ExamType[] = ['CA', 'Homework', 'Classwork', 'Quiz'];
+export const EXAM_TYPES: ExamType[] = ['CA', 'Homework', 'Classwork', 'Quiz', 'Midterm', 'Final', 'Attendance'];
+export const CA_TYPES: ExamType[] = ['CA', 'Homework', 'Classwork', 'Quiz', 'Attendance'];
 
 export const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -106,6 +106,26 @@ export interface Exam {
   date: string;
   createdAt: string;
   teacherId: string;
+}
+
+export interface TeacherExamProgress {
+  teacherId: string;
+  teacherName: string;
+  className: string;
+  subjectId: string;
+  subjectName: string;
+  month: string;
+  requiredEntries: number;
+  completedEntries: number;
+  completionStatus: 'complete' | 'incomplete';
+  completionPercent: number;
+  homeworkEntered: number;
+  caEntered: number;
+  classworkEntered: number;
+  attendanceEntered: number;
+  quizEntered: number;
+  totalStudents: number;
+  missingExamTypes: string[];
 }
 
 export interface RoleSession {
