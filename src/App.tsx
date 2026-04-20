@@ -14,6 +14,7 @@ import { ManageStudents } from './pages/admin/ManageStudents';
 import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
 import { ExamVerification } from './pages/admin/ExamVerification';
+import { MonitorTeachers } from './pages/admin/MonitorTeachers';
 
 // Supervisor Pages
 import { SupervisorDashboard } from './pages/supervisor/SupervisorDashboard';
@@ -92,6 +93,7 @@ function AppContent() {
             case '/admin/academic': return <ManageAcademic />;
             case '/admin/bulk': return <BulkUpload />;
             case '/admin/exams': return <ExamVerification />;
+            case '/admin/monitor': return <MonitorTeachers />;
             case '/admin/exam-reports': return <ExamReport />;
             default: return <AdminDashboard navigate={navigate} />;
           }
