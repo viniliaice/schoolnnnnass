@@ -20,12 +20,25 @@ export function TeacherStudents() {
       const teacher = await getUserById(session.userId);
       const cls = teacher?.assignedClasses || [];
       setClasses(cls);
+
+      // Fetch students and a base parents list, then ensure any parentIds
+      // referenced by students are included even if missing from the paged
+      // users query (helps when some parent profiles exist only in auth
+      // or the users table is out-of-sync).
       const [studentsData, parentsData] = await Promise.all([
         getStudentsByClasses(cls),
         getUsersByRole('parent')
       ]);
+      const parentsList = parentsData || [];
+      const parentIdsFromStudents = Array.from(new Set((studentsData || []).map((s: Student) => s.parentId).filter((x): x is string => !!x)));
+      const missingParentIds = parentIdsFromStudents.filter((id: string) => !parentsList.some(p => p.id === id));
+      if (missingParentIds.length > 0) {
+        const fetched = await Promise.all(missingParentIds.map(id => getUserById(id)));
+        for (const u of fetched) if (u) parentsList.push(u);
+      }
+
       setStudents(studentsData);
-      setParents(parentsData);
+      setParents(parentsList);
     };
 
     loadData();

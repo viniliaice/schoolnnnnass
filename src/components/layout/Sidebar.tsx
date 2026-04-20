@@ -23,6 +23,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Manage Class Subjects', icon: School, path: '/admin/class-subjects' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
     { label: 'Exam Verification', icon: ClipboardCheck, path: '/admin/exams' },
+    { label: 'Monitor Teacher', icon: ClipboardCheck, path: '/admin/monitor' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/admin/exam-reports' },
   ],
   teacher: [
