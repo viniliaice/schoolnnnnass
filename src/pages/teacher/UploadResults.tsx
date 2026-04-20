@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getUserById, getStudentsByClasses, bulkCreateExams, getCurrentTerm, getSubjects, getClassSubjectsForTeacher, upsertReportComment, getClassAssignmentsForTeacher } from '../../lib/database';
+import { getUserById, getStudentsByClasses, bulkCreateExams, getCurrentTerm, getSubjects, getClassSubjectsForTeacher, upsertReportComment, getClassAssignmentsForTeacher, logAllClassSubjects } from '../../lib/database';
 import { ExamType, EXAM_TYPES, MONTHS, SUBJECTS, Term, Subject } from '../../types';
 import { Dialog } from '../../components/ui/Dialog';
 import { useToast } from '../../context/ToastContext';
@@ -14,7 +14,7 @@ interface StudentScore {
   studentId: string;
   studentName: string;
   className: string;
-  parentId: string;
+  parentId: string | null;
   score: string;
   included: boolean;
   comment?: string;

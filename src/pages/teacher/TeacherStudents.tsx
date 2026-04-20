@@ -1,14 +1,14 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { getUserById, getStudentsByClasses, getUsersByRole } from '../../lib/database';
-import { Student } from '../../types';
+import { Student, User } from '../../types';
 import { GraduationCap, Search } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 export function TeacherStudents() {
   const { session } = useRole();
   const [students, setStudents] = useState<Student[]>([]);
-  const [parents, setParents] = useState([]);
+  const [parents, setParents] = useState<User[]>([]);
   const [classes, setClasses] = useState<string[]>([]);
   const [classFilter, setClassFilter] = useState('all');
   const [search, setSearch] = useState('');

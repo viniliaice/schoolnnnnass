@@ -1,16 +1,17 @@
 import { useEffect, useState } from 'react';
-import { getClassSubjects, createClassSubject, updateClassSubject, deleteClassSubject, getUsers, getSubjects } from '../../lib/database';
+import { getClassSubjects, createClassSubject, updateClassSubject, deleteClassSubject, getUsers, getSubjects, getUserById } from '../../lib/database';
+
 import { Dialog } from '../../components/ui/Dialog';
 import { Listbox } from '@headlessui/react';
 import { useToast } from '../../context/ToastContext';
-import { CLASSES } from '../../types';
+import { CLASSES, User } from '../../types';
 import { Plus, Trash2, Edit } from 'lucide-react';
-import { cn } from '../../utils/cn';
+// utils/cn not used in this file
 
 export function ManageClassSubjects() {
   const { addToast } = useToast();
   const [items, setItems] = useState<any[]>([]);
-  const [teachers, setTeachers] = useState<any[]>([]);
+  const [teachers, setTeachers] = useState<User[]>([]);
   const [subjects, setSubjects] = useState<any[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<any | null>(null);
@@ -23,7 +24,22 @@ export function ManageClassSubjects() {
   const refresh = async () => {
     const [rows, users, subs] = await Promise.all([getClassSubjects(), getUsers(), getSubjects()]);
     setItems(rows);
-    setTeachers(users.filter((u:any) => u.role === 'teacher'));
+    // Be resilient to role casing or whitespace in DB
+    let teacherList = (users || []).filter((u: User) => String(u.role || '').toLowerCase().trim() === 'teacher');
+
+    // Include any teacher profiles referenced by class_subjects that are
+    // missing from the users table page we fetched. This helps if some
+    // teacher accounts were created in Auth but the profile row is missing.
+    const teacherIdsFromRows = Array.from(new Set((rows || []).map((r: any) => r.teacherId).filter(Boolean)));
+    const missingIds = teacherIdsFromRows.filter((id: string) => !teacherList.some(t => t.id === id));
+    if (missingIds.length > 0) {
+      const fetched = await Promise.all(missingIds.map(id => getUserById(id)));
+      for (const u of fetched) {
+        if (u) teacherList.push(u);
+      }
+    }
+
+    setTeachers(teacherList);
     setSubjects(subs);
   };
 

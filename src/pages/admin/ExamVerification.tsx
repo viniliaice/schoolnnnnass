@@ -316,7 +316,7 @@ export function ExamVerification() {
 
         <div className="flex gap-2 flex-wrap items-center">
         {tabs.map(tab => (
-          <button key={tab.value} onClick={() => setStatusFilter(tab.value)}
+          <button key={tab.value} onClick={() => setStatusFilter(tab.value as any)}
             className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
               statusFilter === tab.value
                 ? (tab.value === 'pending' ? 'bg-amber-100 text-amber-700' : tab.value === 'approved' ? 'bg-emerald-100 text-emerald-700' : tab.value === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-indigo-100 text-indigo-700') + ' ring-2 ring-offset-1 ring-slate-200'

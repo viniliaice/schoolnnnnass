@@ -18,7 +18,7 @@ import {
   getReportCommentsForStudentTerm,
 } from '../../lib/database';
 import type { ReportComment } from '../../types';
-import { Student, MONTHS, MonthlyScore, getGrade } from '../../types';
+import { Student, MONTHS, MonthlyScore } from '../../types';
 import { PDFDownloadLink, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 import type { MidtermReport, FinalReport } from '../../types';
 import { Calendar, FileBarChart, FileText, Award } from 'lucide-react';
@@ -226,7 +226,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
           const comments = await getReportCommentsForStudentTerm(selectedStudent, term.id);
           const map: Record<string, ReportComment | undefined> = {};
           for (const c of comments) {
-            if (c.examId) map[c.examId] = c;
+            if (c.examId) map[c.examId] = c as any;
           }
           setReportComments(map);
         } catch (err) {
@@ -562,7 +562,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
                         <td className="px-4 py-3 text-center">{r.midterm_score}</td>
                         <td className="px-4 py-3 text-center">{r.final_score}</td>
                         <td className="px-4 py-3 text-center">{r.total}</td>
-                        <td className="px-4 py-3">{r.grade || ''}
+                        <td className="px-4 py-3">{(r as any).grade || ''}
                           {/* final RPC might not include examId per row; show general teacherComment if present */}
                           {teacherComment && (
                             <div className="mt-2 text-sm text-slate-700 bg-slate-50 p-2 rounded">Comment: {teacherComment}</div>

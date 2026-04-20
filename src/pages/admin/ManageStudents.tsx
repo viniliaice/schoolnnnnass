@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Listbox } from '@headlessui/react';
-import { getStudentsPaginated, getStudentsByClasses, getUsersByRole, createStudent, updateStudent, deleteStudent, getExamsByStudent, getStudentById, getReportCommentsForStudentTerm, getCurrentTerm } from '../../lib/database';
+import { getStudentsPaginated, getStudentsByClasses, getUsersByRole, createStudent, updateStudent, deleteStudent, getExamsByStudent, getStudentById, getCurrentTerm, getUserById } from '../../lib/database';
+import { getReportCommentsForStudentTerm as getReportCommentsForStudentTermDirect } from '../../lib/db/reports';
 import { Student, User, CLASSES, Exam } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { Dialog } from '../../components/ui/Dialog';
@@ -41,7 +42,7 @@ export function ManageStudents() {
         // Try to fetch report comments for the current term
         const term = await getCurrentTerm();
         if (term) {
-          const comments = await getReportCommentsForStudentTerm(examStudentId, term.id);
+            const comments = await getReportCommentsForStudentTermDirect(examStudentId, term.id);
           const map: Record<string, string> = {};
           for (const c of comments) {
             if (c.examId && c.teacherComment) map[c.examId] = c.teacherComment;
@@ -80,6 +81,15 @@ export function ManageStudents() {
       ]);
       setStudents(studentsData);
       setTotalStudents(studentsData.length);
+      // Ensure parents list includes any parentIds referenced by students
+      const parentIdsFromStudents = Array.from(new Set((studentsData || []).map((s: Student) => s.parentId).filter((x): x is string => !!x)));
+      const missingParentIds = parentIdsFromStudents.filter((id: string) => !parentsData.some(p => p.id === id));
+      if (missingParentIds.length > 0) {
+        const fetched = await Promise.all(missingParentIds.map(id => getUserById(id)));
+        for (const u of fetched) {
+          if (u) parentsData.push(u);
+        }
+      }
       setParents(parentsData);
       return;
     }
@@ -90,6 +100,15 @@ export function ManageStudents() {
     ]);
     setStudents(studentsData.students);
     setTotalStudents(studentsData.total);
+    // Ensure parents list includes any parentIds referenced by students
+    const parentIdsFromStudents = Array.from(new Set((studentsData.students || []).map((s: Student) => s.parentId).filter((x): x is string => !!x)));
+    const missingParentIds = parentIdsFromStudents.filter((id: string) => !parentsData.some(p => p.id === id));
+    if (missingParentIds.length > 0) {
+      const fetched = await Promise.all(missingParentIds.map(id => getUserById(id)));
+      for (const u of fetched) {
+        if (u) parentsData.push(u);
+      }
+    }
     setParents(parentsData);
   };
 
