@@ -4,7 +4,6 @@ import { ToastProvider } from './context/ToastContext';
 import { ToastContainer } from './components/ui/Toast';
 import { LoginPage } from './components/landing/LoginPage';
 import { SignUpPage } from './components/landing/SignUpPage';
-import { LandingPage } from './components/landing/LandingPage';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 
 // Admin Pages

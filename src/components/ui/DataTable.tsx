@@ -12,7 +12,7 @@ import {
   SortingState,
   ColumnFiltersState,
 } from '@tanstack/react-table';
-import { ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react';
+// lucide icons intentionally omitted where unused
 import { cn } from '../../utils/cn';
 
 interface DataTableProps<TData> {

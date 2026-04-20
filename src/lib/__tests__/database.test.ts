@@ -19,7 +19,7 @@ describe('database helpers', () => {
   it('getUsers returns rows from supabase', async () => {
     const users = [{ id: 'u1', name: 'Alice' }, { id: 'u2', name: 'Bob' }];
     // chain: supabase.from('users').select('*') -> resolves { data, error }
-    mockFrom.mockImplementation((table: string) => ({
+    mockFrom.mockImplementation((_table: string) => ({
       select: (_sel: any) => Promise.resolve({ data: users, error: null })
     }));
 
@@ -30,7 +30,7 @@ describe('database helpers', () => {
 
   it('getStudents returns rows from supabase', async () => {
     const students = [{ id: 's1', name: 'Student1' }];
-    mockFrom.mockImplementation((table: string) => ({
+    mockFrom.mockImplementation((_table: string) => ({
       select: (_sel: any) => Promise.resolve({ data: students, error: null })
     }));
 
@@ -42,7 +42,7 @@ describe('database helpers', () => {
   it('logAllClassSubjects respects limit and returns range data', async () => {
     const rows = [{ id: 'c1' }, { id: 'c2' }];
     // chain: supabase.from('class_subjects').select('*').range(from,to)
-    mockFrom.mockImplementation((table: string) => ({
+    mockFrom.mockImplementation((_table: string) => ({
       select: (_sel: any) => ({
         range: (_from: number, _to: number) => Promise.resolve({ data: rows, error: null })
       })

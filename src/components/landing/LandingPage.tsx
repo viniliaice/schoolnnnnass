@@ -6,7 +6,7 @@ import { Role } from '../../types';
 import { Shield, BookOpen, Heart, Database, School, Sparkles, ArrowRight, CheckCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
-const roles: { role: Role; label: string; description: string; icon: typeof Shield; color: string; bgColor: string; borderColor: string; userId: string; userName: string }[] = [
+const roles: { role: Role; label: string; description: string; icon: typeof Shield; color: string; bgColor: string; borderColor: string; email: string; password: string; userName: string }[] = [
   {
     role: 'admin',
     label: 'Enter as Admin',
@@ -15,7 +15,8 @@ const roles: { role: Role; label: string; description: string; icon: typeof Shie
     color: 'text-indigo-600',
     bgColor: 'bg-indigo-50 hover:bg-indigo-100',
     borderColor: 'border-indigo-200 hover:border-indigo-300',
-    userId: 'admin-001',
+    email: 'admin@scholo.com',
+    password: 'admin123',
     userName: 'Dr. Sarah Mitchell',
   },
   {
@@ -26,7 +27,8 @@ const roles: { role: Role; label: string; description: string; icon: typeof Shie
     color: 'text-teal-600',
     bgColor: 'bg-teal-50 hover:bg-teal-100',
     borderColor: 'border-teal-200 hover:border-teal-300',
-    userId: 'teacher-001',
+    email: 'teacher@scholo.com',
+    password: 'teacher123',
     userName: 'Prof. James Wilson',
   },
   {
@@ -37,7 +39,8 @@ const roles: { role: Role; label: string; description: string; icon: typeof Shie
     color: 'text-violet-600',
     bgColor: 'bg-violet-50 hover:bg-violet-100',
     borderColor: 'border-violet-200 hover:border-violet-300',
-    userId: 'parent-001',
+    email: 'parent@scholo.com',
+    password: 'parent123',
     userName: 'Michael Johnson',
   },
 ];
@@ -76,13 +79,17 @@ export function LandingPage() {
     }
   };
 
-  const handleRoleSelect = (roleConfig: typeof roles[0]) => {
+  const handleRoleSelect = async (roleConfig: typeof roles[0]) => {
     if (!seeded) {
       addToast({ type: 'error', title: 'Database not seeded', description: 'Please seed the database first before entering.' });
       return;
     }
-    login(roleConfig.role, roleConfig.userId, roleConfig.userName);
-    addToast({ type: 'success', title: `Welcome, ${roleConfig.userName}!`, description: `Logged in as ${roleConfig.role}` });
+    try {
+      await login(roleConfig.email, roleConfig.password);
+      addToast({ type: 'success', title: `Welcome, ${roleConfig.userName}!`, description: `Logged in as ${roleConfig.role}` });
+    } catch (err) {
+      addToast({ type: 'error', title: 'Login failed', description: String(err) });
+    }
   };
 
   return (
