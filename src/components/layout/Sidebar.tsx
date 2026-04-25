@@ -4,7 +4,7 @@ import { Role } from '../../types';
 import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   Upload, LogOut, Menu, X, BookOpen, ChevronRight, School,
-  Calendar, FileBarChart, Award, DatabaseBackup
+  Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
@@ -22,6 +22,9 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
     { label: 'Manage Class Subjects', icon: School, path: '/admin/class-subjects' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
+    { label: 'Announcements', icon: BellRing, path: '/admin/announcements' },
+    { label: 'Messages', icon: Mail, path: '/messages' },
+    { label: 'Streams', icon: Activity, path: '/streams' },
     { label: 'Exam Verification', icon: ClipboardCheck, path: '/admin/exams' },
     { label: 'Monitor Teacher', icon: ClipboardCheck, path: '/admin/monitor' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/admin/exam-reports' },
@@ -32,6 +35,9 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Upload Results', icon: Upload, path: '/teacher/results' },
     { label: 'My Submissions', icon: FileText, path: '/teacher/all-results' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/teacher/exam-reports' },
+    { label: 'Announcements', icon: BellRing, path: '/teacher/announcements' },
+    { label: 'Messages', icon: Mail, path: '/messages' },
+    { label: 'Streams', icon: Activity, path: '/streams' },
   ],
   parent: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
@@ -40,12 +46,16 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Monthly Reports', icon: Calendar, path: '/parent/monthly' },
     { label: 'Midterm Reports', icon: FileBarChart, path: '/parent/midterm' },
     { label: 'Final Reports', icon: Award, path: '/parent/final' },
+    { label: 'Messages', icon: Mail, path: '/messages' },
+    { label: 'Streams', icon: Activity, path: '/streams' },
   ],
   supervisor: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'My Classes', icon: GraduationCap, path: '/supervisor/students' },
     { label: 'Exam Verifications', icon: ClipboardCheck, path: '/supervisor/verifications' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/supervisor/reports' },
+    { label: 'Messages', icon: Mail, path: '/messages' },
+    { label: 'Streams', icon: Activity, path: '/streams' },
   ],
 };
 

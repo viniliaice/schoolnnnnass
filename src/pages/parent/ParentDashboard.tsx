@@ -1,30 +1,84 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getExamsByParent, getCurrentTerm } from '../../lib/database';
-import { Student, Exam, CA_TYPES, getGrade } from '../../types';
-import { GraduationCap, BookOpen, TrendingUp, Award } from 'lucide-react';
+import { getAnnouncementsForParent, getParentPortalSnapshot } from '../../lib/database';
+import { Announcement, AttendanceRecord, Exam, HomeworkRecord, Student, CA_TYPES, getGrade } from '../../types';
+import { GraduationCap, BookOpen, TrendingUp, Award, CalendarCheck2, ClipboardList } from 'lucide-react';
+import { supabase } from '../../lib/supabase';
 
 export function ParentDashboard() {
   const { session } = useRole();
   const [children, setChildren] = useState<Student[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
+  const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
+  const [homework, setHomework] = useState<HomeworkRecord[]>([]);
+  const [announcements, setAnnouncements] = useState<Announcement[]>([]);
 
   useEffect(() => {
     if (!session) return;
 
     const loadData = async () => {
-      const term = await getCurrentTerm();
-      const [childrenData, examsData] = await Promise.all([
-        getStudentsByParent(session.userId),
-        getExamsByParent(session.userId, 'approved')
-      ]);
-      // Filter by current term
-      const filteredExams = term ? examsData.filter(e => e.termId === term.id) : examsData;
-      setChildren(childrenData);
-      setExams(filteredExams);
+      const snapshot = await getParentPortalSnapshot(session.userId);
+      const notices = await getAnnouncementsForParent(session.userId);
+      setChildren(snapshot.students);
+      setExams(snapshot.exams);
+      setAttendance(snapshot.attendance);
+      setHomework(snapshot.homework);
+      setAnnouncements(notices);
     };
 
     loadData();
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+    const channel = supabase
+      .channel(`parent-announcements-${session.userId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'announcements' }, () => {
+        getAnnouncementsForParent(session.userId).then(setAnnouncements).catch(() => null);
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'announcement_recipients' }, () => {
+        getAnnouncementsForParent(session.userId).then(setAnnouncements).catch(() => null);
+      })
+      .subscribe();
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [session]);
+
+  useEffect(() => {
+    if (!session) return;
+
+    const channel = supabase
+      .channel(`parent-dashboard-${session.userId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'exams' }, () => {
+        getParentPortalSnapshot(session.userId).then(snapshot => {
+          setChildren(snapshot.students);
+          setExams(snapshot.exams);
+          setAttendance(snapshot.attendance);
+          setHomework(snapshot.homework);
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, () => {
+        getParentPortalSnapshot(session.userId).then(snapshot => {
+          setChildren(snapshot.students);
+          setExams(snapshot.exams);
+          setAttendance(snapshot.attendance);
+          setHomework(snapshot.homework);
+        });
+      })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'homework' }, () => {
+        getParentPortalSnapshot(session.userId).then(snapshot => {
+          setChildren(snapshot.students);
+          setExams(snapshot.exams);
+          setAttendance(snapshot.attendance);
+          setHomework(snapshot.homework);
+        });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [session]);
 
   const totalExams = exams.length;
@@ -48,6 +102,19 @@ export function ParentDashboard() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Parent Dashboard</h1>
         <p className="text-slate-500 mt-1">Welcome, {session?.userName}</p>
+      </div>
+
+      <div className="bg-white rounded-2xl border border-slate-200 p-5">
+        <h2 className="text-lg font-semibold text-slate-900 mb-3">Announcements</h2>
+        <div className="space-y-2">
+          {announcements.map(item => (
+            <div key={item.id} className="p-3 rounded-lg border border-slate-100 bg-slate-50">
+              <div className="text-xs text-slate-500">{item.className}</div>
+              <div className="text-sm text-slate-800">{item.message}</div>
+            </div>
+          ))}
+          {announcements.length === 0 && <p className="text-sm text-slate-400">No announcements yet.</p>}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
@@ -78,6 +145,20 @@ export function ParentDashboard() {
           </div>
           <p className="text-2xl font-bold text-slate-900">{bestSubject ? getGrade(bestSubject[1].total / bestSubject[1].count) : '—'}</p>
           <p className="text-sm text-slate-500">Best: {bestSubject?.[0] || 'N/A'}</p>
+        </div>
+        <div className="bg-cyan-50 rounded-2xl p-4 border border-cyan-100">
+          <div className="w-10 h-10 bg-cyan-500 rounded-xl flex items-center justify-center mb-3">
+            <CalendarCheck2 className="w-5 h-5 text-white" />
+          </div>
+          <p className="text-2xl font-bold text-slate-900">{attendance.length}</p>
+          <p className="text-sm text-slate-500">Attendance Records</p>
+        </div>
+        <div className="bg-fuchsia-50 rounded-2xl p-4 border border-fuchsia-100">
+          <div className="w-10 h-10 bg-fuchsia-500 rounded-xl flex items-center justify-center mb-3">
+            <ClipboardList className="w-5 h-5 text-white" />
+          </div>
+          <p className="text-2xl font-bold text-slate-900">{homework.length}</p>
+          <p className="text-sm text-slate-500">Homework Items</p>
         </div>
       </div>
 

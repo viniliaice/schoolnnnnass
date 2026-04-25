@@ -116,3 +116,22 @@ export async function deleteStudent(id: string): Promise<boolean> {
   await supabase.from('exams').delete().eq('studentId', id);
   return true;
 }
+
+export async function promoteStudentsByClass(fromClass: string, toClass: string): Promise<number> {
+  const { data: rows, error: readError } = await supabase
+    .from('students')
+    .select('id')
+    .eq('className', fromClass);
+  if (readError) throw readError;
+
+  const ids = (rows || []).map((row: { id: string }) => row.id);
+  if (ids.length === 0) return 0;
+
+  const { error: updateError } = await supabase
+    .from('students')
+    .update({ className: toClass })
+    .in('id', ids);
+  if (updateError) throw updateError;
+
+  return ids.length;
+}

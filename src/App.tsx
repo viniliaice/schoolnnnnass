@@ -15,6 +15,7 @@ import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
 import { ExamVerification } from './pages/admin/ExamVerification';
 import { MonitorTeachers } from './pages/admin/MonitorTeachers';
+import { ClassAnnouncements } from './pages/admin/ClassAnnouncements';
 
 // Supervisor Pages
 import { SupervisorDashboard } from './pages/supervisor/SupervisorDashboard';
@@ -35,6 +36,8 @@ import { ExamResults } from './pages/parent/ExamResults';
 import { MonthlyReport } from './pages/parent/MonthlyReport';
 import { MidtermReport } from './pages/parent/MidtermReport';
 import { FinalReport } from './pages/parent/FinalReport';
+import { MessagesPage } from './pages/shared/MessagesPage';
+import { StreamsPage } from './pages/shared/StreamsPage';
 
 
 function AppContent() {
@@ -95,6 +98,9 @@ function AppContent() {
             case '/admin/exams': return <ExamVerification />;
             case '/admin/monitor': return <MonitorTeachers />;
             case '/admin/exam-reports': return <ExamReport />;
+            case '/admin/announcements': return <ClassAnnouncements />;
+            case '/messages': return <MessagesPage />;
+            case '/streams': return <StreamsPage />;
             default: return <AdminDashboard navigate={navigate} />;
           }
         }
@@ -106,6 +112,8 @@ function AppContent() {
               case '/supervisor/students': return <TeacherStudents />;
               case '/supervisor/verifications': return <ExamVerification />;
               case '/supervisor/reports': return <ExamReport />;
+              case '/messages': return <MessagesPage />;
+              case '/streams': return <StreamsPage />;
               default: return <SupervisorDashboard />;
             }
           }
@@ -118,6 +126,9 @@ function AppContent() {
             case '/teacher/results': return <UploadResults />;
             case '/teacher/all-results': return <AllResults />;
             case '/teacher/exam-reports': return <ExamReport />;
+            case '/teacher/announcements': return <ClassAnnouncements />;
+            case '/messages': return <MessagesPage />;
+            case '/streams': return <StreamsPage />;
             default: return <TeacherDashboard navigate={navigate} />;
           }
         }
@@ -131,6 +142,8 @@ function AppContent() {
             case '/parent/monthly': return <MonthlyReport />;
             case '/parent/midterm': return <MidtermReport />;
             case '/parent/final': return <FinalReport />;
+            case '/messages': return <MessagesPage />;
+            case '/streams': return <StreamsPage />;
             default: return <ParentDashboard />;
           }
         }

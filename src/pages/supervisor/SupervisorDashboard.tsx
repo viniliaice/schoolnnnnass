@@ -20,27 +20,20 @@ const getRequiredEntryInfo = (detail: TeacherExamProgress) => {
   const caDone = detail.caEntered > 0;
   const homeworkDone = detail.homeworkEntered > 0;
   const classworkDone = detail.classworkEntered > 0;
-  const attendanceDone = detail.attendanceEntered > 0;
+  const requiredItems = ['CA', 'Homework', 'Classwork', 'Quiz'];
 
-  const requiredItems = caDone
-    ? ['CA']
-    : ['Quiz', 'Homework', 'Classwork', 'Attendance'];
-
-  const completedRequiredItems = caDone
-    ? ['CA']
-    : [
-        quizDone ? 'Quiz' : null,
-        homeworkDone ? 'Homework' : null,
-        classworkDone ? 'Classwork' : null,
-        attendanceDone ? 'Attendance' : null,
-      ].filter(Boolean) as string[];
-
-  const allCompletedItems = [
-    quizDone ? 'Quiz' : null,
+  const completedRequiredItems = [
     caDone ? 'CA' : null,
     homeworkDone ? 'Homework' : null,
     classworkDone ? 'Classwork' : null,
-    attendanceDone ? 'Attendance' : null,
+    quizDone ? 'Quiz' : null,
+  ].filter(Boolean) as string[];
+
+  const allCompletedItems = [
+    caDone ? 'CA' : null,
+    homeworkDone ? 'Homework' : null,
+    classworkDone ? 'Classwork' : null,
+    quizDone ? 'Quiz' : null,
   ].filter(Boolean) as string[];
 
   const requiredCount = detail.requiredEntries ?? requiredItems.length;
@@ -62,7 +55,7 @@ const getRequiredEntryInfo = (detail: TeacherExamProgress) => {
     caDone,
     homeworkDone,
     classworkDone,
-    attendanceDone,
+    attendanceDone: false,
   };
 };
 
@@ -355,7 +348,7 @@ export function SupervisorDashboard() {
                             {row.missingExamTypes && row.missingExamTypes.length > 0 ? (
                               <div className="flex flex-col gap-1">
                                 {row.missingExamTypes.map(type => (
-                                  <span key={type} className="rounded-full bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700">CA: {type}</span>
+                                  <span key={type} className="rounded-full bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700">{type}</span>
                                 ))}
                               </div>
                             ) : (
@@ -416,7 +409,6 @@ export function SupervisorDashboard() {
                       <DetailCard label="CA entered" value={selectedDetail.caEntered} />
                       <DetailCard label="Homework entered" value={selectedDetail.homeworkEntered} />
                       <DetailCard label="Classwork entered" value={selectedDetail.classworkEntered} />
-                      <DetailCard label="Attendance entered" value={selectedDetail.attendanceEntered} />
                       <DetailCard label="Quiz entered" value={selectedDetail.quizEntered} />
                       <DetailCard label="Class size" value={selectedDetail.totalStudents} />
                     </div>
@@ -450,7 +442,6 @@ export function SupervisorDashboard() {
 
         {activeTab === 'monitor' && (
           <div>
-            <MonitorTeachers classNames={supervisorClasses} initialMonth={selectedMonth} initialClass={selectedClass} />
           </div>
         )}
 

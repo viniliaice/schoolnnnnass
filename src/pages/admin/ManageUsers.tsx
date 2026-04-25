@@ -7,7 +7,7 @@ import { Dialog } from '../../components/ui/Dialog';
 import { DataTable } from '../../components/ui/DataTable';
 import {
   Plus, Trash2, Edit, Eye, Phone, MapPin, CreditCard, Users as UsersIcon,
-  GraduationCap, Search, ChevronLeft, ChevronRight
+  GraduationCap, Search, KeyRound
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ColumnDef } from '@tanstack/react-table';
@@ -164,6 +164,13 @@ export function ManageUsers() {
               <Edit className="w-4 h-4" />
             </button>
             <button
+              onClick={() => handleResetPassword(user)}
+              className="p-1 text-amber-500 hover:text-amber-700"
+              title="Reset password"
+            >
+              <KeyRound className="w-4 h-4" />
+            </button>
+            <button
               onClick={() => handleDelete(user)}
               className="p-1 text-red-400 hover:text-red-600"
             >
@@ -244,6 +251,21 @@ export function ManageUsers() {
       await refresh();
     } catch (error) {
       addToast({ type: 'error', title: 'Failed to delete user' });
+    }
+  };
+
+  const handleResetPassword = async (user: User) => {
+    const newPassword = Math.random().toString(36).slice(-10);
+    try {
+      await updateUser(user.id, { password: newPassword });
+      addToast({
+        type: 'success',
+        title: `Password reset for ${user.name}`,
+        description: `New password: ${newPassword}`,
+      });
+      await refresh();
+    } catch (error) {
+      addToast({ type: 'error', title: 'Failed to reset password' });
     }
   };
 

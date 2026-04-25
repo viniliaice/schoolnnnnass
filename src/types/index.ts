@@ -313,3 +313,45 @@ export interface FinalReport {
   total_students: number;
   comment: { teacher: string; principal: string };
 }
+
+export interface AttendanceRecord {
+  id: string;
+  studentId: string;
+  className: string;
+  date: string;
+  status: 'present' | 'absent' | 'late';
+  note?: string | null;
+  teacherId: string;
+  createdAt: string;
+}
+
+export interface HomeworkRecord {
+  id: string;
+  studentId: string;
+  className: string;
+  subject: string;
+  title: string;
+  description?: string | null;
+  dueDate: string;
+  status: 'assigned' | 'submitted' | 'graded';
+  teacherId: string;
+  createdAt: string;
+}
+
+export interface Announcement {
+  id: string;
+  className: string;
+  message: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface Message {
+  id: string;
+  senderId: string;
+  recipientId: string;
+  subject: string;
+  body: string;
+  readAt?: string | null;
+  createdAt: string;
+}

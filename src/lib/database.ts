@@ -4,7 +4,7 @@ import { getStudentById } from './db/students';
 import { supabase } from './supabase';
 
 const isDev = import.meta.env?.MODE !== 'production';
-const MAX_QUERY_LIMIT = 500;
+const MAX_QUERY_LIMIT = 3000;
 
 function debug(...args: unknown[]) {
   if (isDev) console.debug(...args);
@@ -79,6 +79,20 @@ export {
   updateSubject,
   deleteSubject,
 } from './db/subjects';
+
+export {
+  broadcastClassAnnouncement,
+  getAnnouncementsForParent,
+  getAnnouncementsByCreator,
+  deleteAnnouncement,
+  getMessagesForUser,
+  getAllowedMessageRecipients,
+  sendMessage,
+  markMessageRead,
+} from './db/communications';
+
+export { getParentPortalSnapshot } from './db/parent-portal';
+export { getAttendanceHomeworkStreams } from './db/streams';
 
 export async function logAllClassSubjects(limit: number = 100) {
   if (!isDev) {
@@ -525,6 +539,7 @@ export {
   getStudentsByClass,
   getStudentsByIds,
   getStudentsByClasses,
+  promoteStudentsByClass,
   createStudent,
   updateStudent,
   deleteStudent,

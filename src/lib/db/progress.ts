@@ -4,17 +4,6 @@ import { supabase } from '../supabase';
 const REQUIRED_MONTHLY_EXAM_TYPES = ['CA', 'Homework', 'Classwork', 'Quiz'] as const;
 type RequiredMonthlyExamType = (typeof REQUIRED_MONTHLY_EXAM_TYPES)[number];
 
-function hasProgressCountColumns(row: TeacherExamProgress): boolean {
-  return (
-    typeof row.homeworkEntered === 'number' &&
-    typeof row.caEntered === 'number' &&
-    typeof row.classworkEntered === 'number' &&
-    typeof row.attendanceEntered === 'number' &&
-    typeof row.quizEntered === 'number' &&
-    typeof row.totalStudents === 'number'
-  );
-}
-
 const teacherExamProgressCache = new Map<string, Promise<TeacherExamProgress[]>>();
 
 export async function getTeacherExamProgress(filters: {
@@ -23,47 +12,15 @@ export async function getTeacherExamProgress(filters: {
   classNames?: string[];
   teacherId?: string;
 }): Promise<TeacherExamProgress[]> {
-  const month = filters.month;
   const cacheKey = JSON.stringify(filters);
   if (teacherExamProgressCache.has(cacheKey)) {
     return teacherExamProgressCache.get(cacheKey)!;
   }
 
   const fetchPromise = (async () => {
-    try {
-      let query = supabase.from('teacher_exam_progress').select('*');
-      if (month) query = query.eq('month', month);
-      if (filters.className) query = query.eq('className', filters.className);
-      if (filters.classNames && filters.classNames.length > 0) query = query.in('className', filters.classNames);
-      if (filters.teacherId) query = query.eq('teacherId', filters.teacherId);
-      const { data, error } = await query.order('completionPercent', { ascending: false });
-      if (error) throw error;
-      const rows = data || [];
-      if (rows.length > 0 && rows.some(row => !hasProgressCountColumns(row))) {
-        return getTeacherExamProgressFallback(filters);
-      }
-
-      const adjustedRows = rows.map(row => {
-        if (typeof row.caEntered === 'number' && row.caEntered > 0) {
-          return {
-            ...row,
-            requiredEntries: 1,
-            completedEntries: 1,
-            completionStatus: 'complete' as const,
-            completionPercent: 100,
-            missingExamTypes: [],
-          };
-        }
-        return row;
-      });
-
-      return adjustedRows;
-    } catch (error: any) {
-      if (error?.code === 'PGRST205' || /teacher_exam_progress/.test(error?.message)) {
-        return getTeacherExamProgressFallback(filters);
-      }
-      throw error;
-    }
+    // Always compute from source tables. The `teacher_exam_progress` view has
+    // produced stale/incorrect CA counters in production for some records.
+    return getTeacherExamProgressFallback(filters);
   })();
 
   teacherExamProgressCache.set(cacheKey, fetchPromise);
@@ -151,47 +108,25 @@ async function getTeacherExamProgressFallback(filters: {
       const quizEntered = new Set(relevantExams.filter(e => e.examType === 'Quiz').map(e => e.studentId)).size;
       const attendanceEntered = new Set(relevantExams.filter(e => e.examType === 'Attendance').map(e => e.studentId)).size;
 
-      if (caEntered > 0) {
-        groups.set(rowKey, {
-          teacherId,
-          teacherName: '',
-          className,
-          subjectId: cs.subjectId,
-          subjectName,
-          month: monthValue || '',
-          requiredEntries: 1,
-          completedEntries: 1,
-          completionStatus: 'complete',
-          completionPercent: 100,
-          caEntered,
-          homeworkEntered,
-          classworkEntered,
-          attendanceEntered,
-          quizEntered,
-          totalStudents: uniqueStudentsInClass.size,
-          missingExamTypes: [],
-        });
-      } else {
-        groups.set(rowKey, {
-          teacherId,
-          teacherName: '',
-          className,
-          subjectId: cs.subjectId,
-          subjectName,
-          month: monthValue || '',
-          requiredEntries: REQUIRED_MONTHLY_EXAM_TYPES.length,
-          completedEntries: completedTypes.size,
-          completionStatus: completedTypes.size === REQUIRED_MONTHLY_EXAM_TYPES.length ? 'complete' : 'incomplete',
-          completionPercent: Math.round((100.0 * completedTypes.size) / REQUIRED_MONTHLY_EXAM_TYPES.length * 100) / 100,
-          caEntered,
-          homeworkEntered,
-          classworkEntered,
-          attendanceEntered,
-          quizEntered,
-          totalStudents: uniqueStudentsInClass.size,
-          missingExamTypes,
-        });
-      }
+      groups.set(rowKey, {
+        teacherId,
+        teacherName: '',
+        className,
+        subjectId: cs.subjectId,
+        subjectName,
+        month: monthValue || '',
+        requiredEntries: REQUIRED_MONTHLY_EXAM_TYPES.length,
+        completedEntries: completedTypes.size,
+        completionStatus: completedTypes.size === REQUIRED_MONTHLY_EXAM_TYPES.length ? 'complete' : 'incomplete',
+        completionPercent: Math.round((100.0 * completedTypes.size) / REQUIRED_MONTHLY_EXAM_TYPES.length * 100) / 100,
+        caEntered,
+        homeworkEntered,
+        classworkEntered,
+        attendanceEntered,
+        quizEntered,
+        totalStudents: uniqueStudentsInClass.size,
+        missingExamTypes,
+      });
     }
   }
 

@@ -14,40 +14,32 @@ const getRequiredEntryInfo = (detail: TeacherExamProgress) => {
   const caDone = detail.caEntered > 0;
   const homeworkDone = detail.homeworkEntered > 0;
   const classworkDone = detail.classworkEntered > 0;
-  const attendanceDone = detail.attendanceEntered > 0;
-
   const requiredItems = caDone
-    ? ['CA']
-    : ['Quiz', 'Homework', 'Classwork', 'Attendance'];
+    ? ['CA', 'Quiz']
+    : ['Homework', 'Classwork', 'Quiz'];
 
-  const completedRequiredItems = caDone
-    ? ['CA']
-    : [
-        quizDone ? 'Quiz' : null,
-        homeworkDone ? 'Homework' : null,
-        classworkDone ? 'Classwork' : null,
-        attendanceDone ? 'Attendance' : null,
-      ].filter(Boolean) as string[];
+  const completedRequiredItems = requiredItems.filter(item => {
+    if (item === 'CA') return caDone;
+    if (item === 'Homework') return homeworkDone;
+    if (item === 'Classwork') return classworkDone;
+    if (item === 'Quiz') return quizDone;
+    return false;
+  });
+  const missingRequiredItems = requiredItems.filter(item => !completedRequiredItems.includes(item));
 
   const allCompletedItems = [
-    quizDone ? 'Quiz' : null,
     caDone ? 'CA' : null,
     homeworkDone ? 'Homework' : null,
     classworkDone ? 'Classwork' : null,
-    attendanceDone ? 'Attendance' : null,
+    quizDone ? 'Quiz' : null,
   ].filter(Boolean) as string[];
 
-  const requiredCount = detail.requiredEntries ?? requiredItems.length;
-  const completedCount = detail.completedEntries ?? completedRequiredItems.length;
-  const displayPercent = typeof detail.completionPercent === 'number'
-    ? Math.round(detail.completionPercent)
-    : requiredCount > 0
-      ? Math.round((completedCount / requiredCount) * 100)
-      : 0;
-  const isComplete =
-    detail.completionStatus === 'complete' ||
-    displayPercent === 100 ||
-    (caDone && requiredCount === 1 && completedCount === 1);
+  const requiredCount = requiredItems.length;
+  const completedCount = completedRequiredItems.length;
+  const displayPercent = requiredCount > 0
+    ? Math.round((completedCount / requiredCount) * 100)
+    : 0;
+  const isComplete = completedCount === requiredCount;
 
   return {
     requiredItems,
@@ -61,7 +53,8 @@ const getRequiredEntryInfo = (detail: TeacherExamProgress) => {
     caDone,
     homeworkDone,
     classworkDone,
-    attendanceDone,
+    attendanceDone: false,
+    missingRequiredItems,
   };
 };
 
@@ -94,7 +87,7 @@ export function MonitorTeachers({ classNames, initialMonth, initialClass }: { cl
 
   const kpis = useMemo(() => {
     const totalRecords = displayRows.length;
-    const complete = displayRows.filter(r => r.completionStatus === 'complete').length;
+    const complete = displayRows.filter(r => getRequiredEntryInfo(r).isComplete).length;
     const incomplete = totalRecords - complete;
     const totalTeachers = new Set(displayRows.map(r => r.teacherId)).size;
     return { totalRecords, complete, incomplete, totalTeachers };
@@ -232,10 +225,10 @@ export function MonitorTeachers({ classNames, initialMonth, initialClass }: { cl
                           </span>
                         </td>
                         <td className="px-3 py-3">
-                          {row.missingExamTypes && row.missingExamTypes.length > 0 ? (
+                          {info.missingRequiredItems && info.missingRequiredItems.length > 0 ? (
                             <div className="flex flex-col gap-1">
-                              {row.missingExamTypes.map(type => (
-                                <span key={type} className="rounded-full bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700">CA: {type}</span>
+                              {info.missingRequiredItems.map(type => (
+                                <span key={type} className="rounded-full bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700">{type}</span>
                               ))}
                             </div>
                           ) : (
@@ -295,7 +288,6 @@ export function MonitorTeachers({ classNames, initialMonth, initialClass }: { cl
                       <DetailCard label="CA entered" value={selectedDetail.caEntered} />
                       <DetailCard label="Homework entered" value={selectedDetail.homeworkEntered} />
                       <DetailCard label="Classwork entered" value={selectedDetail.classworkEntered} />
-                      <DetailCard label="Attendance entered" value={selectedDetail.attendanceEntered} />
                       <DetailCard label="Quiz entered" value={selectedDetail.quizEntered} />
                       <DetailCard label="Class size" value={selectedDetail.totalStudents} />
                     </div>
