@@ -207,24 +207,3 @@ async function getTeacherExamProgressFallback(filters: {
     teacherName: teacherMap.get(entry.teacherId) || '',
   }));
 }
-
-export async function getAvailableMonths(): Promise<string[]> {
-  try {
-    const { data, error } = await supabase
-      .from('exams')
-      .select('month', { count: 'exact' })
-      .not('month', 'is', null);
-
-    if (error) throw error;
-
-    if (data && data.length > 0) {
-      const months = Array.from(new Set(data.map(row => (row as any).month)))
-        .filter((m): m is string => typeof m === 'string' && m.length > 0);
-      return months;
-    }
-
-    return [];
-  } catch {
-    return [];
-  }
-}

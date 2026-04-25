@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getTeacherExamProgress, getAvailableMonths } from '../../lib/database';
+import { getTeacherExamProgress } from '../../lib/database';
 import { MONTHS, TeacherExamProgress } from '../../types';
 import HeatMap from '../../components/HeatMap/HeatMap';
 
@@ -79,12 +79,9 @@ export function MonitorTeachers({ classNames, initialMonth, initialClass }: { cl
 
   useEffect(() => {
     async function load() {
-      const [data, availableMonths] = await Promise.all([
-        getTeacherExamProgress({ classNames }),
-        getAvailableMonths(),
-      ]);
+      const data = await getTeacherExamProgress({ classNames });
       setRows(data || []);
-      const months = availableMonths.sort((a, b) => MONTHS.indexOf(a) - MONTHS.indexOf(b));
+      const months = Array.from(new Set((data || []).map(r => r.month))).sort((a, b) => MONTHS.indexOf(a) - MONTHS.indexOf(b));
       setMonthOptions(months);
       const cls = Array.from(new Set((data || []).map(r => r.className))).sort();
       setClasses(cls);
