@@ -41,7 +41,7 @@ export {
   bulkCreateExams,
 } from './db/bulk';
 
-export { getTeacherExamProgress } from './db/progress';
+export { getTeacherExamProgress, getAvailableMonths } from './db/progress';
 export {
   getClassSubjects,
   createClassSubject,
