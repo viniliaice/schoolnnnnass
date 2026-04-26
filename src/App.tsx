@@ -1,10 +1,12 @@
 import { useState } from 'react';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { RoleProvider, useRole } from './context/RoleContext';
 import { ToastProvider } from './context/ToastContext';
 import { ToastContainer } from './components/ui/Toast';
 import { LoginPage } from './components/landing/LoginPage';
 import { SignUpPage } from './components/landing/SignUpPage';
 import { DashboardLayout } from './components/layout/DashboardLayout';
+import { queryClient } from './lib/queryClient';
 
 // Admin Pages
 import { AdminDashboard } from './pages/admin/AdminDashboard';
@@ -15,6 +17,7 @@ import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
 import { ExamVerification } from './pages/admin/ExamVerification';
 import { MonitorTeachers } from './pages/admin/MonitorTeachers';
+import { ClassProgress } from './pages/admin/ClassProgress';
 import { ClassAnnouncements } from './pages/admin/ClassAnnouncements';
 
 // Supervisor Pages
@@ -97,6 +100,7 @@ function AppContent() {
             case '/admin/bulk': return <BulkUpload />;
             case '/admin/exams': return <ExamVerification />;
             case '/admin/monitor': return <MonitorTeachers />;
+            case '/admin/class-progress': return <ClassProgress />;
             case '/admin/exam-reports': return <ExamReport />;
             case '/admin/announcements': return <ClassAnnouncements />;
             case '/messages': return <MessagesPage />;
@@ -156,11 +160,13 @@ function AppContent() {
 
 export default function App() {
   return (
-    <ToastProvider>
-      <RoleProvider>
-        <AppContent />
-        <ToastContainer />
-      </RoleProvider>
-    </ToastProvider>
+    <QueryClientProvider client={queryClient}>
+      <ToastProvider>
+        <RoleProvider>
+          <AppContent />
+          <ToastContainer />
+        </RoleProvider>
+      </ToastProvider>
+    </QueryClientProvider>
   );
 }

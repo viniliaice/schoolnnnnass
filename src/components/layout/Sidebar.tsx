@@ -26,6 +26,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Messages', icon: Mail, path: '/messages' },
     { label: 'Streams', icon: Activity, path: '/streams' },
     { label: 'Exam Verification', icon: ClipboardCheck, path: '/admin/exams' },
+    { label: 'Class Progress', icon: Calendar, path: '/admin/class-progress' },
     { label: 'Monitor Teacher', icon: ClipboardCheck, path: '/admin/monitor' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/admin/exam-reports' },
   ],

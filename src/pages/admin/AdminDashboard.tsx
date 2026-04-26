@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { getSystemStats, getStudents, getExams, getUsers } from '../../lib/database';
-import { MonitorTeachers } from './MonitorTeachers';
+
 import { Users, GraduationCap, FileText, CheckCircle, XCircle, Clock, TrendingUp, BookOpen, FileBarChart } from 'lucide-react';
 
 export function AdminDashboard({ navigate }: { navigate?: (path: string) => void }) {
@@ -227,10 +227,7 @@ export function AdminDashboard({ navigate }: { navigate?: (path: string) => void
         </div>
       </div>
       
-      {/* Monitor teacher entries (reuses Supervisor monitor component) */}
-      <div className="mt-6">
-        <MonitorTeachers classNames={classes} />
-      </div>
+     
     </div>
   );
 }

@@ -4,7 +4,7 @@ import { getStudentById } from './db/students';
 import { supabase } from './supabase';
 
 const isDev = import.meta.env?.MODE !== 'production';
-const MAX_QUERY_LIMIT = 3000;
+const MAX_QUERY_LIMIT = 30000;
 
 function debug(...args: unknown[]) {
   if (isDev) console.debug(...args);
@@ -41,7 +41,7 @@ export {
   bulkCreateExams,
 } from './db/bulk';
 
-export { getTeacherExamProgress } from './db/progress';
+export { getTeacherExamProgress, getAvailableMonths } from './db/progress';
 export {
   getClassSubjects,
   createClassSubject,

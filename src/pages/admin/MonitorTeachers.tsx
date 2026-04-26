@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getTeacherExamProgress } from '../../lib/database';
+import { useAvailableMonths, useTeacherExamProgress, useTeacherExamProgressVerification } from '../../lib/hooks';
 import { MONTHS, TeacherExamProgress } from '../../types';
 import HeatMap from '../../components/HeatMap/HeatMap';
 
@@ -14,32 +14,40 @@ const getRequiredEntryInfo = (detail: TeacherExamProgress) => {
   const caDone = detail.caEntered > 0;
   const homeworkDone = detail.homeworkEntered > 0;
   const classworkDone = detail.classworkEntered > 0;
-  const requiredItems = caDone
-    ? ['CA', 'Quiz']
-    : ['Homework', 'Classwork', 'Quiz'];
+  const attendanceDone = detail.attendanceEntered > 0;
 
-  const completedRequiredItems = requiredItems.filter(item => {
-    if (item === 'CA') return caDone;
-    if (item === 'Homework') return homeworkDone;
-    if (item === 'Classwork') return classworkDone;
-    if (item === 'Quiz') return quizDone;
-    return false;
-  });
-  const missingRequiredItems = requiredItems.filter(item => !completedRequiredItems.includes(item));
+  const requiredItems = caDone
+    ? ['CA','Quiz']
+    : ['Quiz', 'Homework', 'Classwork', 'Attendance'];
+
+  const completedRequiredItems = caDone
+    ? ['CA']
+    : [
+        quizDone ? 'Quiz' : null,
+        homeworkDone ? 'Homework' : null,
+        classworkDone ? 'Classwork' : null,
+        attendanceDone ? 'Attendance' : null,
+      ].filter(Boolean) as string[];
 
   const allCompletedItems = [
+    quizDone ? 'Quiz' : null,
     caDone ? 'CA' : null,
     homeworkDone ? 'Homework' : null,
     classworkDone ? 'Classwork' : null,
-    quizDone ? 'Quiz' : null,
+    attendanceDone ? 'Attendance' : null,
   ].filter(Boolean) as string[];
 
-  const requiredCount = requiredItems.length;
-  const completedCount = completedRequiredItems.length;
-  const displayPercent = requiredCount > 0
-    ? Math.round((completedCount / requiredCount) * 100)
-    : 0;
-  const isComplete = completedCount === requiredCount;
+  const requiredCount = detail.requiredEntries ?? requiredItems.length;
+  const completedCount = detail.completedEntries ?? completedRequiredItems.length;
+  const displayPercent = typeof detail.completionPercent === 'number'
+    ? Math.round(detail.completionPercent)
+    : requiredCount > 0
+      ? Math.round((completedCount / requiredCount) * 100)
+      : 0;
+  const isComplete =
+    detail.completionStatus === 'complete' ||
+    displayPercent === 100 ||
+    (caDone && requiredCount === 1 && completedCount === 1);
 
   return {
     requiredItems,
@@ -53,8 +61,7 @@ const getRequiredEntryInfo = (detail: TeacherExamProgress) => {
     caDone,
     homeworkDone,
     classworkDone,
-    attendanceDone: false,
-    missingRequiredItems,
+    attendanceDone,
   };
 };
 
@@ -62,32 +69,48 @@ const getStatusBadgeClasses = (status: 'complete' | 'incomplete') =>
   status === 'complete' ? 'bg-emerald-100 text-emerald-800' : 'bg-rose-100 text-rose-800';
 
 export function MonitorTeachers({ classNames, initialMonth, initialClass }: { classNames?: string[]; initialMonth?: string; initialClass?: string } = {}) {
-  const [rows, setRows] = useState<TeacherExamProgress[]>([]);
-  const [monthOptions, setMonthOptions] = useState<string[]>([]);
   const [selectedMonth, setSelectedMonth] = useState<string>(initialMonth || '');
   const [selectedClass, setSelectedClass] = useState<string>(initialClass || '');
-  const [classes, setClasses] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<'table' | 'heat'>('table');
   const [selectedDetail, setSelectedDetail] = useState<TeacherExamProgress | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      const data = await getTeacherExamProgress({ classNames });
-      setRows(data || []);
-      const months = Array.from(new Set((data || []).map(r => r.month))).sort((a, b) => MONTHS.indexOf(a) - MONTHS.indexOf(b));
-      setMonthOptions(months);
-      const cls = Array.from(new Set((data || []).map(r => r.className))).sort();
-      setClasses(cls);
-      if (!initialMonth && months.length > 0) setSelectedMonth(months[0]);
+  const progressQuery = useTeacherExamProgress({ classNames });
+  const monthsQuery = useAvailableMonths();
+  const verificationQuery = useTeacherExamProgressVerification(
+    {
+      teacherId: selectedDetail?.teacherId ?? '',
+      className: selectedDetail?.className ?? '',
+      subjectId: selectedDetail?.subjectId ?? '',
+      subjectName: selectedDetail?.subjectName ?? '',
+      month: selectedDetail?.month ?? '',
+    },
+    {
+      enabled: Boolean(selectedDetail),
+      staleTime: 5 * 60 * 1000,
     }
-    load();
-  }, [classNames, initialMonth]);
+  );
+
+  const rows = (progressQuery.data ?? []) as TeacherExamProgress[];
+  const monthOptions = useMemo<string[]>(() => {
+    const inferredMonths = rows.map((r) => r.month);
+    const sourceMonths = (monthsQuery.data as string[] | undefined) ?? inferredMonths;
+    return Array.from(new Set(sourceMonths)).sort((a, b) => MONTHS.indexOf(a) - MONTHS.indexOf(b));
+  }, [rows, monthsQuery.data]);
+
+  const classes = useMemo<string[]>(() => Array.from(new Set(rows.map((r) => r.className))).sort(), [rows]);
+  const loading = progressQuery.isLoading || monthsQuery.isLoading;
+
+  useEffect(() => {
+    if (!selectedMonth && monthOptions.length > 0) {
+      setSelectedMonth(monthOptions[0]);
+    }
+  }, [monthOptions, selectedMonth]);
 
   const displayRows = rows.filter(r => (!selectedMonth || r.month === selectedMonth) && (!selectedClass || r.className === selectedClass));
 
   const kpis = useMemo(() => {
     const totalRecords = displayRows.length;
-    const complete = displayRows.filter(r => getRequiredEntryInfo(r).isComplete).length;
+    const complete = displayRows.filter(r => r.completionStatus === 'complete').length;
     const incomplete = totalRecords - complete;
     const totalTeachers = new Set(displayRows.map(r => r.teacherId)).size;
     return { totalRecords, complete, incomplete, totalTeachers };
@@ -225,10 +248,10 @@ export function MonitorTeachers({ classNames, initialMonth, initialClass }: { cl
                           </span>
                         </td>
                         <td className="px-3 py-3">
-                          {info.missingRequiredItems && info.missingRequiredItems.length > 0 ? (
+                          {row.missingExamTypes && row.missingExamTypes.length > 0 ? (
                             <div className="flex flex-col gap-1">
-                              {info.missingRequiredItems.map(type => (
-                                <span key={type} className="rounded-full bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700">{type}</span>
+                              {row.missingExamTypes.map(type => (
+                                <span key={type} className="rounded-full bg-rose-50 px-2 py-1 text-[11px] font-medium text-rose-700">CA: {type}</span>
                               ))}
                             </div>
                           ) : (
@@ -288,18 +311,52 @@ export function MonitorTeachers({ classNames, initialMonth, initialClass }: { cl
                       <DetailCard label="CA entered" value={selectedDetail.caEntered} />
                       <DetailCard label="Homework entered" value={selectedDetail.homeworkEntered} />
                       <DetailCard label="Classwork entered" value={selectedDetail.classworkEntered} />
+                      <DetailCard label="Attendance entered" value={selectedDetail.attendanceEntered} />
                       <DetailCard label="Quiz entered" value={selectedDetail.quizEntered} />
                       <DetailCard label="Class size" value={selectedDetail.totalStudents} />
                     </div>
                     {(() => {
                       const entryInfo = getRequiredEntryInfo(selectedDetail);
                       return (
-                        <div className="rounded-3xl bg-slate-100 p-4 text-sm text-slate-600">
-                          <p className="font-semibold text-slate-900">Required entries</p>
-                          <p className="mt-2">{entryInfo.completedCount} of {entryInfo.requiredCount} items entered</p>
-                          <p className="mt-2 text-xs text-slate-500">Required: {entryInfo.requiredItems.join(' + ')}</p>
-                          <p className="mt-1 text-xs text-slate-500">Completed: {entryInfo.completedItems.length > 0 ? entryInfo.completedItems.join(', ') : 'None'}</p>
-                        </div>
+                        <>
+                          <div className="rounded-3xl bg-slate-100 p-4 text-sm text-slate-600">
+                            <p className="font-semibold text-slate-900">Required entries</p>
+                            <p className="mt-2">{entryInfo.completedCount} of {entryInfo.requiredCount} items entered</p>
+                            <p className="mt-2 text-xs text-slate-500">Required: {entryInfo.requiredItems.join(' + ')}</p>
+                            <p className="mt-1 text-xs text-slate-500">Completed: {entryInfo.completedItems.length > 0 ? entryInfo.completedItems.join(', ') : 'None'}</p>
+                          </div>
+                          <div className="rounded-3xl bg-slate-100 p-4 text-sm text-slate-600">
+                            <div className="flex items-center justify-between">
+                              <p className="font-semibold text-slate-900">Database verification</p>
+                              <span className={`rounded-full px-2 py-1 text-xs font-semibold ${verificationQuery.isSuccess ? 'bg-emerald-100 text-emerald-800' : verificationQuery.isFetching ? 'bg-amber-100 text-amber-800' : 'bg-slate-100 text-slate-500'}`}>
+                                {verificationQuery.isFetching ? 'Verifying…' : verificationQuery.isSuccess ? 'Verified' : 'Pending'}
+                              </span>
+                            </div>
+                            {verificationQuery.error && (
+                              <p className="mt-2 text-rose-600">Unable to verify counts against the database.</p>
+                            )}
+                            {verificationQuery.data ? (
+                              <div className="mt-3 grid gap-3 sm:grid-cols-2">
+                                <div>
+                                  <p className="text-xs uppercase tracking-[0.25em] text-slate-500">Student count</p>
+                                  <p className="mt-1 text-lg font-semibold text-slate-900">{verificationQuery.data.totalStudents}</p>
+                                </div>
+                                <div>
+                                  <p className="text-xs uppercase tracking-[0.25em] text-slate-500">Exam rows</p>
+                                  <p className="mt-1 text-lg font-semibold text-slate-900">{verificationQuery.data.totalExamRows}</p>
+                                </div>
+                                {(['CA', 'Homework', 'Classwork', 'Quiz', 'Attendance'] as const).map(type => (
+                                  <div key={type}>
+                                    <p className="text-xs uppercase tracking-[0.25em] text-slate-500">{type} students</p>
+                                    <p className="mt-1 text-lg font-semibold text-slate-900">{verificationQuery.data?.studentCountsByExamType[type] ?? 0}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ) : (
+                              <p className="mt-2 text-xs text-slate-500">Select a record to verify raw exam counts from the database.</p>
+                            )}
+                          </div>
+                        </>
                       );
                     })()}
                   </div>

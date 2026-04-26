@@ -1,7 +1,7 @@
 import { supabase } from '../supabase';
 import { Exam, ExamStatus } from '../../types';
 
-const MAX_QUERY_LIMIT = 500;
+const MAX_QUERY_LIMIT = 500000;
 
 function applyLimit(query: any, limit: number) {
   if (typeof query.limit === 'function') {
@@ -11,14 +11,17 @@ function applyLimit(query: any, limit: number) {
 }
 
 export async function getExams(): Promise<Exam[]> {
-  const { data, error } = await applyLimit(supabase.from('exams').select('*'), 100);
+  const { data, error } = await applyLimit(
+    supabase.from('exams').select('id,studentId,subject,score,total,examType,month,status,parentId,date,createdAt,teacherId'),
+    100
+  );
   if (error) throw error;
   return data || [];
 }
 
 export async function getExamsPaginated(
   page: number = 1,
-  limit: number = 100,
+  limit: number = 100000,
   statusFilter: ExamStatus | 'all' = 'all',
   studentIds?: string[],
   subjectFilter?: string,
@@ -26,7 +29,7 @@ export async function getExamsPaginated(
 ): Promise<{ exams: Exam[]; total: number }> {
   const from = (page - 1) * limit;
   const to = from + limit - 1;
-  let query: any = supabase.from('exams').select('*', { count: 'exact' });
+  let query: any = supabase.from('exams').select('id,studentId,subject,score,total,examType,month,status,parentId,date,createdAt,teacherId', { count: 'exact' });
 
   if (statusFilter !== 'all') query = query.eq('status', statusFilter);
   if (studentIds && studentIds.length > 0) query = query.in('studentId', studentIds);
@@ -57,13 +60,19 @@ export async function getExamCount(
 }
 
 export async function getExamsByStudent(studentId: string): Promise<Exam[]> {
-  const { data, error } = await supabase.from('exams').select('*').eq('studentId', studentId);
+  const { data, error } = await supabase
+    .from('exams')
+    .select('id,studentId,subject,score,total,examType,month,status,parentId,date,createdAt,teacherId')
+    .eq('studentId', studentId);
   if (error) throw error;
   return data || [];
 }
 
 export async function getExamsByParent(parentId: string, statusFilter?: ExamStatus): Promise<Exam[]> {
-  let query = supabase.from('exams').select('*').eq('parentId', parentId);
+  let query = supabase
+    .from('exams')
+    .select('id,studentId,subject,score,total,examType,month,status,parentId,date,createdAt,teacherId')
+    .eq('parentId', parentId);
   if (statusFilter) query = query.eq('status', statusFilter);
   const { data, error } = await query;
   if (error) throw error;
@@ -71,13 +80,19 @@ export async function getExamsByParent(parentId: string, statusFilter?: ExamStat
 }
 
 export async function getExamsByTeacher(teacherId: string): Promise<Exam[]> {
-  const { data, error } = await supabase.from('exams').select('*').eq('teacherId', teacherId);
+  const { data, error } = await supabase
+    .from('exams')
+    .select('id,studentId,subject,score,total,examType,month,status,parentId,date,createdAt,teacherId')
+    .eq('teacherId', teacherId);
   if (error) throw error;
   return data || [];
 }
 
 export async function getExamsByStatus(status: ExamStatus): Promise<Exam[]> {
-  const { data, error } = await supabase.from('exams').select('*').eq('status', status);
+  const { data, error } = await supabase
+    .from('exams')
+    .select('id,studentId,subject,score,total,examType,month,status,parentId,date,createdAt,teacherId')
+    .eq('status', status);
   if (error) throw error;
   return data || [];
 }

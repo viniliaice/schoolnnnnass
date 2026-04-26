@@ -4,7 +4,6 @@ import { useRole } from '../../context/RoleContext';
 import { getTeacherExamProgress, getSupervisorDashboardData } from '@/lib/db';
 import { MONTHS, TeacherExamProgress } from '../../types';
 import HeatMap from '../../components/HeatMap/HeatMap';
-import { MonitorTeachers } from '../admin/MonitorTeachers';
 
 const getCardTintClasses = (percent: number) => {
   if (percent <= 30) return 'bg-rose-50/90 border-rose-200 text-rose-900';

@@ -128,6 +128,33 @@ export interface TeacherExamProgress {
   missingExamTypes: string[];
 }
 
+export interface ClassStudentSubjectProgress {
+  studentId: string;
+  studentName: string;
+  className: string;
+  month: string;
+  subject: string;
+  caEntered: boolean;
+  homeworkEntered: boolean;
+  classworkEntered: boolean;
+  attendanceEntered: boolean;
+  quizEntered: boolean;
+  totalExamRows: number;
+  examEntries: { examType: ExamType; score: number; total: number }[];
+}
+
+export interface TeacherExamProgressVerification {
+  teacherId: string;
+  className: string;
+  subjectId: string;
+  subjectName: string;
+  month: string;
+  totalStudents: number;
+  totalExamRows: number;
+  rowCountsByExamType: Partial<Record<ExamType, number>>;
+  studentCountsByExamType: Partial<Record<ExamType, number>>;
+}
+
 export interface RoleSession {
   role: Role;
   userId: string;

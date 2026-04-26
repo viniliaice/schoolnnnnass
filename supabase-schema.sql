@@ -53,6 +53,7 @@ CREATE INDEX idx_users_role ON users(role);
 CREATE INDEX idx_students_parentId ON students("parentId");
 CREATE INDEX idx_students_className ON students("className");
 CREATE INDEX idx_exams_studentId ON exams("studentId");
+CREATE INDEX idx_exams_month ON exams("month");
 CREATE INDEX idx_exams_parentId ON exams("parentId");
 CREATE INDEX idx_exams_teacherId ON exams("teacherId");
 CREATE INDEX idx_exams_status ON exams(status);
@@ -106,7 +107,7 @@ FROM class_subjects cs
 JOIN users u ON u.id = cs."teacherId"
 JOIN subjects sub ON sub.id = cs."subjectId"
 JOIN students s ON s."className" = cs."className"
-JOIN exams e ON e."studentId" = s.id AND e.subject = sub.name
+JOIN exams e ON e."studentId" = s.id AND e.subject = sub.name AND e."teacherId" = cs."teacherId"
 GROUP BY cs."teacherId", u.name, cs."className", cs."subjectId", sub.name, e.month;
 
 -- Row-level security policies must be defined on base tables, not on views.

@@ -35,7 +35,7 @@ FROM class_subjects cs
 JOIN users u ON u.id = cs."teacherId"
 JOIN subjects sub ON sub.id = cs."subjectId"
 JOIN students s ON s."className" = cs."className"
-JOIN exams e ON e."studentId" = s.id AND e.subject = sub.name
+JOIN exams e ON e."studentId" = s.id AND e.subject = sub.name AND e."teacherId" = cs."teacherId"
 GROUP BY cs."teacherId", u.name, cs."className", cs."subjectId", sub.name, e.month;
 
 -- Row-level security policies must be defined on base tables, not on views.
