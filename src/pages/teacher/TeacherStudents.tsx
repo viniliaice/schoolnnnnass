@@ -2,11 +2,14 @@ import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { getUserById, getStudentsByClasses, getUsersByRole } from '../../lib/database';
 import { Student, User } from '../../types';
-import { GraduationCap, Search } from 'lucide-react';
+import { GraduationCap, Search, MessageCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { buildParentCredentialWhatsAppLink } from '../../lib/whatsapp';
+import { useToast } from '../../context/ToastContext';
 
 export function TeacherStudents() {
   const { session } = useRole();
+  const { addToast } = useToast();
   const [students, setStudents] = useState<Student[]>([]);
   const [parents, setParents] = useState<User[]>([]);
   const [classes, setClasses] = useState<string[]>([]);
@@ -46,6 +49,16 @@ export function TeacherStudents() {
   const filtered = students
     .filter(s => classFilter === 'all' || s.className === classFilter)
     .filter(s => s.name.toLowerCase().includes(search.toLowerCase()));
+
+  function handleSendWhatsApp(parent: User) {
+    const phone = parent.phone1 || parent.phone2;
+    if (!phone || !parent.email || !parent.password) {
+      addToast({ type: 'error', title: 'Parent must have phone, email and password' });
+      return;
+    }
+    const url = buildParentCredentialWhatsAppLink({ phone, email: parent.email, password: parent.password });
+    window.open(url, '_blank', 'noopener,noreferrer');
+  }
 
   return (
     <div className="space-y-6">
@@ -100,7 +113,22 @@ export function TeacherStudents() {
                     <td className="px-6 py-4">
                       <span className="bg-teal-50 text-teal-700 px-2.5 py-1 rounded-lg text-xs font-semibold">{s.className}</span>
                     </td>
-                    <td className="px-6 py-4 text-sm text-slate-600">{parent?.name || <span className="italic text-slate-400">Unassigned</span>}</td>
+                    <td className="px-6 py-4 text-sm text-slate-600">
+                      {parent ? (
+                        <div className="space-y-1">
+                          <p className="font-medium text-slate-800">{parent.name} - {parent.phone1 || parent.phone2 || 'No phone'}</p>
+                          <button
+                            onClick={() => handleSendWhatsApp(parent)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-teal-50 text-teal-700 text-xs font-semibold disabled:opacity-50"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            Send WhatsApp
+                          </button>
+                        </div>
+                      ) : (
+                        <span className="italic text-slate-400">Unassigned</span>
+                      )}
+                    </td>
                   </tr>
                 );
               })}

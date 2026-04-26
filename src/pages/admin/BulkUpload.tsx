@@ -1,6 +1,6 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
 import {
-  getUsersByRole, bulkCreateUsers, bulkCreateStudents, getStudents
+  getUsersByRole, bulkCreateUsers, bulkCreateStudents, getStudents, promoteStudentsByClass
 } from '../../lib/database';
 import { User, CLASSES } from '../../types';
 import { useToast } from '../../context/ToastContext';
@@ -128,6 +128,9 @@ export function BulkUpload() {
   const [parents, setParents] = useState<User[]>([]);
   const [teachers, setTeachers] = useState<User[]>([]);
   const [students, setStudents] = useState<any[]>([]);
+  const [fromClass, setFromClass] = useState('');
+  const [toClass, setToClass] = useState('');
+  const [result, setResult] = useState<{ count: number; from: string; to: string } | null>(null);
 
   // Refs
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -147,6 +150,29 @@ export function BulkUpload() {
     };
     loadData();
   }, []);
+
+  const usedClasses = Array.from(
+    new Set(students.map((student: { className: string }) => student.className).filter(Boolean)),
+  ).sort();
+
+  const handlePromote = async () => {
+    if (!fromClass || !toClass || fromClass === toClass) return;
+    try {
+      const count = await promoteStudentsByClass(fromClass, toClass);
+      setResult({ count, from: fromClass, to: toClass });
+      const studentsData = await getStudents();
+      setStudents(studentsData);
+      addToast({
+        type: 'success',
+        title: `${count} students promoted`,
+      });
+    } catch (error) {
+      addToast({
+        type: 'error',
+        title: 'Failed to promote students',
+      });
+    }
+  };
 
   // ─── Helper: Resolve parent by name ───
   const resolveParentId = useCallback((name: string): string => {
@@ -611,6 +637,48 @@ export function BulkUpload() {
           </button>
         </div>
       </div>
+
+      {activeTab === 'students' && (
+        <div className="max-w-2xl space-y-6">
+          <div className="bg-white rounded-xl border border-gray-100 p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center text-amber-600">
+                <ArrowRight size={20} />
+              </div>
+              <div>
+                <h3 className="font-semibold text-gray-900">Promote Students</h3>
+                <p className="text-xs text-gray-500">Move all students from one class to the next grade</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-semibold text-gray-700 mb-1.5 block">From Class</label>
+                <select value={fromClass} onChange={e => setFromClass(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm outline-none">
+                  <option value="">Select class...</option>
+                  {usedClasses.map(c => <option key={c} value={c}>{c} ({students.filter(s => s.className === c).length} students)</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-gray-700 mb-1.5 block">To Class</label>
+                <select value={toClass} onChange={e => setToClass(e.target.value)} className="w-full px-4 py-2.5 rounded-xl border border-gray-200 text-sm outline-none">
+                  <option value="">Select class...</option>
+                  {CLASSES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+            </div>
+
+            <button onClick={handlePromote} disabled={!fromClass || !toClass || fromClass === toClass}
+              className="mt-4 px-6 py-2.5 bg-gradient-to-r from-amber-500 to-amber-600 text-white rounded-xl text-sm font-medium flex items-center gap-2">
+              <ArrowRight size={16} /> Promote Students
+            </button>
+          </div>
+
+          {result && (
+            <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-5 text-emerald-800 font-semibold">{result.count} students promoted!</div>
+          )}
+        </div>
+      )}
 
       {/* ═══════════════════════════════════ */}
       {/* PARENTS TAB (STEP 1) */}

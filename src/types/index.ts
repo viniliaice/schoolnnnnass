@@ -128,6 +128,33 @@ export interface TeacherExamProgress {
   missingExamTypes: string[];
 }
 
+export interface ClassStudentSubjectProgress {
+  studentId: string;
+  studentName: string;
+  className: string;
+  month: string;
+  subject: string;
+  caEntered: boolean;
+  homeworkEntered: boolean;
+  classworkEntered: boolean;
+  attendanceEntered: boolean;
+  quizEntered: boolean;
+  totalExamRows: number;
+  examEntries: { examType: ExamType; score: number; total: number }[];
+}
+
+export interface TeacherExamProgressVerification {
+  teacherId: string;
+  className: string;
+  subjectId: string;
+  subjectName: string;
+  month: string;
+  totalStudents: number;
+  totalExamRows: number;
+  rowCountsByExamType: Partial<Record<ExamType, number>>;
+  studentCountsByExamType: Partial<Record<ExamType, number>>;
+}
+
 export interface RoleSession {
   role: Role;
   userId: string;
@@ -312,4 +339,46 @@ export interface FinalReport {
   overall_rank: number;
   total_students: number;
   comment: { teacher: string; principal: string };
+}
+
+export interface AttendanceRecord {
+  id: string;
+  studentId: string;
+  className: string;
+  date: string;
+  status: 'present' | 'absent' | 'late';
+  note?: string | null;
+  teacherId: string;
+  createdAt: string;
+}
+
+export interface HomeworkRecord {
+  id: string;
+  studentId: string;
+  className: string;
+  subject: string;
+  title: string;
+  description?: string | null;
+  dueDate: string;
+  status: 'assigned' | 'submitted' | 'graded';
+  teacherId: string;
+  createdAt: string;
+}
+
+export interface Announcement {
+  id: string;
+  className: string;
+  message: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface Message {
+  id: string;
+  senderId: string;
+  recipientId: string;
+  subject: string;
+  body: string;
+  readAt?: string | null;
+  createdAt: string;
 }
