@@ -310,10 +310,23 @@ export async function getUsersByRole(role: Role, page: number = 1, limit: number
   const from = (page - 1) * limit;
   const to = from + limit - 1;
 
-  const { data, error } = await supabase.from('users').select('*', { count: 'exact' }).range(from, to);
+  const normalizedRole = String(role).toLowerCase().trim();
+  const { data, error } = await supabase
+    .from('users')
+    .select('*', { count: 'exact' })
+    .ilike('role', normalizedRole)
+    .range(from, to);
   if (error) throw error;
   const rows = (data || []) as User[];
-  return rows.filter(u => String(u.role || '').toLowerCase().trim() === String(role).toLowerCase().trim());
+  return rows.filter(u => String(u.role || '').toLowerCase().trim() === normalizedRole);
+}
+
+export async function getUsersByIds(ids: string[]): Promise<User[]> {
+  if (!Array.isArray(ids) || ids.length === 0) return [];
+
+  const { data, error } = await supabase.from('users').select('*').in('id', ids);
+  if (error) throw error;
+  return (data || []) as User[];
 }
 
 export async function getUserById(id: string): Promise<User | undefined> {

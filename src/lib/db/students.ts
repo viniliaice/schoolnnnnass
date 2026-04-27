@@ -77,7 +77,7 @@ export async function getStudentsByIds(ids: string[], limit: number = MAX_QUERY_
 }
 
 export async function getStudentsByClasses(classnames: string[], search?: string, limit: number = 1000): Promise<Student[]> {
-  let query = supabase.from('students').select('id,name,className');
+  let query = supabase.from('students').select('id,name,className,parentId');
   if (classnames && classnames.length > 0) {
     query = query.in('className', classnames);
   }
