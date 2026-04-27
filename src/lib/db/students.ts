@@ -3,9 +3,7 @@
 import { Student } from '../../types';
 import { supabase } from '../supabase';
 
-const MAX_QUERY_LIMIT = 500000;
-
-// debug intentionally removed to avoid unused warnings
+const MAX_QUERY_LIMIT = 1000;
 
 function applyLimit(query: any, limit: number) {
   if (typeof query.limit === 'function') {
@@ -78,20 +76,24 @@ export async function getStudentsByIds(ids: string[], limit: number = MAX_QUERY_
   return (data || []) as Student[];
 }
 
-export async function getStudentsByClasses(classnames: string[], search?: string, limit: number = MAX_QUERY_LIMIT): Promise<Student[]> {
-  let query = applyLimit(
-    supabase.from('students').select('id,name,className,parentId,createdAt'),
-    limit
-  );
+export async function getStudentsByClasses(classnames: string[], search?: string, limit: number = 1000): Promise<Student[]> {
+  let query = supabase.from('students').select('id,name,className,parentId');
   if (classnames && classnames.length > 0) {
     query = query.in('className', classnames);
   }
   if (search && search.trim()) {
     query = query.ilike('name', `%${search}%`);
   }
-  const { data, error } = await query;
+
+  const { data, error } = await query.limit(limit);
   if (error) throw error;
   return (data || []) as Student[];
+}
+
+export async function getStudentIdsByClasses(classnames: string[]): Promise<string[]> {
+  if (!classnames || classnames.length === 0) return [];
+  const students = await getStudentsByClasses(classnames, undefined, 1000);
+  return students.map(student => student.id);
 }
 
 export async function getStudentClasses(): Promise<string[]> {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getUserById, getStudentsByClasses, getUsersByRole } from '../../lib/database';
+import { getUserById, getStudentsByClasses, getUsersByIds } from '../../lib/database';
 import { Student, User } from '../../types';
 import { GraduationCap, Search, MessageCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -28,18 +28,12 @@ export function TeacherStudents() {
       // referenced by students are included even if missing from the paged
       // users query (helps when some parent profiles exist only in auth
       // or the users table is out-of-sync).
-      const [studentsData, parentsData] = await Promise.all([
-        getStudentsByClasses(cls),
-        getUsersByRole('parent')
-      ]);
-      const parentsList = parentsData || [];
-      const parentIdsFromStudents = Array.from(new Set((studentsData || []).map((s: Student) => s.parentId).filter((x): x is string => !!x)));
-      const missingParentIds = parentIdsFromStudents.filter((id: string) => !parentsList.some(p => p.id === id));
-      if (missingParentIds.length > 0) {
-        const fetched = await Promise.all(missingParentIds.map(id => getUserById(id)));
-        for (const u of fetched) if (u) parentsList.push(u);
-      }
+        const studentsData = await getStudentsByClasses(cls);
+      const parentIdsFromStudents = Array.from(
+        new Set((studentsData || []).map((s: Student) => s.parentId).filter((x): x is string => !!x))
+      );
 
+      const parentsList = parentIdsFromStudents.length > 0 ? await getUsersByIds(parentIdsFromStudents) : [];
       setStudents(studentsData);
       setParents(parentsList);
     };
