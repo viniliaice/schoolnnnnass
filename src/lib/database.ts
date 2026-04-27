@@ -22,7 +22,9 @@ function applyLimit(query: any, limit: number) {
 export {
   getExams,
   getExamsPaginated,
+  getExamSubjectsByClasses,
   getExamCount,
+  getExamStatusCounts,
   getExamsByStudent,
   getExamsByParent,
   getExamsByTeacher,

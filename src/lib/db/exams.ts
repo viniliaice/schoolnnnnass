@@ -1,13 +1,22 @@
 import { supabase } from '../supabase';
+import { getStudentIdsByClasses } from './students';
 import { Exam, ExamStatus } from '../../types';
 
-const MAX_QUERY_LIMIT = 500000;
+const DEFAULT_EXAM_PAGE_SIZE = 60;
+const MAX_QUERY_LIMIT = 10000;
 
 function applyLimit(query: any, limit: number) {
   if (typeof query.limit === 'function') {
     return query.limit(Math.min(limit, MAX_QUERY_LIMIT));
   }
   return query;
+}
+
+export interface ExamStatusCounts {
+  all: number;
+  pending: number;
+  approved: number;
+  rejected: number;
 }
 
 export async function getExams(): Promise<Exam[]> {
@@ -19,20 +28,111 @@ export async function getExams(): Promise<Exam[]> {
   return data || [];
 }
 
+async function getExamStudentIds(classNames?: string[] | null): Promise<string[] | undefined> {
+  if (!classNames || classNames.length === 0) return undefined;
+  const studentIds = await getStudentIdsByClasses(classNames);
+  return studentIds.length > 0 ? studentIds : [];
+}
+
+export async function getExamStatusCounts(
+  studentIds?: string[],
+  classNames?: string[],
+  subjectFilter?: string,
+  search?: string
+): Promise<ExamStatusCounts> {
+  const filterStudentIds = studentIds && studentIds.length > 0 ? studentIds : await getExamStudentIds(classNames);
+
+  if (classNames && classNames.length > 0 && (!filterStudentIds || filterStudentIds.length === 0)) {
+    return { all: 0, pending: 0, approved: 0, rejected: 0 };
+  }
+
+  const classNamesArg = classNames && classNames.length > 0 ? classNames : null;
+  const subjectArg = subjectFilter && subjectFilter !== 'All' ? subjectFilter : null;
+  const searchArg = search && search.trim() ? search.trim() : null;
+  const studentIdsArg = filterStudentIds && filterStudentIds.length > 0 ? filterStudentIds : null;
+
+  try {
+    const { data, error } = await supabase.rpc('get_exam_status_counts', {
+      class_names: classNamesArg,
+      student_ids: studentIdsArg,
+      subject_filter: subjectArg,
+      search_filter: searchArg,
+    });
+
+    if (error) throw error;
+
+    const counts: ExamStatusCounts = { all: 0, pending: 0, approved: 0, rejected: 0 };
+    for (const row of (data || []) as Array<{ status: string; count: string | number }>) {
+      const count = Number(row.count) || 0;
+      counts[row.status as keyof Omit<ExamStatusCounts, 'all'>] = count;
+      counts.all += count;
+    }
+
+    return counts;
+  } catch (rpcError) {
+    // Fallback for environments where the RPC function has not been installed.
+    const countArgs = {
+      studentIds: filterStudentIds,
+      subjectFilter,
+      search,
+    };
+
+    const [pending, approved, rejected] = await Promise.all([
+      getExamCount('pending', countArgs.studentIds, countArgs.subjectFilter, countArgs.search),
+      getExamCount('approved', countArgs.studentIds, countArgs.subjectFilter, countArgs.search),
+      getExamCount('rejected', countArgs.studentIds, countArgs.subjectFilter, countArgs.search),
+    ]);
+
+    return {
+      all: pending + approved + rejected,
+      pending,
+      approved,
+      rejected,
+    };
+  }
+}
+
+export async function getExamSubjectsByClasses(classNames: string[]): Promise<string[]> {
+  if (!classNames || classNames.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('exams')
+    .select('subject')
+    .in('studentId', (
+      await supabase
+        .from('students')
+        .select('id')
+        .in('className', classNames)
+    ).data?.map((s: any) => s.id) || [])
+    .limit(200);
+
+  if (error) throw error;
+
+  return Array.from(new Set((data || []).map((row: any) => row.subject).filter(Boolean))).sort();
+}
+
 export async function getExamsPaginated(
   page: number = 1,
-  limit: number = 100000,
+  limit: number = DEFAULT_EXAM_PAGE_SIZE,
   statusFilter: ExamStatus | 'all' = 'all',
   studentIds?: string[],
   subjectFilter?: string,
-  search?: string
+  search?: string,
+  classNames?: string[]
 ): Promise<{ exams: Exam[]; total: number }> {
   const from = (page - 1) * limit;
   const to = from + limit - 1;
-  let query: any = supabase.from('exams').select('id,studentId,subject,score,total,examType,month,status,parentId,date,createdAt,teacherId', { count: 'exact' });
+  const selectFields = 'id,studentId,subject,score,total,examType,month,status,parentId,date,createdAt,teacherId';
+  const filterStudentIds = studentIds && studentIds.length > 0 ? studentIds : await getExamStudentIds(classNames);
+
+  if (classNames && classNames.length > 0 && (!filterStudentIds || filterStudentIds.length === 0)) {
+    return { exams: [], total: 0 };
+  }
+
+  let query: any = supabase.from('exams').select(selectFields, { count: 'exact' });
 
   if (statusFilter !== 'all') query = query.eq('status', statusFilter);
-  if (studentIds && studentIds.length > 0) query = query.in('studentId', studentIds);
+  if (filterStudentIds && filterStudentIds.length > 0) query = query.in('studentId', filterStudentIds);
   if (subjectFilter && subjectFilter !== 'All') query = query.eq('subject', subjectFilter);
   if (search && search.trim()) query = query.ilike('subject', `%${search}%`);
 
