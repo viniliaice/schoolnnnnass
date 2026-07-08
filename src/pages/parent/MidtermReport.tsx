@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getCurrentTerm, getMidtermReport, getReportCommentsForStudentTerm } from '../../lib/database';
+import { getStudentsByParent } from '../../lib/db/students';
+import { getCurrentTerm } from '../../lib/db/academic';
+import { getMidtermReport, getReportCommentsForStudentTerm } from '../../lib/db/reports';
 import { Student } from '../../types';
 import type { MidtermReport } from '../../types';
 import { FileBarChart } from 'lucide-react';

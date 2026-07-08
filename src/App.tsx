@@ -4,7 +4,6 @@ import { RoleProvider, useRole } from './context/RoleContext';
 import { ToastProvider } from './context/ToastContext';
 import { ToastContainer } from './components/ui/Toast';
 import { LoginPage } from './components/landing/LoginPage';
-import { SignUpPage } from './components/landing/SignUpPage';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { queryClient } from './lib/queryClient';
 
@@ -64,7 +63,7 @@ function AppContent() {
   if (!isLoggedIn || !session) {
     return (
       <>
-        {showSignUp ? <SignUpPage /> : <LoginPage />}
+        {showSignUp ?   <LoginPage /> : <LoginPage />}
         <div className="text-center mt-4">
           {showSignUp ? (
             <button

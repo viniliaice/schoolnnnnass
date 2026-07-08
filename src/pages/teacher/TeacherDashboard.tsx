@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getUserById, getStudentsByClasses, getExamsByTeacher } from '../../lib/database';
+import { getUserById } from '../../lib/db/profiles';
+import { getStudentsByClasses } from '../../lib/db/students';
+import { getExamsByTeacher } from '../../lib/db/exams';
 import { GraduationCap, FileText, Clock, CheckCircle, XCircle, BookOpen, FileBarChart } from 'lucide-react';
 
 export function TeacherDashboard({ navigate }: { navigate?: (path: string) => void }) {

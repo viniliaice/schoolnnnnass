@@ -1,5 +1,6 @@
-import { Exam, ExamType, TeacherExamProgress, TeacherExamProgressVerification, ClassStudentSubjectProgress } from '../../types';
+import type { Exam, ExamType, TeacherExamProgress, TeacherExamProgressVerification, ClassStudentSubjectProgress } from '../../types';
 import { supabase } from '../supabase';
+import { warnFallback } from '../logger';
 
 const teacherExamProgressColumns = `
   teacherId,
@@ -45,25 +46,30 @@ function getRequiredEntryInfoFromCounts(counts: {
   quizEntered: number;
   totalStudents: number;
 }) {
-  const total = counts.totalStudents || 1;
-  const progress = {
-    CA: counts.caEntered / total,
-    Homework: counts.homeworkEntered / total,
-    Classwork: counts.classworkEntered / total,
-    Quiz: counts.quizEntered / total,
-  };
-  const requiredItems = ['CA', 'Quiz'];
-  const completedRequiredItems = requiredItems.filter(
-    item => progress[item as keyof typeof progress] > 0
-  );
-  const missingRequiredItems = requiredItems.filter(
-    item => progress[item as keyof typeof progress] === 0
-  );
-  const averageProgress =
-    requiredItems.reduce(
-      (sum, item) => sum + progress[item as keyof typeof progress],
-      0
-    ) / requiredItems.length;
+  const total = Math.max(counts.totalStudents, 0);
+  const quizComplete = total > 0 && counts.quizEntered >= total;
+  const caComplete = total > 0 && counts.caEntered >= total;
+  const homeworkComplete = total > 0 && counts.homeworkEntered >= total;
+  const classworkComplete = total > 0 && counts.classworkEntered >= total;
+  const courseworkComplete = caComplete || (homeworkComplete && classworkComplete);
+
+  const courseworkProgress = total > 0
+    ? Math.max(
+        Math.min(counts.caEntered / total, 1),
+        (Math.min(counts.homeworkEntered / total, 1) + Math.min(counts.classworkEntered / total, 1)) / 2,
+      )
+    : 0;
+  const quizProgress = total > 0 ? Math.min(counts.quizEntered / total, 1) : 0;
+
+  const requiredItems = ['Coursework (CA or Homework + Classwork)', 'Quiz'];
+  const completedRequiredItems = [
+    courseworkComplete ? requiredItems[0] : null,
+    quizComplete ? requiredItems[1] : null,
+  ].filter(Boolean) as string[];
+  const missingRequiredItems = [
+    courseworkComplete ? null : requiredItems[0],
+    quizComplete ? null : requiredItems[1],
+  ].filter(Boolean) as string[];
 
   return {
     requiredItems,
@@ -71,28 +77,65 @@ function getRequiredEntryInfoFromCounts(counts: {
     missingRequiredItems,
     requiredCount: requiredItems.length,
     completedCount: completedRequiredItems.length,
-    completionPercent: Math.round(averageProgress * 100),
-    isComplete: requiredItems.every(
-      item => progress[item as keyof typeof progress] === 1
-    ),
+    completionPercent: Math.round(((courseworkProgress + quizProgress) / 2) * 100),
+    isComplete: courseworkComplete && quizComplete,
   };
 }
 
-export interface ClassStudentSubjectProgress {
-  studentId: string;
-  studentName: string;
-  className: string;
-  month: string;
-  subject: string;
-  caEntered: boolean;
-  homeworkEntered: boolean;
-  classworkEntered: boolean;
-  attendanceEntered: boolean;
-  quizEntered: boolean;
-  totalExamRows: number;
+function isMissingRpcError(error: { code?: string; message?: string; details?: string } | null) {
+  if (!error) return false;
+  return error.code === 'PGRST202'
+    || error.code === '42883'
+    || error.message?.toLowerCase().includes('function')
+    || error.details?.includes('get_class_student_subject_progress');
+}
+
+function normalizeClassStudentSubjectProgressRows(value: unknown): ClassStudentSubjectProgress[] {
+  const rows = Array.isArray(value) ? value : [];
+  return rows.map((row: any) => ({
+    studentId: String(row.studentId ?? row.student_id ?? ''),
+    studentName: String(row.studentName ?? row.student_name ?? ''),
+    className: String(row.className ?? row.class_name ?? ''),
+    month: String(row.month ?? ''),
+    subject: String(row.subject ?? ''),
+    caEntered: Boolean(row.caEntered ?? row.ca_entered ?? false),
+    homeworkEntered: Boolean(row.homeworkEntered ?? row.homework_entered ?? false),
+    classworkEntered: Boolean(row.classworkEntered ?? row.classwork_entered ?? false),
+    attendanceEntered: Boolean(row.attendanceEntered ?? row.attendance_entered ?? false),
+    quizEntered: Boolean(row.quizEntered ?? row.quiz_entered ?? false),
+    totalExamRows: Number(row.totalExamRows ?? row.total_exam_rows ?? 0),
+    examEntries: Array.isArray(row.examEntries ?? row.exam_entries)
+      ? (row.examEntries ?? row.exam_entries).map((entry: any) => ({
+          examType: entry.examType ?? entry.exam_type,
+          score: Number(entry.score ?? 0),
+          total: Number(entry.total ?? 0),
+        }))
+      : [],
+  })).sort((a, b) => {
+    const studentCompare = a.studentName.localeCompare(b.studentName);
+    return studentCompare !== 0 ? studentCompare : a.subject.localeCompare(b.subject);
+  });
 }
 
 export async function getClassStudentSubjectProgress(
+  className: string,
+  month: string
+): Promise<ClassStudentSubjectProgress[]> {
+  if (!className || !month) return [];
+
+  const { data, error } = await supabase.rpc('get_class_student_subject_progress', {
+    p_class_name: className,
+    p_month: month,
+  });
+
+  if (!error) return normalizeClassStudentSubjectProgressRows(data);
+  if (!isMissingRpcError(error)) throw error;
+
+  warnFallback('getClassStudentSubjectProgress RPC missing; using client fallback', error);
+  return getClassStudentSubjectProgressFallback(className, month);
+}
+
+export async function getClassStudentSubjectProgressFallback(
   className: string,
   month: string
 ): Promise<ClassStudentSubjectProgress[]> {
@@ -104,7 +147,6 @@ export async function getClassStudentSubjectProgress(
     .eq('className', className);
   if (studentError) throw studentError;
 
-  const studentMap = new Map((students || []).map((student: any) => [student.id, student.name]));
   const studentIds = (students || []).map((student: any) => student.id);
   if (studentIds.length === 0) return [];
 
@@ -114,7 +156,7 @@ export async function getClassStudentSubjectProgress(
     .eq('className', className);
   if (csError) throw csError;
 
-  const subjectNames = (classSubjects || []).map((cs: any) => cs.subjects?.name || cs.subjectId);
+  const subjectNames = (classSubjects || []).map((cs: any) => (cs.subjects as any)?.name || cs.subjectId);
   const baselineRows = new Map<string, ClassStudentSubjectProgress>();
 
   for (const student of students || []) {
@@ -145,12 +187,10 @@ export async function getClassStudentSubjectProgress(
   if (examError) throw examError;
 
   const subjectNameByKey = new Map<string, string>();
-  for (const cs of classSubjects) {
-    const subjectName = cs.subjects?.name || cs.subjectId;
+  for (const cs of classSubjects || []) {
+    const subjectName = (cs.subjects as any)?.name || cs.subjectId;
     subjectNameByKey.set(cs.subjectId, subjectName);
-    if (subjectName !== cs.subjectId) {
-      subjectNameByKey.set(subjectName, subjectName);
-    }
+    if (subjectName !== cs.subjectId) subjectNameByKey.set(subjectName, subjectName);
   }
 
   for (const exam of exams || []) {
@@ -159,7 +199,7 @@ export async function getClassStudentSubjectProgress(
     const existing = baselineRows.get(key);
     if (!existing) continue;
 
-    const updated: ClassStudentSubjectProgress = {
+    baselineRows.set(key, {
       ...existing,
       caEntered: existing.caEntered || exam.examType === 'CA',
       homeworkEntered: existing.homeworkEntered || exam.examType === 'Homework',
@@ -168,9 +208,7 @@ export async function getClassStudentSubjectProgress(
       quizEntered: existing.quizEntered || exam.examType === 'Quiz',
       totalExamRows: existing.totalExamRows + 1,
       examEntries: [...existing.examEntries, { examType: exam.examType, score: exam.score, total: exam.total }],
-    };
-
-    baselineRows.set(key, updated);
+    });
   }
 
   return Array.from(baselineRows.values()).sort((a, b) => {
@@ -210,8 +248,10 @@ export async function getTeacherExamProgress(filters: {
       }
     }
 
+    warnFallback('teacher_exam_progress view returned invalid rows; using client fallback');
     return getTeacherExamProgressFallback(filters);
   } catch (error) {
+    warnFallback('teacher_exam_progress view failed; using client fallback', error);
     return getTeacherExamProgressFallback(filters);
   }
 }
@@ -288,7 +328,7 @@ async function getTeacherExamProgressFallback(filters: {
   const groups = new Map<string, TeacherExamProgress>();
 
   for (const cs of classSubjects) {
-    const subjectName = cs.subjects?.name || cs.subjectId;
+    const subjectName = (cs.subjects as any)?.name || cs.subjectId;
     const teacherId = cs.teacherId;
     const className = cs.className;
 
@@ -347,7 +387,7 @@ async function getTeacherExamProgressFallback(filters: {
 
   const teacherIds = Array.from(new Set(classSubjects.map(cs => cs.teacherId)));
   const { data: teachers, error: teacherError } = await supabase
-    .from('users')
+    .from('profiles')
     .select('id,name')
     .in('id', teacherIds);
   if (teacherError) throw teacherError;

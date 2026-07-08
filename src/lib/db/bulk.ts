@@ -9,7 +9,7 @@ export async function bulkCreateUsers(dataList: Omit<User, 'id' | 'createdAt'>[]
     return { id, ...data, createdAt: new Date().toISOString() };
   });
 
-  const { data, error } = await supabase.from('users').insert(users).select();
+  const { data, error } = await supabase.from('profiles').insert(users).select();
   if (error) throw error;
   return data || [];
 }

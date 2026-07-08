@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getAllowedMessageRecipients, getMessagesForUser, markMessageRead, sendMessage } from '../../lib/database';
+import { getAllowedMessageRecipients, getMessagesForUser, markMessageRead, sendMessage } from '../../lib/db/communications';
 import { useRole } from '../../context/RoleContext';
 import { Message, User } from '../../types';
 import { useToast } from '../../context/ToastContext';

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getAttendanceHomeworkStreams } from '../../lib/database';
+import { getAttendanceHomeworkStreams } from '../../lib/db/streams';
 import { AttendanceRecord, HomeworkRecord } from '../../types';
 import { useToast } from '../../context/ToastContext';
 

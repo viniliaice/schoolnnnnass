@@ -1,6 +1,12 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getUserById, getStudentsByClasses, bulkCreateExams, getCurrentTerm, getSubjects, getClassSubjectsForTeacher, upsertReportComment, getClassAssignmentsForTeacher, logAllClassSubjects } from '../../lib/database';
+import { getUserById } from '../../lib/db/profiles';
+import { getStudentsByClasses } from '../../lib/db/students';
+import { bulkCreateExams } from '../../lib/db/bulk';
+import { getCurrentTerm } from '../../lib/db/academic';
+import { getSubjects } from '../../lib/db/subjects';
+import { getClassSubjectsForTeacher, getClassAssignmentsForTeacher, logAllClassSubjects } from '../../lib/db/classes';
+import { upsertReportComment } from '../../lib/db/reports';
 import { ExamType, EXAM_TYPES, MONTHS, SUBJECTS, Term, Subject } from '../../types';
 import { Dialog } from '../../components/ui/Dialog';
 import { useToast } from '../../context/ToastContext';

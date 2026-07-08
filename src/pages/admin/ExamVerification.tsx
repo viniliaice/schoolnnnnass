@@ -1,27 +1,27 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Listbox } from '@headlessui/react';
 import { useRole } from '../../context/RoleContext';
+import { getClasses } from '../../lib/db/classes';
 import {
-  getClasses,
   getExamStatusCounts,
   getExamSubjectsByClasses,
   getExamsPaginated,
-  getStudentsByClasses,
-  getUserById,
-  getUsersByRole,
   updateExamStatus,
   updateExam,
   deleteExam,
   approveAllPendingExams,
   approvePendingExamsForClasses,
-} from '../../lib/database';
+} from '../../lib/db/exams';
+import { getStudentsByClasses } from '../../lib/db/students';
+import { getUserById, getUsersByRole } from '../../lib/db/profiles';
 import { Exam, ExamStatus, Student, User, EXAM_TYPES, MONTHS, CLASSES } from '../../types';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { useToast } from '../../context/ToastContext';
 import { CheckCircle, XCircle, Clock, FileText } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { Skeleton } from '../../components/ui/Skeleton';
+import { clampPage, getTotalPages, getVisibleRange, sortExamsByStudentName } from './examVerificationUtils';
 
 const DEFAULT_PAGE_SIZE = 150;
 const STUDENT_FETCH_LIMIT = 1000;
@@ -49,7 +49,7 @@ export function ExamVerification() {
     queryKey: ['supervisorUser', session?.userId],
     queryFn: async () => {
       if (!session?.userId) return null;
-      return getUserById(session.userId);
+      return (await getUserById(session.userId)) ?? null;
     },
     enabled: session?.role === 'supervisor' && !!session?.userId,
     staleTime: 1000 * 60 * 5,
@@ -97,7 +97,7 @@ const subjectOptions = ['All', ...subjects];
     queryFn: () => getExamsPaginated(page, pageSize, statusFilter, studentIds, subjectFilterValue, search),
     enabled: studentIds.length > 0 && subjectFilterValue !== '',
     staleTime: 1000 * 60 * 2,
-    keepPreviousData: true,
+    placeholderData: keepPreviousData,
     refetchOnWindowFocus: false,
     retry: false,
   });
@@ -130,6 +130,8 @@ const teachersQuery = useQuery<User[], Error>({
   const totalItems = examsQuery.data?.total ?? 0;
   const statusCounts = statusCountsQuery.data ?? { all: 0, pending: 0, approved: 0, rejected: 0 };
   const teachers = teachersQuery.data ?? [];
+  const totalPages = getTotalPages(totalItems, pageSize);
+  const visibleRange = getVisibleRange(page, pageSize, totalItems);
 
   const isLoadingStudents = studentsQuery.isLoading && sortedClassFilter.length > 0;
   const isLoadingExams = examsQuery.isLoading;
@@ -152,26 +154,19 @@ const teachersQuery = useQuery<User[], Error>({
   }, [exams]);
 
   useEffect(() => {
-    const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
-    if (page > totalPages) {
-      setPage(totalPages);
+    const nextPage = clampPage(page, totalItems, pageSize);
+    if (page !== nextPage) {
+      setPage(nextPage);
     }
   }, [page, pageSize, totalItems]);
 
   const getStudent = (studentId: string) => students.find(s => s.id === studentId);
   const getTeacher = (teacherId: string) => teachers.find(t => t.id === teacherId);
 
-  const paged = useMemo(() => {
-    const rows = [...exams];
-    if (studentSort === 'none') return rows;
-    rows.sort((a, b) => {
-      const an = (getStudent(a.studentId)?.name || '').toLowerCase();
-      const bn = (getStudent(b.studentId)?.name || '').toLowerCase();
-      if (an === bn) return 0;
-      return studentSort === 'asc' ? (an < bn ? -1 : 1) : (an > bn ? -1 : 1);
-    });
-    return rows;
-  }, [exams, studentSort, students]);
+  const paged = useMemo(
+    () => sortExamsByStudentName(exams, students, studentSort),
+    [exams, studentSort, students]
+  );
 
   const tabs = useMemo(
     () => [
@@ -504,8 +499,8 @@ const teachersQuery = useQuery<User[], Error>({
                     <button onClick={() => setPage(p => Math.max(1, p - 1))} className="p-1 rounded-md bg-slate-50">
                       <ChevronLeft className="w-4 h-4" />
                     </button>
-                    <div className="text-sm text-slate-600">Page {page} / {Math.max(1, Math.ceil(totalItems / pageSize))}</div>
-                    <button onClick={() => setPage(p => Math.min(Math.max(1, Math.ceil(totalItems / pageSize)), p + 1))} className="p-1 rounded-md bg-slate-50">
+                    <div className="text-sm text-slate-600">Page {page} / {totalPages}</div>
+                    <button onClick={() => setPage(p => clampPage(p + 1, totalItems, pageSize))} className="p-1 rounded-md bg-slate-50">
                       <ChevronRight className="w-4 h-4" />
                     </button>
                   </div>
@@ -720,11 +715,11 @@ const teachersQuery = useQuery<User[], Error>({
               {totalItems > pageSize && (
                 <div className="p-4 flex items-center justify-end gap-2">
                   <div className="text-sm text-slate-500">
-                    Showing {(page - 1) * pageSize + 1}�{Math.min(page * pageSize, totalItems)} of {totalItems}
+                    Showing {visibleRange.from}–{visibleRange.to} of {totalItems}
                   </div>
                   <div className="flex items-center gap-2">
                     <button onClick={() => setPage(p => Math.max(1, p - 1))} className="px-3 py-1 rounded-md bg-slate-50">Prev</button>
-                    <button onClick={() => setPage(p => Math.min(Math.max(1, Math.ceil(totalItems / pageSize)), p + 1))} className="px-3 py-1 rounded-md bg-slate-50">Next</button>
+                    <button onClick={() => setPage(p => clampPage(p + 1, totalItems, pageSize))} className="px-3 py-1 rounded-md bg-slate-50">Next</button>
                   </div>
                 </div>
               )}

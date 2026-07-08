@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { createDemoAccounts } from '../../lib/database';
+import { createDemoAccounts } from '../../lib/devSeed';
 import { School, Mail, Lock, Eye, EyeOff, ArrowRight, Sparkles, UserPlus } from 'lucide-react';
 import { cn } from '../../utils/cn';
 

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getAnnouncementsForParent, getParentPortalSnapshot } from '../../lib/database';
+import { getAnnouncementsForParent } from '../../lib/db/communications';
+import { getParentPortalSnapshot } from '../../lib/db/parent-portal';
 import { Announcement, AttendanceRecord, Exam, HomeworkRecord, Student, CA_TYPES, getGrade } from '../../types';
 import { GraduationCap, BookOpen, TrendingUp, Award, CalendarCheck2, ClipboardList } from 'lucide-react';
 import { supabase } from '../../lib/supabase';

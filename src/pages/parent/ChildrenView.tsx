@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getExamsByParent } from '../../lib/database';
+import { getStudentsByParent } from '../../lib/db/students';
+import { getExamsByParent } from '../../lib/db/exams';
 import { Student, Exam } from '../../types';
 import { GraduationCap, BookOpen } from 'lucide-react';
 

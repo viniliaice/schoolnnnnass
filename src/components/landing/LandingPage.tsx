@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { seedDatabase, isSeeded as checkIsSeeded } from '../../lib/database';
+import { seedDatabase, isSeeded as checkIsSeeded } from '../../lib/devSeed';
 import { Role } from '../../types';
 import { Shield, BookOpen, Heart, Database, School, Sparkles, ArrowRight, CheckCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';

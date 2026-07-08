@@ -39,7 +39,7 @@ export async function getAttendanceHomeworkStreams(params: { role: Role; userId:
 
   if (role === 'teacher' || role === 'supervisor') {
     const { data: me, error: meErr } = await supabase
-      .from('users')
+      .from('profiles')
       .select('assignedClasses')
       .eq('id', userId)
       .single();

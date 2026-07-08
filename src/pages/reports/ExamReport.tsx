@@ -3,20 +3,22 @@ import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
 import {
   getStudents,
-  getUserById,
   getStudentById,
   getStudentsByClasses,
   getStudentsByClass,
   getStudentsByParent,
-  getClasses,
-  getCurrentTerm,
+} from '../../lib/db/students';
+import { getUserById } from '../../lib/db/profiles';
+import { getClasses } from '../../lib/db/classes';
+import { getCurrentTerm } from '../../lib/db/academic';
+import {
   getMonthlyReport,
   getMidtermReport,
   getFinalReport,
   getReportComment,
   upsertReportComment,
   getReportCommentsForStudentTerm,
-} from '../../lib/database';
+} from '../../lib/db/reports';
 import type { ReportComment } from '../../types';
 import { Student, MONTHS, MonthlyScore } from '../../types';
 import { PDFDownloadLink, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
