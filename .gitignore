@@ -4,3 +4,4 @@ node_modules
 dist
 .agents/
 .env
+github_pat_*
