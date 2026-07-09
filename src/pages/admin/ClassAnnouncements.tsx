@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { CLASSES } from '../../types';
-import { broadcastClassAnnouncement, deleteAnnouncement, getAnnouncementsByCreator } from '../../lib/database';
+import { broadcastClassAnnouncement, deleteAnnouncement, getAnnouncementsByCreator } from '../../lib/db/communications';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
 import { supabase } from '../../lib/supabase';

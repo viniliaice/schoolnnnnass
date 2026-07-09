@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getCurrentTerm, getMonthlyReport } from '../../lib/database';
+import { getStudentsByParent } from '../../lib/db/students';
+import { getCurrentTerm } from '../../lib/db/academic';
+import { getMonthlyReport } from '../../lib/db/reports';
 import { Student, MonthlyScore, MONTHS } from '../../types';
 import { Calendar } from 'lucide-react';
 import { cn } from '../../utils/cn';

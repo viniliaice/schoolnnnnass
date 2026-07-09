@@ -2,6 +2,11 @@ import { useQuery, type UseQueryOptions } from '@tanstack/react-query';
 import { getTeacherExamProgressVerification } from '../db/progress';
 import type { TeacherExamProgressVerification } from '../../types';
 
+type TeacherExamProgressVerificationQueryOptions = Omit<
+  UseQueryOptions<TeacherExamProgressVerification, unknown, TeacherExamProgressVerification, readonly unknown[]>,
+  'queryKey' | 'queryFn'
+>;
+
 export function useTeacherExamProgressVerification(
   filters: {
     teacherId: string;
@@ -10,7 +15,7 @@ export function useTeacherExamProgressVerification(
     subjectName: string;
     month: string;
   },
-  options?: UseQueryOptions<TeacherExamProgressVerification, unknown, TeacherExamProgressVerification, readonly unknown[]>
+  options?: TeacherExamProgressVerificationQueryOptions
 ) {
   const queryKey = [
     'teacherExamProgressVerification',
@@ -21,7 +26,7 @@ export function useTeacherExamProgressVerification(
     filters.month,
   ];
 
-  return useQuery<TeacherExamProgressVerification, unknown>({
+  return useQuery<TeacherExamProgressVerification, unknown, TeacherExamProgressVerification, readonly unknown[]>({
     queryKey,
     queryFn: () => getTeacherExamProgressVerification(filters),
     enabled: options?.enabled ?? false,

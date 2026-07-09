@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getExamsByTeacher, getStudentById, getUserById, getStudentsByClasses } from '../../lib/database';
+import { getExamsByTeacher } from '../../lib/db/exams';
+import { getStudentById, getStudentsByClasses } from '../../lib/db/students';
+import { getUserById } from '../../lib/db/profiles';
 import { Exam, ExamStatus, Student } from '../../types';
 import { FileText, Clock, CheckCircle, XCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';

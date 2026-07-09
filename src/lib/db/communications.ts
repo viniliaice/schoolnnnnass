@@ -92,7 +92,7 @@ export async function getMessagesForUser(userId: string): Promise<Message[]> {
 
 export async function getAllowedMessageRecipients(userId: string): Promise<User[]> {
   const { data: me, error: meError } = await supabase
-    .from('users')
+    .from('profiles')
     .select('*')
     .eq('id', userId)
     .single();
@@ -100,7 +100,7 @@ export async function getAllowedMessageRecipients(userId: string): Promise<User[
   const meRole = (me.role || '') as Role;
 
   if (meRole === 'admin') {
-    const { data, error } = await supabase.from('users').select('*').neq('id', userId);
+    const { data, error } = await supabase.from('profiles').select('*').neq('id', userId);
     if (error) throw error;
     return (data || []) as User[];
   }
@@ -113,7 +113,7 @@ export async function getAllowedMessageRecipients(userId: string): Promise<User[
     if (studentsError) throw studentsError;
     const classNames = Array.from(new Set((students || []).map((row: any) => row.className).filter(Boolean)));
     if (classNames.length === 0) return [];
-    const { data: users, error: usersError } = await supabase.from('users').select('*');
+    const { data: users, error: usersError } = await supabase.from('profiles').select('*');
     if (usersError) throw usersError;
     return (users || []).filter((user: any) => {
       if (user.id === userId) return false;
@@ -135,7 +135,7 @@ export async function getAllowedMessageRecipients(userId: string): Promise<User[
     const parentIds = Array.from(new Set((students || []).map((row: any) => row.parentId).filter(Boolean)));
     if (parentIds.length === 0) return [];
     const { data: parents, error: parentsError } = await supabase
-      .from('users')
+      .from('profiles')
       .select('*')
       .in('id', parentIds);
     if (parentsError) throw parentsError;
@@ -153,7 +153,7 @@ export async function getAllowedMessageRecipients(userId: string): Promise<User[
     if (studentsError) throw studentsError;
     const parentIds = Array.from(new Set((students || []).map((row: any) => row.parentId).filter(Boolean)));
     if (parentIds.length === 0) return [];
-    const { data: parents, error: parentsError } = await supabase.from('users').select('*').in('id', parentIds);
+    const { data: parents, error: parentsError } = await supabase.from('profiles').select('*').in('id', parentIds);
     if (parentsError) throw parentsError;
     return (parents || []) as User[];
   }

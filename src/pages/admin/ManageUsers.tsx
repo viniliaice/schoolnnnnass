@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Listbox } from '@headlessui/react';
-import { getUsersPaginated, createUser, deleteUser, updateUser, getStudentsByParent, getStudents } from '../../lib/database';
+import { getUsersPaginated, createUser, deleteUser, updateUser } from '../../lib/db/profiles';
+import { getStudentsByParent, getStudents } from '../../lib/db/students';
 import { User, Role, CLASSES, Student, SUBJECTS } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { Dialog } from '../../components/ui/Dialog';

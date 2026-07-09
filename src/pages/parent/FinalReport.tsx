@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getCurrentTerm, getFinalReport } from '../../lib/database';
+import { getStudentsByParent } from '../../lib/db/students';
+import { getCurrentTerm } from '../../lib/db/academic';
+import { getFinalReport } from '../../lib/db/reports';
 import { Student, getGrade } from '../../types';
 import type { FinalReport } from '../../types';
 import { Award, CheckCircle, XCircle } from 'lucide-react';

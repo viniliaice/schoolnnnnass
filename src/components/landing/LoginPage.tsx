@@ -1,8 +1,7 @@
 import { useState } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { createDemoAccounts } from '../../lib/database';
-import { School, Mail, Lock, Eye, EyeOff, ArrowRight, Sparkles, UserPlus } from 'lucide-react';
+import { School, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 export function LoginPage() {
@@ -12,7 +11,6 @@ export function LoginPage() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [isCreatingDemo, setIsCreatingDemo] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,18 +30,6 @@ export function LoginPage() {
     }
   };
 
-  const handleCreateDemoAccounts = async () => {
-    setIsCreatingDemo(true);
-    try {
-      await createDemoAccounts();
-      addToast({ title: 'Demo accounts created successfully!', type: 'success' });
-    } catch (error: any) {
-      addToast({ title: error.message || 'Failed to create demo accounts', type: 'error' });
-    } finally {
-      setIsCreatingDemo(false);
-    }
-  };
-
   return (
     <div className="min-h-screen bg-linear-to-br from-indigo-50 via-white to-teal-50 flex items-center justify-center p-4">
       <div className="w-full max-w-md">
@@ -57,7 +43,7 @@ export function LoginPage() {
         </div>
 
         {/* Login Form */}
-        <div className="bg-white rounded-2xl shadow-xl border border-slate-200 p-8">
+        <div className="theme-ornamented bg-white rounded-2xl shadow-xl border border-slate-200 p-8">
           <form onSubmit={handleSubmit} className="space-y-6">
             {/* Email */}
             <div>
@@ -128,59 +114,11 @@ export function LoginPage() {
               )}
             </button>
           </form>
-
-          {/* Demo Credentials */}
-          <div className="mt-8 pt-6 border-t border-slate-200">
-            <div className="flex items-center gap-2 mb-4">
-              <Sparkles className="w-4 h-4 text-amber-500" />
-              <span className="text-sm font-medium text-slate-700">Demo Credentials</span>
-            </div>
-            {/* Create Demo Accounts Button */}
-            <div className="mb-4">
-              <button
-                onClick={handleCreateDemoAccounts}
-                disabled={isCreatingDemo}
-                className={cn(
-                  "w-full flex items-center justify-center gap-2 py-2 px-4 rounded-lg font-medium text-sm transition-all",
-                  "bg-amber-100 hover:bg-amber-200 text-amber-800 border border-amber-300",
-                  "disabled:opacity-50 disabled:cursor-not-allowed"
-                )}
-              >
-                {isCreatingDemo ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-amber-800 border-t-transparent rounded-full animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  <>
-                    <UserPlus className="w-4 h-4" />
-                    Create Demo Accounts
-                  </>
-                )}
-              </button>
-            </div>
-            <div className="space-y-3 text-xs text-slate-600">
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="font-medium text-slate-800">Admin:</div>
-                <div>admin@scholo.com / admin123</div>
-              </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="font-medium text-slate-800">Teacher:</div>
-                <div>teacher@scholo.com / teacher123</div>
-              </div>
-              <div className="bg-slate-50 rounded-lg p-3">
-                <div className="font-medium text-slate-800">Parent:</div>
-                <div>parent@scholo.com / parent123</div>
-              </div>
-            </div>
-          </div>
         </div>
 
         {/* Footer */}
         <div className="text-center mt-8">
-          <p className="text-sm text-slate-500">
-            Secure login powered by Supabase
-          </p>
+          <p className="text-xs text-slate-500">Made by Eng. Akso</p>
         </div>
       </div>
     </div>

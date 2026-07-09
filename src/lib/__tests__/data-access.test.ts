@@ -7,7 +7,9 @@ vi.mock('../supabase', () => ({
 }));
 
 import { supabase } from '../supabase';
-import { getUsers, getStudents, logAllClassSubjects } from '../database';
+import { getUsers } from '../db/profiles';
+import { getStudents } from '../db/students';
+import { logAllClassSubjects } from '../db/classes';
 
 const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
 
@@ -18,14 +20,14 @@ beforeEach(() => {
 describe('database helpers', () => {
   it('getUsers returns rows from supabase', async () => {
     const users = [{ id: 'u1', name: 'Alice' }, { id: 'u2', name: 'Bob' }];
-    // chain: supabase.from('users').select('*') -> resolves { data, error }
+    // chain: supabase.from('profiles').select('*') -> resolves { data, error }
     mockFrom.mockImplementation((_table: string) => ({
       select: (_sel: any) => Promise.resolve({ data: users, error: null })
     }));
 
     const res = await getUsers();
     expect(res).toEqual(users);
-    expect(mockFrom).toHaveBeenCalledWith('users');
+    expect(mockFrom).toHaveBeenCalledWith('profiles');
   });
 
   it('getStudents returns rows from supabase', async () => {

@@ -70,6 +70,8 @@ export interface Subject {
   id: string;
   name: string;
   shortName?: string;
+  color?: string;
+  weeklyLessons?: number;
   createdAt: string;
 }
 
@@ -229,6 +231,8 @@ export interface Subject {
   id: string;
   name: string;
   shortName?: string;
+  color?: string;
+  weeklyLessons?: number;
   createdAt: string;
 }
 

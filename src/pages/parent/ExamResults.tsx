@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent, getExamsByParent, getCurrentTerm, getReportCommentsForStudentTerm } from '../../lib/database';
+import { getStudentsByParent } from '../../lib/db/students';
+import { getExamsByParent } from '../../lib/db/exams';
+import { getCurrentTerm } from '../../lib/db/academic';
+import { getReportCommentsForStudentTerm } from '../../lib/db/reports';
 import { Student, Exam, ExamType, EXAM_TYPES } from '../../types';
 import { BookOpen } from 'lucide-react';
 import { cn } from '../../utils/cn';

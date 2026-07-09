@@ -7,6 +7,7 @@ import {
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { ThemeSwitcher } from '../ui/ThemeSwitcher';
 
 interface NavItem {
   label: string;
@@ -143,8 +144,13 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
         })}
       </nav>
 
+      {/* Appearance */}
+      <div className="px-3 py-3 mt-auto">
+        <ThemeSwitcher />
+      </div>
+
       {/* Logout */}
-      <div className="p-3 mt-auto">
+      <div className="p-3">
         <button
           onClick={logout}
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-white/70 hover:text-white hover:bg-white/10 transition-all"

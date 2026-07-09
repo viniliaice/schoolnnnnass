@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { seedDatabase, isSeeded as checkIsSeeded } from '../../lib/database';
+import { seedDatabase, isSeeded as checkIsSeeded } from '../../lib/devSeed';
 import { Role } from '../../types';
 import { Shield, BookOpen, Heart, Database, School, Sparkles, ArrowRight, CheckCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -123,7 +123,7 @@ export function LandingPage() {
 
           <div className="max-w-md mx-auto mb-12">
             <div className={cn(
-              "rounded-2xl border-2 border-dashed p-6 text-center transition-all",
+              "theme-ornamented rounded-2xl border-2 border-dashed p-6 text-center transition-all",
               seeded ? "border-emerald-200 bg-emerald-50/50" : "border-slate-200 bg-white hover:border-indigo-200"
             )}>
               {seeded ? (
@@ -162,7 +162,7 @@ export function LandingPage() {
                 key={roleConfig.role}
                 onClick={() => handleRoleSelect(roleConfig)}
                 className={cn(
-                  "group relative rounded-2xl border-2 p-6 text-left transition-all duration-200",
+                  "theme-ornamented group relative rounded-2xl border-2 p-6 text-left transition-all duration-200",
                   "hover:shadow-xl hover:-translate-y-1 active:scale-[0.98]",
                   roleConfig.borderColor,
                   roleConfig.bgColor,

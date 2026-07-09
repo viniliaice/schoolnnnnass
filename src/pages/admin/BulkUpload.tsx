@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import {
-  getUsersByRole, bulkCreateUsers, bulkCreateStudents, getStudents, promoteStudentsByClass
-} from '../../lib/database';
+import { getUsersByRole } from '../../lib/db/profiles';
+import { bulkCreateUsers, bulkCreateStudents } from '../../lib/db/bulk';
+import { getStudents, promoteStudentsByClass } from '../../lib/db/students';
 import { User, CLASSES } from '../../types';
 import { useToast } from '../../context/ToastContext';
 import { Dialog } from '../../components/ui/Dialog';

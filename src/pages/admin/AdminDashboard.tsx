@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react';
-import { getSystemStats, getStudents, getExams, getUsers } from '../../lib/database';
+import { getSystemStats } from '../../lib/db/stats';
+import { getStudents } from '../../lib/db/students';
+import { getExams } from '../../lib/db/exams';
+import { getUsers } from '../../lib/db/profiles';
 
 import { Users, GraduationCap, FileText, CheckCircle, XCircle, Clock, TrendingUp, BookOpen, FileBarChart } from 'lucide-react';
 
@@ -17,20 +20,23 @@ export function AdminDashboard({ navigate }: { navigate?: (path: string) => void
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
-      // Parallelize independent fetches to avoid waterfalls
-      const [statsData, examsData, studentsData, usersData] = await Promise.all([
-        getSystemStats(),
-        getExams(),
-        getStudents(),
-        getUsers(),
-      ]);
+      try {
+        const [statsData, examsData, studentsData, usersData] = await Promise.all([
+          getSystemStats(),
+          getExams(),
+          getStudents(),
+          getUsers(),
+        ]);
 
-      setStats(statsData);
-      // limit recent exams to last 15
-      setRecentExams(examsData.slice(-15).reverse());
-      setStudents(studentsData);
-      setUsers(usersData);
-      setLoading(false);
+        setStats(statsData);
+        setRecentExams(examsData.slice(-15).reverse());
+        setStudents(studentsData);
+        setUsers(usersData);
+      } catch (err) {
+        console.error('AdminDashboard load error:', err);
+      } finally {
+        setLoading(false);
+      }
     };
     loadData();
   }, []);

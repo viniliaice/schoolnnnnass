@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { getUserById, getStudentsByClasses, getUsersByIds } from '../../lib/database';
+import { getUserById, getUsersByIds } from '../../lib/db/profiles';
+import { getStudentsByClasses } from '../../lib/db/students';
 import { Student, User } from '../../types';
 import { GraduationCap, Search, MessageCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';

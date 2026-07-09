@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useEffect } from 'react';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { RoleProvider, useRole } from './context/RoleContext';
 import { ToastProvider } from './context/ToastContext';
 import { ToastContainer } from './components/ui/Toast';
+import { applyStoredAppearance } from './components/ui/ThemeSwitcher';
 import { LoginPage } from './components/landing/LoginPage';
-import { SignUpPage } from './components/landing/SignUpPage';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { queryClient } from './lib/queryClient';
 
@@ -45,7 +45,6 @@ import { StreamsPage } from './pages/shared/StreamsPage';
 
 function AppContent() {
   const { session, isLoggedIn, loading } = useRole();
-  const [showSignUp, setShowSignUp] = useState(false);
 
   if (loading) {
     return (
@@ -62,28 +61,7 @@ function AppContent() {
   }
 
   if (!isLoggedIn || !session) {
-    return (
-      <>
-        {showSignUp ? <SignUpPage /> : <LoginPage />}
-        <div className="text-center mt-4">
-          {showSignUp ? (
-            <button
-              className="text-indigo-600 hover:underline font-medium"
-              onClick={() => setShowSignUp(false)}
-            >
-              Already have an account? Log in
-            </button>
-          ) : (
-            <button
-              className="text-indigo-600 hover:underline font-medium"
-              onClick={() => setShowSignUp(true)}
-            >
-              Don't have an account? Sign up
-            </button>
-          )}
-        </div>
-      </>
-    );
+    return <LoginPage />;
   }
 
   return (
@@ -159,6 +137,10 @@ function AppContent() {
 }
 
 export default function App() {
+  useEffect(() => {
+    applyStoredAppearance();
+  }, []);
+
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>

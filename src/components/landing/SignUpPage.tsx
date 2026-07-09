@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useToast } from '../../context/ToastContext';
-import { signUp } from '../../lib/database';
+import { signUp } from '../../lib/auth';
 import { School, Mail, Lock, Eye, EyeOff } from 'lucide-react';
 
 

@@ -1,4 +1,4 @@
-import { useQuery, type UseQueryOptions } from '@tanstack/react-query';
+import { useQuery } from '@tanstack/react-query';
 import { getStudents, getStudentsByClass, getStudentsByClasses } from '../db/students';
 import type { Student } from '../../types';
 
@@ -15,7 +15,7 @@ export function useStudents(
 
   const queryKey = ['students', normalizedClassNames ?? 'all', search ?? '', limit];
 
-  return useQuery<Student[], unknown>({
+  return useQuery<Student[], unknown, Student[], readonly unknown[]>({
     queryKey,
     queryFn: async () => {
       if (normalizedClassNames && normalizedClassNames.length > 0) {
@@ -30,7 +30,7 @@ export function useStudents(
       return getStudents(limit);
     },
     staleTime: 1000 * 60 * 5,
-    cacheTime: 1000 * 60 * 15,
+    gcTime: 1000 * 60 * 15,
     refetchOnWindowFocus: false,
     retry: false,
   });

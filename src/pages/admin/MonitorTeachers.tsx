@@ -10,58 +10,54 @@ const getCardTintClasses = (percent: number) => {
 };
 
 const getRequiredEntryInfo = (detail: TeacherExamProgress) => {
-  const quizDone = detail.quizEntered > 0;
-  const caDone = detail.caEntered > 0;
-  const homeworkDone = detail.homeworkEntered > 0;
-  const classworkDone = detail.classworkEntered > 0;
-  const attendanceDone = detail.attendanceEntered > 0;
+  const totalStudents = Math.max(detail.totalStudents || 0, 0);
+  const quizComplete = totalStudents > 0 && detail.quizEntered >= totalStudents;
+  const caComplete = totalStudents > 0 && detail.caEntered >= totalStudents;
+  const homeworkComplete = totalStudents > 0 && detail.homeworkEntered >= totalStudents;
+  const classworkComplete = totalStudents > 0 && detail.classworkEntered >= totalStudents;
+  const courseworkComplete = caComplete || (homeworkComplete && classworkComplete);
 
-  const requiredItems = caDone
-    ? ['CA','Quiz']
-    : ['Quiz', 'Homework', 'Classwork', 'Attendance'];
+  const courseworkProgress = totalStudents > 0
+    ? Math.max(
+        Math.min(detail.caEntered / totalStudents, 1),
+        (Math.min(detail.homeworkEntered / totalStudents, 1) + Math.min(detail.classworkEntered / totalStudents, 1)) / 2,
+      )
+    : 0;
+  const quizProgress = totalStudents > 0 ? Math.min(detail.quizEntered / totalStudents, 1) : 0;
 
-  const completedRequiredItems = caDone
-    ? ['CA']
-    : [
-        quizDone ? 'Quiz' : null,
-        homeworkDone ? 'Homework' : null,
-        classworkDone ? 'Classwork' : null,
-        attendanceDone ? 'Attendance' : null,
-      ].filter(Boolean) as string[];
-
-  const allCompletedItems = [
-    quizDone ? 'Quiz' : null,
-    caDone ? 'CA' : null,
-    homeworkDone ? 'Homework' : null,
-    classworkDone ? 'Classwork' : null,
-    attendanceDone ? 'Attendance' : null,
+  const requiredItems = ['Coursework (CA or Homework + Classwork)', 'Quiz'];
+  const completedRequiredItems = [
+    courseworkComplete ? requiredItems[0] : null,
+    quizComplete ? requiredItems[1] : null,
+  ].filter(Boolean) as string[];
+  const completedItems = [
+    detail.caEntered > 0 ? `CA (${detail.caEntered}/${totalStudents})` : null,
+    detail.homeworkEntered > 0 ? `Homework (${detail.homeworkEntered}/${totalStudents})` : null,
+    detail.classworkEntered > 0 ? `Classwork (${detail.classworkEntered}/${totalStudents})` : null,
+    detail.quizEntered > 0 ? `Quiz (${detail.quizEntered}/${totalStudents})` : null,
+    detail.attendanceEntered > 0 ? `Attendance (${detail.attendanceEntered}/${totalStudents})` : null,
   ].filter(Boolean) as string[];
 
   const requiredCount = detail.requiredEntries ?? requiredItems.length;
   const completedCount = detail.completedEntries ?? completedRequiredItems.length;
   const displayPercent = typeof detail.completionPercent === 'number'
     ? Math.round(detail.completionPercent)
-    : requiredCount > 0
-      ? Math.round((completedCount / requiredCount) * 100)
-      : 0;
-  const isComplete =
-    detail.completionStatus === 'complete' ||
-    displayPercent === 100 ||
-    (caDone && requiredCount === 1 && completedCount === 1);
+    : Math.round(((courseworkProgress + quizProgress) / 2) * 100);
+  const isComplete = detail.completionStatus === 'complete' || (courseworkComplete && quizComplete);
 
   return {
     requiredItems,
     completedRequiredItems,
-    completedItems: allCompletedItems,
+    completedItems,
     requiredCount,
     completedCount,
     displayPercent,
     isComplete,
-    quizDone,
-    caDone,
-    homeworkDone,
-    classworkDone,
-    attendanceDone,
+    quizDone: quizComplete,
+    caDone: caComplete,
+    homeworkDone: homeworkComplete,
+    classworkDone: classworkComplete,
+    attendanceDone: detail.attendanceEntered >= totalStudents,
   };
 };
 
@@ -110,7 +106,7 @@ export function MonitorTeachers({ classNames, initialMonth, initialClass }: { cl
 
   const kpis = useMemo(() => {
     const totalRecords = displayRows.length;
-    const complete = displayRows.filter(r => r.completionStatus === 'complete').length;
+    const complete = displayRows.filter(r => getRequiredEntryInfo(r).isComplete).length;
     const incomplete = totalRecords - complete;
     const totalTeachers = new Set(displayRows.map(r => r.teacherId)).size;
     return { totalRecords, complete, incomplete, totalTeachers };
@@ -332,7 +328,7 @@ export function MonitorTeachers({ classNames, initialMonth, initialClass }: { cl
                                 {verificationQuery.isFetching ? 'Verifying…' : verificationQuery.isSuccess ? 'Verified' : 'Pending'}
                               </span>
                             </div>
-                            {verificationQuery.error && (
+                            {verificationQuery.isError && (
                               <p className="mt-2 text-rose-600">Unable to verify counts against the database.</p>
                             )}
                             {verificationQuery.data ? (

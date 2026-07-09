@@ -21,7 +21,7 @@ export async function getClasses(): Promise<string[]> {
 export async function getClassSubjects(): Promise<Array<ClassSubject & { subjects?: { name: string }; users?: { name: string } }>> {
   const { data, error } = await supabase
     .from('class_subjects')
-    .select('*, subjects(name), users(name)');
+    .select('*, subjects(name), users:profiles(name)');
   if (error) throw error;
   return data || [];
 }
@@ -44,9 +44,14 @@ export async function getClassSubjectsForTeacher(teacherId: string, className?: 
 }
 
 export async function createClassSubject(data: Omit<ClassSubject, 'id'>): Promise<ClassSubject> {
+  const timestamp = Date.now();
+  const random = Math.random().toString(36).substring(2, 8);
+  const id = `class-subject-${timestamp}-${random}`;
+  const insertPayload = { id, ...data, createdAt: new Date().toISOString() } as any;
+
   const { data: row, error } = await supabase
     .from('class_subjects')
-    .insert(data)
+    .insert(insertPayload)
     .select()
     .single();
   if (error) throw error;
@@ -71,4 +76,20 @@ export async function deleteClassSubject(id: string): Promise<boolean> {
     .eq('id', id);
   if (error) throw error;
   return true;
+}
+
+const isDev = import.meta.env?.MODE !== 'production';
+
+export async function logAllClassSubjects(limit: number = 100) {
+  if (!isDev) {
+    console.warn('logAllClassSubjects is disabled in production');
+    return [];
+  }
+
+  const from = 0;
+  const to = Math.max(0, limit - 1);
+  const { data, error } = await supabase.from('class_subjects').select('*').range(from, to);
+  if (error) throw error;
+  console.debug(`class_subjects rows (first ${limit}):`, data);
+  return data || [];
 }
