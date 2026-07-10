@@ -6,3 +6,5 @@ dist
 .env
 github_pat_*
 .gstack/
+*.png
+/*.js
