@@ -106,13 +106,20 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
       <div className="px-5 pb-2">
         <div className="bg-white/10 rounded-xl p-3 backdrop-blur-sm">
           <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white font-bold text-sm">
+            <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white font-bold text-sm shrink-0">
               {session.userName.split(' ').map(n => n[0]).join('').substring(0, 2)}
             </div>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-white truncate">{session.userName}</p>
               <p className="text-xs text-white/60">Active Session</p>
             </div>
+            <button
+              onClick={logout}
+              className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/10 transition-all"
+              title="Sign Out"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </div>
@@ -145,16 +152,7 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
         })}
       </nav>
 
-      {/* Logout */}
-      <div className="p-3 mt-auto">
-        <button
-          onClick={logout}
-          className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-white/70 hover:text-white hover:bg-white/10 transition-all"
-        >
-          <LogOut className="w-5 h-5" />
-          <span>Sign Out</span>
-        </button>
-      </div>
+
     </div>
   );
 
