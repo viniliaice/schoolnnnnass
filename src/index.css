@@ -115,7 +115,7 @@ html[data-theme="baroque"] {
   --button-gradient: linear-gradient(135deg, #5B1F1F, #8A2F2F 48%, #D4AF37 150%);
   --surface-gradient: linear-gradient(145deg, rgba(212, 175, 55, 0.09), rgba(255,255,255,0.012)), radial-gradient(circle at 8% 0%, rgba(91, 31, 31, 0.55), transparent 18rem), radial-gradient(circle at 100% 100%, rgba(212, 175, 55, 0.08), transparent 16rem);
   --page-gradient: radial-gradient(circle at 12% 0%, rgba(212, 175, 55, 0.16), transparent 32rem), radial-gradient(circle at 92% 10%, rgba(91, 31, 31, 0.55), transparent 30rem), linear-gradient(135deg, #050505 0%, #090909 42%, #151111 100%);
-  --ornament: "✦";
+  --ornament: "⚜";
   --heading-font: "Playfair Display", "Cormorant Garamond", Georgia, serif;
   --body-font: "Inter", ui-sans-serif, system-ui, sans-serif;
   --pattern-opacity: 0.18;
@@ -329,9 +329,11 @@ body::before {
   pointer-events: none;
   z-index: 0;
   opacity: var(--pattern-opacity);
-  background-image:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cg fill='none' stroke='%23D4AF37' stroke-width='1.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M90 154c-7-24-4-45 11-64 9-11 21-19 38-24-12 13-14 25-9 35 6 12 17 16 30 17-18 7-35 7-50-3-13-9-19-23-20-42-1 19-7 33-20 42-15 10-32 10-50 3 13-1 24-5 30-17 5-10 3-22-9-35 17 5 29 13 38 24 15 19 18 40 11 64Z'/%3E%3Cpath d='M90 154V31M61 128c12-15 17-31 14-49M119 128c-12-15-17-31-14-49M90 31c-10 10-18 17-31 20M90 31c10 10 18 17 31 20'/%3E%3C/g%3E%3C/svg%3E");
-  background-size: 260px 260px;
+  background-color: var(--accent);
+  -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cg fill='none' stroke='black' stroke-width='1.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M90 154c-7-24-4-45 11-64 9-11 21-19 38-24-12 13-14 25-9 35 6 12 17 16 30 17-18 7-35 7-50-3-13-9-19-23-20-42-1 19-7 33-20 42-15 10-32 10-50 3 13-1 24-5 30-17 5-10 3-22-9-35 17 5 29 13 38 24 15 19 18 40 11 64Z'/%3E%3Cpath d='M90 154V31M61 128c12-15 17-31 14-49M119 128c-12-15-17-31-14-49M90 31c-10 10-18 17-31 20M90 31c10 10 18 17 31 20'/%3E%3C/g%3E%3C/svg%3E");
+  mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180' viewBox='0 0 180 180'%3E%3Cg fill='none' stroke='black' stroke-width='1.1' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M90 154c-7-24-4-45 11-64 9-11 21-19 38-24-12 13-14 25-9 35 6 12 17 16 30 17-18 7-35 7-50-3-13-9-19-23-20-42-1 19-7 33-20 42-15 10-32 10-50 3 13-1 24-5 30-17 5-10 3-22-9-35 17 5 29 13 38 24 15 19 18 40 11 64Z'/%3E%3Cpath d='M90 154V31M61 128c12-15 17-31 14-49M119 128c-12-15-17-31-14-49M90 31c-10 10-18 17-31 20M90 31c10 10 18 17 31 20'/%3E%3C/g%3E%3C/svg%3E");
+  -webkit-mask-size: 260px 260px;
+  mask-size: 260px 260px;
   mix-blend-mode: screen;
 }
 
@@ -417,7 +419,7 @@ p, span, label, button, input, select, textarea, td, th {
 
 .shadow, .shadow-sm, .shadow-lg, .shadow-xl, .shadow-2xl { box-shadow: var(--shadow) !important; }
 
-[class*="rounded-2xl"].border, [class*="rounded-3xl"].border, [class*="rounded-xl"].border, table, article { position: relative; }
+[class*="rounded-2xl"].border:not(.fixed):not(button), [class*="rounded-3xl"].border:not(.fixed):not(button), [class*="rounded-xl"].border:not(.fixed):not(button), table:not(.fixed):not(button), article:not(.fixed):not(button) { position: relative; }
 
 [class*="rounded-2xl"].border::before, [class*="rounded-3xl"].border::before, article.rounded-3xl::before, article.rounded-2xl::before {
   content: "";
@@ -514,6 +516,18 @@ nav button:hover, [role="navigation"] button:hover { border-color: color-mix(in 
   border: 1px solid var(--border);
   box-shadow: var(--shadow);
 }
+
+/* Sidebar light mode contrast */
+html[data-mode="light"] .theme-sidebar,
+html[data-mode="light"] .theme-sidebar .text-white { color: var(--text) !important; }
+html[data-mode="light"] .theme-sidebar .text-white\/70 { color: color-mix(in srgb, var(--text) 70%, transparent) !important; }
+html[data-mode="light"] .theme-sidebar .text-white\/60 { color: color-mix(in srgb, var(--text) 60%, transparent) !important; }
+html[data-mode="light"] .theme-sidebar .text-indigo-100,
+html[data-mode="light"] .theme-sidebar .text-teal-100,
+html[data-mode="light"] .theme-sidebar .text-violet-100,
+html[data-mode="light"] .theme-sidebar .text-amber-100 { color: var(--text) !important; }
+html[data-mode="light"] .theme-sidebar [class*="bg-white/"] { background-color: color-mix(in srgb, var(--accent) 12%, transparent) !important; }
+html[data-mode="light"] .theme-sidebar [class*="bg-white/"][class*="shadow-lg"] { background-color: color-mix(in srgb, var(--accent) 18%, transparent) !important; }
 
 .theme-button-primary {
   background: var(--button-gradient);

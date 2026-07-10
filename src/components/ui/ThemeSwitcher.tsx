@@ -46,7 +46,7 @@ function getInitialMode(): AppearanceMode {
   return isMode(stored) ? stored : 'dark';
 }
 
-export function ThemeSwitcher() {
+export function ThemeSwitcher({ compact }: { compact?: boolean }) {
   const [theme, setTheme] = useState<ThemeId>(getInitialTheme);
   const [mode, setMode] = useState<AppearanceMode>(getInitialMode);
   const selectedTheme = useMemo(() => THEMES.find(item => item.id === theme) ?? THEMES[0], [theme]);
@@ -62,53 +62,36 @@ export function ThemeSwitcher() {
   }, [mode]);
 
   return (
-    <section className="theme-switcher w-full rounded-2xl border p-3 shadow-lg backdrop-blur-xl">
-      <div className="mb-3 flex items-center gap-2">
-        <Palette className="h-4 w-4" aria-hidden="true" />
-        <div className="leading-tight">
-          <p className="text-[10px] font-bold uppercase tracking-[0.22em]">Appearance</p>
-          <p className="text-xs opacity-75">{selectedTheme.description}</p>
-        </div>
+    <section className={cn("theme-switcher w-full rounded-xl border shadow-lg backdrop-blur-xl", compact ? "p-1.5" : "p-3")}>
+      <div className={cn("flex items-center gap-1.5", compact ? "mb-1" : "mb-3")}>
+        <Palette className={compact ? "h-3 w-3" : "h-4 w-4"} aria-hidden="true" />
+        <p className={cn("font-bold uppercase tracking-[0.22em]", compact ? "text-[8px]" : "text-[10px]")}>Appearance</p>
       </div>
 
-      <label className="mb-1 block text-[11px] font-semibold uppercase tracking-[0.16em] opacity-75" htmlFor="theme-select">
-        Choose Theme
-      </label>
-      <select
-        id="theme-select"
-        value={theme}
-        onChange={event => setTheme(event.target.value as ThemeId)}
-        className="mb-3 w-full rounded-xl border px-3 py-2 text-sm font-semibold"
-      >
-        {THEMES.map(item => (
-          <option key={item.id} value={item.id}>{item.label}</option>
-        ))}
-      </select>
-
-      <div className="flex items-center justify-between gap-3 rounded-xl border px-3 py-2">
-        <span className={cn('flex items-center gap-1.5 text-xs font-semibold', mode === 'light' ? 'opacity-100' : 'opacity-55')}>
-          <Sun className="h-3.5 w-3.5" /> Light Mode
-        </span>
+      <div className={cn("flex items-center gap-1", compact ? "mb-1" : "mb-3")}>
+        <select
+          id="theme-select"
+          value={theme}
+          onChange={event => setTheme(event.target.value as ThemeId)}
+          className={cn("flex-1 rounded-lg border font-semibold", compact ? "px-1.5 py-1 text-[10px]" : "px-3 py-2 text-sm")}
+        >
+          {THEMES.map(item => (
+            <option key={item.id} value={item.id}>{item.label}</option>
+          ))}
+        </select>
         <button
           type="button"
-          aria-label="Toggle light or dark appearance mode"
+          aria-label="Toggle light or dark mode"
           aria-pressed={mode === 'dark'}
           onClick={() => setMode(current => current === 'dark' ? 'light' : 'dark')}
           className={cn(
-            'relative h-6 w-11 shrink-0 rounded-full border transition-all',
-            mode === 'dark' ? 'theme-option-active' : 'bg-white/20',
+            'flex items-center gap-1 rounded-lg border px-1.5 py-1 text-[10px] font-semibold shrink-0',
+            mode === 'light' ? 'opacity-100' : 'opacity-55'
           )}
         >
-          <span
-            className={cn(
-              'absolute top-0.5 h-4.5 w-4.5 rounded-full bg-current transition-transform',
-              mode === 'dark' ? 'translate-x-5' : 'translate-x-0.5',
-            )}
-          />
+          {mode === 'light' ? <Sun className="h-3 w-3" /> : <Moon className="h-3 w-3" />}
+          {mode === 'light' ? 'Light' : 'Dark'}
         </button>
-        <span className={cn('flex items-center gap-1.5 text-xs font-semibold', mode === 'dark' ? 'opacity-100' : 'opacity-55')}>
-          <Moon className="h-3.5 w-3.5" /> Dark Mode
-        </span>
       </div>
     </section>
   );

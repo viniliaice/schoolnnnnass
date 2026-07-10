@@ -3,11 +3,12 @@ import { useRole } from '../../context/RoleContext';
 import { Role } from '../../types';
 import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
-  Upload, LogOut, Menu, X, BookOpen, ChevronRight, School,
+  Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
+import logo from '../../../assets/logo.png';
 
 interface NavItem {
   label: string;
@@ -21,7 +22,6 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Manage Users', icon: Users, path: '/admin/users' },
     { label: 'Manage Students', icon: GraduationCap, path: '/admin/students' },
     { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
-    { label: 'Manage Class Subjects', icon: School, path: '/admin/class-subjects' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
     { label: 'Announcements', icon: BellRing, path: '/admin/announcements' },
     { label: 'Messages', icon: Mail, path: '/messages' },
@@ -90,24 +90,20 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
   const gradientClass = roleColors[session.role];
 
   const sidebarContent = (
-    <div className={cn("flex flex-col h-full bg-linear-to-b", gradientClass)}>
+    <div className={cn("theme-sidebar flex flex-col h-full bg-linear-to-b", gradientClass)}>
       {/* Logo */}
-      <div className="p-5 pb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center backdrop-blur-sm">
-            <School className="w-6 h-6 text-white" />
-          </div>
-          <div>
-            <h1 className="text-lg font-bold text-white tracking-tight">CampusConnect</h1>
-            <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", roleBadgeColors[session.role])}>
-              {session.role.charAt(0).toUpperCase() + session.role.slice(1)}
-            </span>
-          </div>
+      <div className="p-5 pb-2">
+        <div className="flex flex-col items-center gap-1">
+          <img src={logo} alt="MBK International School" className="w-20 h-20 object-contain" />
+          <h1 className="text-sm font-bold text-white tracking-tight text-center">MBK International School</h1>
+          <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", roleBadgeColors[session.role])}>
+            {session.role.charAt(0).toUpperCase() + session.role.slice(1)}
+          </span>
         </div>
       </div>
 
       {/* User */}
-      <div className="px-5 pb-4">
+      <div className="px-5 pb-2">
         <div className="bg-white/10 rounded-xl p-3 backdrop-blur-sm">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center text-white font-bold text-sm">
@@ -119,6 +115,11 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Appearance */}
+      <div className="px-3 pb-2">
+        <ThemeSwitcher compact />
       </div>
 
       {/* Nav */}
@@ -144,13 +145,8 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
         })}
       </nav>
 
-      {/* Appearance */}
-      <div className="px-3 py-3 mt-auto">
-        <ThemeSwitcher />
-      </div>
-
       {/* Logout */}
-      <div className="p-3">
+      <div className="p-3 mt-auto">
         <button
           onClick={logout}
           className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-white/70 hover:text-white hover:bg-white/10 transition-all"

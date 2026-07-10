@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { School, Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import logo from '../../../assets/logo.png';
 
 export function LoginPage() {
   const { login, loading } = useRole();
@@ -35,11 +36,9 @@ export function LoginPage() {
       <div className="w-full max-w-md">
         {/* Header */}
         <div className="text-center mb-8">
-          <div className="inline-flex items-center justify-center w-16 h-16 bg-indigo-100 rounded-2xl mb-4">
-            <School className="w-8 h-8 text-indigo-600" />
-          </div>
+          <img src={logo} alt="MBK International School" className="w-32 h-32 mx-auto mb-4 object-contain" />
           <h1 className="text-3xl font-bold text-slate-900 mb-2">Welcome Back</h1>
-          <p className="text-slate-600">Sign in to your Scholo account</p>
+          <p className="text-slate-600">Sign in to your MBK International School account</p>
         </div>
 
         {/* Login Form */}

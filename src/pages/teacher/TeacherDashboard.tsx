@@ -43,7 +43,7 @@ export function TeacherDashboard({ navigate }: { navigate?: (path: string) => vo
     { label: 'My Classes', value: stats.classes, icon: BookOpen, color: 'bg-teal-500', bg: 'bg-teal-50' },
     { label: 'Students', value: stats.students, icon: GraduationCap, color: 'bg-blue-500', bg: 'bg-blue-50' },
     { label: 'Submissions', value: stats.submissions, icon: FileText, color: 'bg-amber-500', bg: 'bg-amber-50' },
-    { label: 'Pending', value: stats.pending, icon: Clock, color: 'bg-orange-500', bg: 'bg-orange-50' },
+    { label: 'Pending', value: stats.pending, icon: Clock, color: 'bg-amber-500', bg: 'bg-amber-50' },
     { label: 'Approved', value: stats.approved, icon: CheckCircle, color: 'bg-emerald-500', bg: 'bg-emerald-50' },
     { label: 'Rejected', value: stats.rejected, icon: XCircle, color: 'bg-red-500', bg: 'bg-red-50' },
     { label: 'Exam Reports', value: 'Open', icon: FileBarChart, color: 'bg-indigo-500', bg: 'bg-indigo-50', onClick: () => navigate?.('/teacher/exam-reports') },

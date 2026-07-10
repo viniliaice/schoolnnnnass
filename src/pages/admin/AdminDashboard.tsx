@@ -105,7 +105,7 @@ export function AdminDashboard({ navigate }: { navigate?: (path: string) => void
     { label: 'Parents', value: stats.totalParents, icon: Users, color: 'bg-violet-500', bg: 'bg-violet-50' },
     { label: 'Students', value: stats.totalStudents, icon: GraduationCap, color: 'bg-blue-500', bg: 'bg-blue-50' },
     { label: 'Total Exams', value: stats.totalExams, icon: FileText, color: 'bg-amber-500', bg: 'bg-amber-50' },
-    { label: 'Pending', value: stats.pendingExams, icon: Clock, color: 'bg-orange-500', bg: 'bg-orange-50' },
+    { label: 'Pending', value: stats.pendingExams, icon: Clock, color: 'bg-amber-500', bg: 'bg-amber-50' },
     { label: 'Approved', value: stats.approvedExams, icon: CheckCircle, color: 'bg-emerald-500', bg: 'bg-emerald-50' },
     { label: 'Rejected', value: stats.rejectedExams, icon: XCircle, color: 'bg-red-500', bg: 'bg-red-50' },
     { label: 'Avg Score', value: `${stats.averageScore}%`, icon: TrendingUp, color: 'bg-indigo-500', bg: 'bg-indigo-50' },
