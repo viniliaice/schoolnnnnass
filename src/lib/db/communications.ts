@@ -161,6 +161,139 @@ export async function getAllowedMessageRecipients(userId: string): Promise<User[
   return [];
 }
 
+export interface EnrichedRecipient {
+  id: string;
+  name: string;
+  role: Role;
+  studentId?: string;
+  studentName?: string;
+  className?: string;
+}
+
+export async function getAllowedMessageRecipientsEnriched(userId: string): Promise<EnrichedRecipient[]> {
+  const { data: me, error: meError } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .single();
+  if (meError) throw meError;
+  const meRole = (me.role || '') as Role;
+
+  if (meRole === 'admin') {
+    const { data: users } = await supabase.from('profiles').select('*').neq('id', userId);
+    const recipients: EnrichedRecipient[] = (users || []).map((u: any) => ({ id: u.id, name: u.name, role: u.role }));
+    const parentIds = recipients.filter(r => r.role === 'parent').map(r => r.id);
+    if (parentIds.length > 0) {
+      const { data: students } = await supabase
+        .from('students')
+        .select('id,name,className,parentId')
+        .in('parentId', parentIds);
+      const studentByParent = new Map<string, { studentId: string; studentName: string; className: string }>();
+      for (const s of (students || [])) {
+        if (s.parentId && !studentByParent.has(s.parentId)) {
+          studentByParent.set(s.parentId, { studentId: s.id, studentName: s.name, className: s.className });
+        }
+      }
+      for (const r of recipients) {
+        if (r.role === 'parent' && studentByParent.has(r.id)) {
+          const info = studentByParent.get(r.id)!;
+          r.studentId = info.studentId;
+          r.studentName = info.studentName;
+          r.className = info.className;
+        }
+      }
+    }
+    return recipients;
+  }
+
+  if (meRole === 'parent') {
+    const { data: students, error: studentsError } = await supabase
+      .from('students')
+      .select('className')
+      .eq('parentId', userId);
+    if (studentsError) throw studentsError;
+    const classNames = Array.from(new Set((students || []).map((row: any) => row.className).filter(Boolean)));
+    if (classNames.length === 0) return [];
+    const { data: users } = await supabase.from('profiles').select('*');
+    return (users || [])
+      .filter((u: any) => {
+        if (u.id === userId) return false;
+        if (u.role !== 'teacher' && u.role !== 'supervisor') return false;
+        const assigned = Array.isArray(u.assignedClasses) ? u.assignedClasses : [];
+        return assigned.some((cls: string) => classNames.includes(cls));
+      })
+      .map((u: any) => ({ id: u.id, name: u.name, role: u.role }));
+  }
+
+  if (meRole === 'teacher') {
+    const assigned = Array.isArray(me.assignedClasses) ? me.assignedClasses : [];
+    if (assigned.length === 0) return [];
+    const { data: students } = await supabase
+      .from('students')
+      .select('id,name,className,parentId')
+      .in('className', assigned)
+      .not('parentId', 'is', null);
+    if (!students || students.length === 0) return [];
+    const parentIds = Array.from(new Set(students.map((s: any) => s.parentId).filter(Boolean)));
+    const { data: parents } = await supabase
+      .from('profiles')
+      .select('id,name,role')
+      .in('id', parentIds);
+    const studentByParent = new Map<string, { studentId: string; studentName: string; className: string }>();
+    for (const s of students) {
+      if (s.parentId && !studentByParent.has(s.parentId)) {
+        studentByParent.set(s.parentId, { studentId: s.id, studentName: s.name, className: s.className });
+      }
+    }
+    return (parents || []).map((p: any) => {
+      const info = studentByParent.get(p.id);
+      return {
+        id: p.id,
+        name: p.name,
+        role: 'parent' as Role,
+        studentId: info?.studentId,
+        studentName: info?.studentName,
+        className: info?.className,
+      };
+    });
+  }
+
+  if (meRole === 'supervisor') {
+    const assigned = Array.isArray(me.assignedClasses) ? me.assignedClasses : [];
+    if (assigned.length === 0) return [];
+    const { data: students } = await supabase
+      .from('students')
+      .select('id,name,className,parentId')
+      .in('className', assigned)
+      .not('parentId', 'is', null);
+    if (!students || students.length === 0) return [];
+    const parentIds = Array.from(new Set(students.map((s: any) => s.parentId).filter(Boolean)));
+    const { data: parents } = await supabase
+      .from('profiles')
+      .select('id,name,role')
+      .in('id', parentIds);
+    const studentByParent = new Map<string, { studentId: string; studentName: string; className: string }>();
+    for (const s of students) {
+      if (s.parentId && !studentByParent.has(s.parentId)) {
+        studentByParent.set(s.parentId, { studentId: s.id, studentName: s.name, className: s.className });
+      }
+    }
+    return (parents || []).map((p: any) => {
+      const info = studentByParent.get(p.id);
+      return {
+        id: p.id,
+        name: p.name,
+        role: 'parent' as Role,
+        studentId: info?.studentId,
+        studentName: info?.studentName,
+        className: info?.className,
+      };
+    });
+  }
+
+  return [];
+}
+
 export async function sendMessage(payload: Omit<Message, 'id' | 'createdAt' | 'readAt'>): Promise<Message> {
   const { data, error } = await supabase
     .from('messages')

@@ -69,14 +69,19 @@ export async function getUserById(id: string): Promise<User | null> {
 }
 
 export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<User> {
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2, 8);
-  const id = `${data.role}-${timestamp}-${random}`;
-  const user: Omit<User, 'id'> = { ...data, createdAt: new Date().toISOString() };
+  const { password, ...rest } = data;
+
+  if (!password) throw new Error('Password is required');
+
+  const { data: authData, error: authError } = await supabase.auth.signUp({ email: data.email, password });
+  if (authError) throw authError;
+  if (!authData.user) throw new Error('Failed to create auth user');
+
+  const id = `${data.role}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
   const { data: created, error } = await supabase
     .from('profiles')
-    .insert({ id, ...user })
+    .insert({ id, ...rest, auth_id: authData.user.id, createdAt: new Date().toISOString() })
     .select()
     .single();
   if (error) throw error;
@@ -85,15 +90,22 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
 }
 
 export async function updateUser(id: string, data: Partial<User>): Promise<User> {
+  const { password: _pw, ...rest } = data; // password handled by Supabase Auth, not stored in profiles
+
   const { data: updated, error } = await supabase
     .from('profiles')
-    .update(data)
+    .update(rest)
     .eq('id', id)
     .select()
     .single();
   if (error) throw error;
 
   return updated as User;
+}
+
+export async function resetUserPassword(email: string): Promise<void> {
+  const { error } = await supabase.auth.resetPasswordForEmail(email);
+  if (error) throw error;
 }
 
 export async function deleteUser(id: string): Promise<boolean> {

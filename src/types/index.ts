@@ -40,6 +40,11 @@ export const SUBJECTS = [
   'Physics', 'Chemistry', 'Biology', 'History', 'Geography', 'Arabic',
 ];
 
+export const DEPARTMENTS = [
+  'Mathematics', 'Science', 'English & Languages', 'Humanities',
+  'Islamic Studies', 'Somali & Arabic', 'Arts & PE',
+];
+
 export interface User {
   id: string;
   name: string;
@@ -72,6 +77,7 @@ export interface Subject {
   shortName?: string;
   color?: string;
   weeklyLessons?: number;
+  department?: string;
   createdAt: string;
 }
 
@@ -233,6 +239,7 @@ export interface Subject {
   shortName?: string;
   color?: string;
   weeklyLessons?: number;
+  department?: string;
   createdAt: string;
 }
 

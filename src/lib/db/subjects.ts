@@ -8,17 +8,19 @@ export async function getSubjects(): Promise<Subject[]> {
 }
 
 export async function createSubject(payload: Omit<Subject, 'id' | 'createdAt'>): Promise<Subject> {
+  const { color: _c, ...dbPayload } = payload;
   const timestamp = Date.now();
   const rand = Math.random().toString(36).substring(2, 8);
   const id = `subject-${timestamp}-${rand}`;
-  const insertPayload = { id, ...payload, createdAt: new Date().toISOString() } as any;
+  const insertPayload = { id, ...dbPayload, createdAt: new Date().toISOString() } as any;
   const { data, error } = await supabase.from('subjects').insert(insertPayload).select().single();
   if (error) throw error;
   return data as Subject;
 }
 
 export async function updateSubject(id: string, payload: Partial<Omit<Subject, 'id' | 'createdAt'>>): Promise<Subject> {
-  const { data, error } = await supabase.from('subjects').update(payload).eq('id', id).select().single();
+  const { color: _c, ...dbPayload } = payload;
+  const { data, error } = await supabase.from('subjects').update(dbPayload).eq('id', id).select().single();
   if (error) throw error;
   return data as Subject;
 }

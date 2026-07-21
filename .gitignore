@@ -1,11 +1,10 @@
 # Prevent committing node_modules
 node_modules/
+node_modules
 dist
 .agents/
 .env
 github_pat_*
 .gstack/
-/*.png
-/toggle.js
-/toggle-light.js
-/login.js
+*.png
+/*.js

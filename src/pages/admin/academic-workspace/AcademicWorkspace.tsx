@@ -1,13 +1,17 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
+  BarChart3,
   BookOpen,
   CalendarDays,
   CheckCircle2,
+  CheckSquare,
   Copy,
+  FileText,
   Grid3X3,
   Layers3,
   ListChecks,
+  MoreHorizontal,
   Plus,
   RefreshCw,
   Search,
@@ -18,7 +22,7 @@ import {
   X,
 } from 'lucide-react';
 import { useToast } from '../../../context/ToastContext';
-import { CLASSES, type AcademicYear, type ClassSubject, type Subject, type Term, type User } from '../../../types';
+import { CLASSES, DEPARTMENTS, type AcademicYear, type ClassSubject, type Subject, type Term, type User } from '../../../types';
 import {
   createAcademicYear,
   createTerm,
@@ -33,14 +37,18 @@ import {
   updateClassSubject,
 } from '../../../lib/db/classes';
 import { createSubject, deleteSubject, updateSubject } from '../../../lib/db/subjects';
+import { createAuditLog } from '../../../lib/db/audit';
 import { cn } from '../../../utils/cn';
 import { calculateTeacherWorkload, DEFAULT_WEEKLY_LESSONS, TEACHER_WEEKLY_LIMIT, type SubjectMeta } from './utils/workload';
 import { buildAcademicWarnings } from './utils/warnings';
 import { useAcademicWorkspaceData } from './hooks/useAcademicWorkspaceData';
 import { InfoPill, SummaryCard } from './components/Summary';
+import { PDFDownloadLink } from '@react-pdf/renderer';
+import { CurriculumPdfDocument } from './components/CurriculumPdf';
+import { WorkloadAnalytics } from './components/WorkloadAnalytics';
 
 type WorkspaceView = 'cards' | 'matrix';
-type SlideOverMode = 'subject' | 'year' | 'term' | 'bulk' | null;
+type SlideOverMode = 'subject' | 'year' | 'term' | 'bulk' | 'analytics' | null;
 const SUBJECT_COLORS = ['#4f46e5', '#0891b2', '#059669', '#d97706', '#dc2626', '#7c3aed', '#0f766e', '#be123c'];
 
 function getSubjectName(row: any, subjectsById: Map<string, Subject>) {
@@ -61,9 +69,11 @@ function uniq<T>(items: T[]) {
 
 export function AcademicWorkspace() {
   const { addToast } = useToast();
+  const [loadError, setLoadError] = useState<unknown>(null);
 
   const handleLoadError = useCallback((error: unknown) => {
     console.error('Academic workspace refresh failed:', error);
+    setLoadError(error);
     addToast({ type: 'error', title: 'Failed to load academic workspace' });
   }, [addToast]);
 
@@ -91,7 +101,7 @@ export function AcademicWorkspace() {
     },
   ])), [subjects]);
 
-  const [subjectForm, setSubjectForm] = useState({ id: '', name: '', shortName: '', color: SUBJECT_COLORS[0], weeklyLessons: DEFAULT_WEEKLY_LESSONS });
+  const [subjectForm, setSubjectForm] = useState({ id: '', name: '', shortName: '', color: SUBJECT_COLORS[0], weeklyLessons: DEFAULT_WEEKLY_LESSONS, department: '' });
   const [yearForm, setYearForm] = useState({ id: '', name: '', startDate: '', endDate: '', isCurrent: false });
   const [termForm, setTermForm] = useState({ id: '', name: '', academicYearId: '', startDate: '', endDate: '', isCurrent: false });
   const [addSubjectId, setAddSubjectId] = useState('');
@@ -103,6 +113,13 @@ export function AcademicWorkspace() {
   const [replaceFromTeacherId, setReplaceFromTeacherId] = useState('');
   const [replaceToTeacherId, setReplaceToTeacherId] = useState('');
   const [bulkTargetClasses, setBulkTargetClasses] = useState<string[]>([]);
+  const [departmentFilter, setDepartmentFilter] = useState('');
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [filterClassList, setFilterClassList] = useState<string[]>([]);
+  const [showClassFilter, setShowClassFilter] = useState(false);
+  const moreMenuRef = useRef<HTMLDivElement>(null);
+  const classFilterRef = useRef<HTMLButtonElement>(null);
+  const classFilterDropdownRef = useRef<HTMLDivElement>(null);
 
   const subjectsById = useMemo(() => new Map(subjects.map(subject => [subject.id, subject])), [subjects]);
   const teachersById = useMemo(() => new Map(teachers.map(teacher => [teacher.id, teacher])), [teachers]);
@@ -114,18 +131,21 @@ export function AcademicWorkspace() {
 
   const filteredSubjects = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return subjects;
-    return subjects.filter(subject =>
-      subject.name.toLowerCase().includes(needle)
-      || String(subject.shortName || '').toLowerCase().includes(needle),
-    );
-  }, [subjects, query]);
+    return subjects.filter(subject => {
+      if (needle && !subject.name.toLowerCase().includes(needle) && !String(subject.shortName || '').toLowerCase().includes(needle)) return false;
+      if (departmentFilter && subject.department !== departmentFilter) return false;
+      return true;
+    });
+  }, [subjects, query, departmentFilter]);
 
   const filteredClasses = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return CLASSES;
-    return CLASSES.filter(className => className.toLowerCase().includes(needle));
-  }, [query]);
+    if (filterClassList.length === 0 && !needle) return [];
+    let list = CLASSES;
+    if (needle) list = list.filter(className => className.toLowerCase().includes(needle));
+    if (filterClassList.length > 0) list = list.filter(className => filterClassList.includes(className));
+    return list;
+  }, [query, filterClassList]);
 
   const selectedClassMappings = useMemo(
     () => mappings.filter(row => row.className === selectedClass),
@@ -165,7 +185,6 @@ export function AcademicWorkspace() {
   );
 
   useEffect(() => {
-    if (!addSubjectId && subjects[0]?.id) setAddSubjectId(subjects[0].id);
     if (!bulkSubjectId && subjects[0]?.id) setBulkSubjectId(subjects[0].id);
     if (!bulkTeacherId && teachers[0]?.id) setBulkTeacherId(teachers[0].id);
     if (!replaceFromTeacherId && teachers[0]?.id) setReplaceFromTeacherId(teachers[0].id);
@@ -180,6 +199,7 @@ export function AcademicWorkspace() {
       shortName: subject?.shortName || '',
       color: meta?.color || SUBJECT_COLORS[subjects.length % SUBJECT_COLORS.length],
       weeklyLessons: meta?.weeklyLessons || DEFAULT_WEEKLY_LESSONS,
+      department: subject?.department || '',
     });
     setSlideOver('subject');
   };
@@ -219,12 +239,14 @@ export function AcademicWorkspace() {
         shortName: subjectForm.shortName.trim() || undefined,
         color: subjectForm.color,
         weeklyLessons: Number(subjectForm.weeklyLessons) || DEFAULT_WEEKLY_LESSONS,
+        department: subjectForm.department || undefined,
       };
       const saved = subjectForm.id
         ? await updateSubject(subjectForm.id, payload)
         : await createSubject(payload);
       addToast({ type: 'success', title: subjectForm.id ? 'Subject updated' : 'Subject created' });
       setSlideOver(null);
+      createAuditLog(subjectForm.id ? 'subject.updated' : 'subject.created', { id: saved.id, name: saved.name, department: saved.department });
       await refresh();
     } catch (error) {
       console.error(error);
@@ -245,11 +267,16 @@ export function AcademicWorkspace() {
         isCurrent: yearForm.isCurrent,
       };
       if (yearForm.isCurrent) {
-        await Promise.all(years.filter(year => year.id !== yearForm.id && year.isCurrent).map(year => updateAcademicYear(year.id, { isCurrent: false })));
+        for (const year of years) {
+          if (year.id !== yearForm.id && year.isCurrent) {
+            await updateAcademicYear(year.id, { isCurrent: false });
+          }
+        }
       }
       yearForm.id ? await updateAcademicYear(yearForm.id, payload) : await createAcademicYear(payload);
       addToast({ type: 'success', title: yearForm.id ? 'Academic year updated' : 'Academic year created' });
       setSlideOver(null);
+      createAuditLog(yearForm.id ? 'academic-year.updated' : 'academic-year.created', { name: yearForm.name, isCurrent: yearForm.isCurrent });
       await refresh();
     } catch (error) {
       console.error(error);
@@ -277,6 +304,7 @@ export function AcademicWorkspace() {
       termForm.id ? await updateTerm(termForm.id, payload) : await createTerm(payload);
       addToast({ type: 'success', title: termForm.id ? 'Term updated' : 'Term created' });
       setSlideOver(null);
+      createAuditLog(termForm.id ? 'term.updated' : 'term.created', { name: termForm.name, academicYearId: termForm.academicYearId, isCurrent: termForm.isCurrent });
       await refresh();
     } catch (error) {
       console.error(error);
@@ -284,16 +312,15 @@ export function AcademicWorkspace() {
     }
   };
 
-  const addSubjectToSelectedClass = async () => {
-    if (!selectedClass || !addSubjectId) return;
-    const exists = mappings.some(row => row.className === selectedClass && row.subjectId === addSubjectId);
-    if (exists) {
-      addToast({ type: 'info', title: 'Subject already assigned to this class' });
-      return;
-    }
+  const addSubjectToSelectedClass = async (subjectId?: string) => {
+    const id = subjectId || addSubjectId;
+    if (!selectedClass || !id) return;
+    const exists = mappings.some(row => row.className === selectedClass && row.subjectId === id);
+    if (exists) return;
     try {
-      await createClassSubject({ className: selectedClass, subjectId: addSubjectId, teacherId: undefined } as any);
+      await createClassSubject({ className: selectedClass, subjectId: id, teacherId: undefined } as any);
       addToast({ type: 'success', title: 'Subject added to class' });
+      createAuditLog('class-subject.created', { className: selectedClass, subjectId: id });
       await refresh();
     } catch (error) {
       console.error(error);
@@ -306,6 +333,7 @@ export function AcademicWorkspace() {
       await updateClassSubject(row.id, { teacherId: teacherId || undefined } as any);
       setMappings(prev => prev.map(item => item.id === row.id ? { ...item, teacherId: teacherId || undefined, users: teacherId ? { name: teachersById.get(teacherId)?.name || '' } : undefined } : item));
       addToast({ type: 'success', title: 'Teacher assignment updated' });
+      createAuditLog('class-subject.updated', { mappingId: row.id, className: row.className, subjectId: row.subjectId, teacherId });
     } catch (error) {
       console.error(error);
       addToast({ type: 'error', title: 'Failed to update teacher' });
@@ -317,6 +345,7 @@ export function AcademicWorkspace() {
     try {
       await deleteClassSubject(row.id);
       addToast({ type: 'success', title: 'Subject removed from class' });
+      createAuditLog('class-subject.deleted', { mappingId: row.id, className: row.className, subjectId: row.subjectId });
       await refresh();
     } catch (error) {
       console.error(error);
@@ -329,6 +358,7 @@ export function AcademicWorkspace() {
     try {
       await deleteSubject(subject.id);
       addToast({ type: 'success', title: 'Subject archived' });
+      createAuditLog('subject.deleted', { id: subject.id, name: subject.name });
       await refresh();
     } catch (error) {
       console.error(error);
@@ -347,17 +377,22 @@ export function AcademicWorkspace() {
       return;
     }
     try {
-      const tasks: Promise<unknown>[] = [];
-      for (const targetClass of copyToClasses) {
-        for (const source of sourceRows) {
-          const exists = mappings.some(row => row.className === targetClass && row.subjectId === source.subjectId);
-          if (!exists) {
-            tasks.push(createClassSubject({ className: targetClass, subjectId: source.subjectId, teacherId: source.teacherId || undefined } as any));
-          }
-        }
+      const tasks = copyToClasses.flatMap(targetClass =>
+        sourceRows
+          .filter(source => !mappings.some(row => row.className === targetClass && row.subjectId === source.subjectId))
+          .map(source => createClassSubject({ className: targetClass, subjectId: source.subjectId, teacherId: source.teacherId || undefined } as any)),
+      );
+      const results = await Promise.allSettled(tasks);
+      const succeeded = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed === 0) {
+        addToast({ type: 'success', title: `Copied ${succeeded} subject(s) to ${copyToClasses.length} class(es)` });
+      } else if (succeeded === 0) {
+        addToast({ type: 'error', title: 'Failed to copy curriculum' });
+      } else {
+        addToast({ type: 'info', title: `Copied ${succeeded} subject(s), ${failed} failed` });
       }
-      await Promise.all(tasks);
-      addToast({ type: 'success', title: `Copied ${sourceRows.length} subjects to ${copyToClasses.length} class(es)` });
+      createAuditLog('curriculum.copied', { fromClass: copyFromClass, toClasses: copyToClasses, succeeded, failed });
       await refresh();
     } catch (error) {
       console.error(error);
@@ -374,8 +409,17 @@ export function AcademicWorkspace() {
       const tasks = bulkTargetClasses
         .filter(className => !mappings.some(row => row.className === className && row.subjectId === bulkSubjectId))
         .map(className => createClassSubject({ className, subjectId: bulkSubjectId, teacherId: bulkTeacherId || undefined } as any));
-      await Promise.all(tasks);
-      addToast({ type: 'success', title: `Assigned subject to ${tasks.length} class(es)` });
+      const results = await Promise.allSettled(tasks);
+      const succeeded = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed === 0) {
+        addToast({ type: 'success', title: `Assigned subject to ${succeeded} class(es)` });
+      } else if (succeeded === 0) {
+        addToast({ type: 'error', title: 'Bulk subject assignment failed' });
+      } else {
+        addToast({ type: 'info', title: `Assigned to ${succeeded} class(es), ${failed} failed` });
+      }
+      createAuditLog('bulk.assign', { subjectId: bulkSubjectId, teacherId: bulkTeacherId, targets: bulkTargetClasses, succeeded, failed });
       await refresh();
     } catch (error) {
       console.error(error);
@@ -390,8 +434,17 @@ export function AcademicWorkspace() {
     }
     try {
       const affected = mappings.filter(row => row.teacherId === replaceFromTeacherId);
-      await Promise.all(affected.map(row => updateClassSubject(row.id, { teacherId: replaceToTeacherId } as any)));
-      addToast({ type: 'success', title: `Replaced teacher in ${affected.length} assignment(s)` });
+      const results = await Promise.allSettled(affected.map(row => updateClassSubject(row.id, { teacherId: replaceToTeacherId } as any)));
+      const succeeded = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed === 0) {
+        addToast({ type: 'success', title: `Replaced teacher in ${succeeded} assignment(s)` });
+      } else if (succeeded === 0) {
+        addToast({ type: 'error', title: 'Teacher replacement failed' });
+      } else {
+        addToast({ type: 'info', title: `Replaced teacher in ${succeeded} assignment(s), ${failed} failed` });
+      }
+      createAuditLog('teacher.replaced', { fromTeacherId: replaceFromTeacherId, toTeacherId: replaceToTeacherId, affected: affected.length, succeeded, failed });
       await refresh();
     } catch (error) {
       console.error(error);
@@ -404,8 +457,17 @@ export function AcademicWorkspace() {
     if (!confirm('Remove selected subject from all selected classes?')) return;
     try {
       const affected = mappings.filter(row => row.subjectId === bulkSubjectId && bulkTargetClasses.includes(row.className));
-      await Promise.all(affected.map(row => deleteClassSubject(row.id)));
-      addToast({ type: 'success', title: `Removed ${affected.length} assignment(s)` });
+      const results = await Promise.allSettled(affected.map(row => deleteClassSubject(row.id)));
+      const succeeded = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed === 0) {
+        addToast({ type: 'success', title: `Removed ${succeeded} assignment(s)` });
+      } else if (succeeded === 0) {
+        addToast({ type: 'error', title: 'Bulk removal failed' });
+      } else {
+        addToast({ type: 'info', title: `Removed ${succeeded} assignment(s), ${failed} failed` });
+      }
+      createAuditLog('bulk.remove', { subjectId: bulkSubjectId, targets: bulkTargetClasses, succeeded, failed });
       await refresh();
     } catch (error) {
       console.error(error);
@@ -419,6 +481,7 @@ export function AcademicWorkspace() {
       setMappings(prev => [...prev, created as any]);
       setSelectedClass(className);
       addToast({ type: 'success', title: 'Subject added to class' });
+      createAuditLog('class-subject.created', { className, subjectId });
       await refresh();
     } catch (error) {
       console.error(error);
@@ -446,6 +509,7 @@ export function AcademicWorkspace() {
                 {slideOver === 'year' && (yearForm.id ? 'Edit Academic Year' : 'Create Academic Year')}
                 {slideOver === 'term' && (termForm.id ? 'Edit Term' : 'Create Term')}
                 {slideOver === 'bulk' && 'Bulk Operations'}
+                {slideOver === 'analytics' && 'Workload Analytics'}
               </h2>
             </div>
             <button onClick={() => setSlideOver(null)} className="rounded-full bg-slate-100 p-2 text-slate-500 hover:bg-slate-200"><X size={18} /></button>
@@ -467,6 +531,12 @@ export function AcademicWorkspace() {
                   ))}
                 </div>
               </div>
+              <label className="block text-sm font-medium text-slate-700">Department
+                <select value={subjectForm.department} onChange={event => setSubjectForm(prev => ({ ...prev, department: event.target.value }))} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2">
+                  <option value="">No department</option>
+                  {DEPARTMENTS.map(d => <option key={d} value={d}>{d}</option>)}
+                </select>
+              </label>
               <label className="block text-sm font-medium text-slate-700">Weekly Lessons
                 <input type="number" min={1} max={40} value={subjectForm.weeklyLessons} onChange={event => setSubjectForm(prev => ({ ...prev, weeklyLessons: Number(event.target.value) }))} className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2" />
               </label>
@@ -543,17 +613,84 @@ export function AcademicWorkspace() {
               </section>
             </div>
           )}
+          {slideOver === 'analytics' && (
+            <div className="space-y-4">
+              <WorkloadAnalytics subjects={subjects} mappings={mappings} teachers={teachers} />
+            </div>
+          )}
         </div>
       </div>
     );
   };
 
-  if (loading) {
-    return <div className="rounded-3xl border border-slate-200 bg-white p-10 text-center text-slate-500">Loading Academic Workspace…</div>;
+  useEffect(() => {
+    if (!showMoreMenu) return;
+    const handler = (event: MouseEvent) => {
+      if (moreMenuRef.current && !moreMenuRef.current.contains(event.target as Node)) {
+        setShowMoreMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showMoreMenu]);
+
+  useEffect(() => {
+    if (!showClassFilter) return;
+    const handler = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (target && classFilterRef.current?.contains(target)) return;
+      if (target && classFilterDropdownRef.current?.contains(target)) return;
+      setShowClassFilter(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [showClassFilter]);
+
+  if (loading || (refreshing && !subjects.length)) {
+    return (
+      <div className="space-y-5">
+        <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="animate-pulse space-y-3">
+            <div className="h-3 w-24 rounded-full bg-slate-200" />
+            <div className="h-6 w-64 rounded-full bg-slate-200" />
+            <div className="h-4 w-96 rounded-full bg-slate-200" />
+          </div>
+        </div>
+        <div className="grid gap-4 md:grid-cols-3 xl:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <div key={i} className="animate-pulse rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="mb-3 h-10 w-10 rounded-2xl bg-slate-200" />
+              <div className="mb-2 h-8 w-16 rounded-full bg-slate-200" />
+              <div className="h-4 w-24 rounded-full bg-slate-200" />
+            </div>
+          ))}
+        </div>
+        <div className="grid animate-pulse gap-5 xl:grid-cols-[minmax(260px,20%)_1fr]">
+          <div className="space-y-4 rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="space-y-2"><div className="h-4 w-20 rounded-full bg-slate-200" /><div className="h-8 rounded-2xl bg-slate-100" /></div>
+            ))}
+          </div>
+          <div className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="h-6 w-48 rounded-full bg-slate-200" />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (loadError && !subjects.length) {
+    return (
+      <div className="rounded-3xl border border-red-200 bg-red-50 p-12 text-center">
+        <p className="text-lg font-semibold text-red-800">Failed to load Academic Workspace</p>
+        <p className="mt-1 text-sm text-red-600">Check your connection and try again.</p>
+        <button onClick={() => { setLoadError(null); refresh(); }} className="mt-4 rounded-xl bg-red-600 px-5 py-2 font-semibold text-white hover:bg-red-700">Try Again</button>
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-5">
+    <div className="mx-auto max-w-7xl space-y-5">
       <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
         <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
           <div>
@@ -569,9 +706,23 @@ export function AcademicWorkspace() {
               <input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search classes, subjects…" className="w-64 rounded-2xl border border-slate-200 py-2 pl-9 pr-3 text-sm" />
             </div>
             <button onClick={() => openSubject()} className="rounded-2xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white"><Plus className="mr-1 inline h-4 w-4" />New Subject</button>
-            <button onClick={() => openYear()} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">New Year</button>
-            <button onClick={() => openTerm()} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">New Term</button>
-            <button onClick={refresh} className="rounded-2xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} /></button>
+            <div ref={moreMenuRef} className="relative xl:hidden">
+              <button onClick={() => setShowMoreMenu(prev => !prev)} className="rounded-2xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><MoreHorizontal className="h-4 w-4" /></button>
+              {showMoreMenu && (
+                <div className="absolute right-0 z-40 mt-2 w-48 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
+                  <button onClick={() => { openYear(); setShowMoreMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50">New Year</button>
+                  <button onClick={() => { openTerm(); setShowMoreMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50">New Term</button>
+                  <button onClick={() => { setSlideOver('analytics'); setShowMoreMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><BarChart3 className="mr-2 inline h-4 w-4" />Analytics</button>
+                  <button onClick={() => { refresh(); setShowMoreMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><RefreshCw className={cn('mr-2 inline h-4 w-4', refreshing && 'animate-spin')} />Refresh</button>
+                </div>
+              )}
+            </div>
+            <div className="hidden xl:flex xl:items-center xl:gap-2">
+              <button onClick={() => openYear()} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">New Year</button>
+              <button onClick={() => openTerm()} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">New Term</button>
+              <button onClick={() => setSlideOver('analytics')} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"><BarChart3 className="mr-1 inline h-4 w-4" />Analytics</button>
+              <button onClick={refresh} className="rounded-2xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} /></button>
+            </div>
           </div>
         </div>
       </div>
@@ -582,11 +733,19 @@ export function AcademicWorkspace() {
         <SummaryCard icon={UserCheck} label="Teachers Assigned" value={summary.teacherAssigned} />
         <SummaryCard icon={AlertTriangle} label="Missing Teachers" value={summary.missingTeachers} tone={summary.missingTeachers ? 'warn' : 'ok'} />
         <SummaryCard icon={CheckCircle2} label="Completion" value={`${summary.completion}%`} tone={summary.completion === 100 ? 'ok' : 'neutral'} />
-        <button onClick={() => setSlideOver('bulk')} className="rounded-3xl border border-indigo-200 bg-indigo-50 p-4 text-left text-indigo-700 hover:bg-indigo-100">
-          <Settings2 className="mb-2 h-5 w-5" />
-          <p className="text-sm font-semibold">Bulk Actions</p>
-          <p className="text-xs">Copy, assign, replace</p>
-        </button>
+        <div className="rounded-3xl border border-indigo-200 bg-indigo-50 p-4 text-indigo-700">
+          <button onClick={() => setSlideOver('bulk')} className="w-full text-left hover:opacity-80">
+            <Settings2 className="mb-2 h-5 w-5" />
+            <p className="text-sm font-semibold">Bulk Actions</p>
+            <p className="text-xs">Copy, assign, replace</p>
+          </button>
+          <div className="mt-3 border-t border-indigo-200 pt-3">
+            <PDFDownloadLink document={<CurriculumPdfDocument subjects={subjects} mappings={mappings} teachers={teachers} currentTerm={currentTerm} currentYear={currentYear} />} fileName="curriculum-plan.pdf" className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-indigo-700 shadow-sm hover:bg-indigo-50">
+              <FileText size={14} />
+              Export PDF
+            </PDFDownloadLink>
+          </div>
+        </div>
       </div>
 
       {warnings.length > 0 && (
@@ -616,13 +775,20 @@ export function AcademicWorkspace() {
             ))}
           </SideSection>
           <SideSection icon={BookOpen} title="Subjects" onAdd={() => openSubject()}>
+            <div className="mb-2 flex flex-wrap gap-1">
+              <button onClick={() => setDepartmentFilter('')} className={cn('rounded-lg px-2 py-0.5 text-[11px] font-semibold', departmentFilter === '' ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600')}>All</button>
+              {DEPARTMENTS.map(d => (
+                <button key={d} onClick={() => setDepartmentFilter(d)} className={cn('rounded-lg px-2 py-0.5 text-[11px] font-semibold', departmentFilter === d ? 'bg-indigo-100 text-indigo-700' : 'text-slate-400 hover:text-slate-600')}>{d}</button>
+              ))}
+            </div>
             {filteredSubjects.map(subject => {
               const meta = subjectMeta[subject.id] || {};
               return (
                 <div key={subject.id} className="group flex items-center justify-between rounded-2xl px-2 py-2 hover:bg-slate-50">
-                  <button onClick={() => { setAddSubjectId(subject.id); }} className="flex min-w-0 items-center gap-2 text-left">
+                  <button onClick={() => { if (selectedClass) addSubjectToSelectedClass(subject.id); }} className="flex min-w-0 items-center gap-2 text-left">
                     <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: meta.color || SUBJECT_COLORS[0] }} />
                     <span className="truncate text-sm font-medium text-slate-700">{subject.name}</span>
+                    {subject.department && <span className="truncate text-[10px] text-slate-400">{subject.department}</span>}
                   </button>
                   <div className="flex opacity-0 group-hover:opacity-100">
                     <button onClick={() => openSubject(subject)} className="rounded-lg p-1 text-slate-400 hover:text-indigo-600">Edit</button>
@@ -643,10 +809,10 @@ export function AcademicWorkspace() {
             <div className="flex flex-wrap items-center gap-2">
               <button onClick={() => setView('cards')} className={cn('rounded-xl px-3 py-2 text-sm font-semibold', view === 'cards' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600')}><Layers3 className="mr-1 inline h-4 w-4" />Cards</button>
               <button onClick={() => setView('matrix')} className={cn('rounded-xl px-3 py-2 text-sm font-semibold', view === 'matrix' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600')}><Grid3X3 className="mr-1 inline h-4 w-4" />Matrix</button>
-              <select value={addSubjectId} onChange={event => setAddSubjectId(event.target.value)} className="rounded-xl border border-slate-200 px-3 py-2 text-sm">
-                {subjects.map(subject => <option key={subject.id} value={subject.id}>{subject.name}</option>)}
-              </select>
-              <button onClick={addSubjectToSelectedClass} className="rounded-xl bg-indigo-600 px-3 py-2 text-sm font-semibold text-white">Add Subject</button>
+              <button ref={classFilterRef} onClick={() => setShowClassFilter(prev => !prev)} className="flex w-32 items-center gap-1 rounded-2xl border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
+                <CheckSquare className="h-4 w-4 shrink-0" />
+                <span className="truncate">{filterClassList.length > 0 ? `${filterClassList.length} classes` : 'Classes'}</span>
+              </button>
             </div>
           </div>
 
@@ -658,42 +824,67 @@ export function AcademicWorkspace() {
             ))}
           </div>
 
+          {view === 'cards' && (
+            <div className="flex flex-wrap gap-1.5 border-b border-slate-200 pb-3">
+              {subjects.map(subject => {
+                const assigned = selectedClassMappings.some(row => row.subjectId === subject.id);
+                const meta = subjectMeta[subject.id] || {};
+                return (
+                  <button key={subject.id} onClick={() => {
+                    if (!assigned && selectedClass) addSubjectToSelectedClass(subject.id);
+                  }} disabled={assigned} className={cn('flex items-center gap-1 rounded-xl border px-2.5 py-1 text-xs font-semibold', assigned ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-white text-slate-600 hover:border-indigo-300 hover:text-indigo-600')}>
+                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: meta.color || SUBJECT_COLORS[0] }} />
+                    {assigned ? 'Added' : '+ Add'}
+                    <span>{subject.shortName || subject.name}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
           {view === 'cards' ? (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-lg font-bold text-slate-900">{selectedClass}</h3>
-                <button onClick={() => { setCopyFromClass(selectedClass); setSlideOver('bulk'); }} className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"><Copy className="mr-1 inline h-4 w-4" />Copy Curriculum</button>
-              </div>
-              {selectedClassMappings.length === 0 ? (
-                <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center text-slate-500">No subjects assigned to {selectedClass}. Use “Add Subject” or copy a curriculum.</div>
-              ) : (
-                <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-3">
-                  {selectedClassMappings.map(row => {
-                    const subject = subjectsById.get(row.subjectId);
-                    const meta = subjectMeta[row.subjectId] || {};
-                    return (
-                      <article key={row.id} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="min-w-0">
-                            <div className="mb-2 h-1.5 w-16 rounded-full" style={{ backgroundColor: meta.color || SUBJECT_COLORS[0] }} />
-                            <h4 className="truncate text-lg font-bold text-slate-900">{subject?.name || getSubjectName(row, subjectsById)}</h4>
-                            <p className="text-xs text-slate-500">{subject?.shortName || 'No code'} · {meta.weeklyLessons || DEFAULT_WEEKLY_LESSONS} lessons/week</p>
-                          </div>
-                          <button onClick={() => removeMapping(row)} className="rounded-xl bg-red-50 p-2 text-red-600 hover:bg-red-100"><Trash2 size={16} /></button>
-                        </div>
-                        <div className="mt-4 space-y-2">
-                          <label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Assigned Teacher</label>
-                          <select value={row.teacherId || ''} onChange={event => updateMappingTeacher(row, event.target.value)} className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm">
-                            <option value="">Unassigned</option>
-                            {teachers.map(teacher => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}
-                          </select>
-                          <div>{workloadBadge(row.teacherId)}</div>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
+            <div className="space-y-6">
+              {(filterClassList.length > 0 ? filteredClasses : selectedClass ? [selectedClass] : []).map(className => {
+                const classMappings = mappings.filter(row => row.className === className);
+                return (
+                  <div key={className}>
+                    <div className="mb-3 flex items-center justify-between">
+                      <h3 className="text-lg font-bold text-slate-900">{className}</h3>
+                      <button onClick={() => { setCopyFromClass(className); setSlideOver('bulk'); }} className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"><Copy className="mr-1 inline h-4 w-4" />Copy Curriculum</button>
+                    </div>
+                    {classMappings.length === 0 ? (
+                      <div className="rounded-3xl border border-dashed border-slate-300 bg-slate-50 p-10 text-center text-slate-500">No subjects assigned to {className}.</div>
+                    ) : (
+                      <div className="grid gap-4 sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
+                        {classMappings.map(row => {
+                          const subject = subjectsById.get(row.subjectId);
+                          const meta = subjectMeta[row.subjectId] || {};
+                          return (
+                            <article key={row.id} className="rounded-3xl border border-slate-200 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md">
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="min-w-0">
+                                  <div className="mb-2 h-1.5 w-16 rounded-full" style={{ backgroundColor: meta.color || SUBJECT_COLORS[0] }} />
+                                  <h4 className="truncate text-lg font-bold text-slate-900">{subject?.name || getSubjectName(row, subjectsById)}</h4>
+                                  <p className="text-xs text-slate-500">{subject?.shortName || 'No code'} · {meta.weeklyLessons || DEFAULT_WEEKLY_LESSONS} lessons/week</p>
+                                </div>
+                                <button onClick={() => removeMapping(row)} className="rounded-xl bg-red-50 p-2 text-red-600 hover:bg-red-100"><Trash2 size={16} /></button>
+                              </div>
+                              <div className="mt-4 space-y-2">
+                                <label className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Assigned Teacher</label>
+                                <select value={row.teacherId || ''} onChange={event => updateMappingTeacher(row, event.target.value)} className="w-full rounded-2xl border border-slate-200 px-3 py-2 text-sm">
+                                  <option value="">Unassigned</option>
+                                  {teachers.map(teacher => <option key={teacher.id} value={teacher.id}>{teacher.name}</option>)}
+                                </select>
+                                <div>{workloadBadge(row.teacherId)}</div>
+                              </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           ) : (
             <MatrixView classes={filteredClasses} subjects={subjects} mappings={mappings} teachers={teachers} teachersById={teachersById} onTeacherChange={updateMappingTeacher} onCreateMapping={createMatrixMapping} onFocusClass={setSelectedClass} />
@@ -702,6 +893,20 @@ export function AcademicWorkspace() {
       </div>
 
       {renderSlideOver()}
+
+      {showClassFilter && (
+        <div ref={classFilterDropdownRef} className="fixed z-50 w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl" style={{ top: classFilterRef.current ? classFilterRef.current.getBoundingClientRect().bottom + 4 : 0, left: classFilterRef.current ? classFilterRef.current.getBoundingClientRect().left : 0 }}>
+          <button onClick={() => { setFilterClassList([]); setShowClassFilter(false); }} className="w-full rounded-xl px-3 py-1.5 text-left text-sm font-semibold text-indigo-600 hover:bg-slate-50">Show all</button>
+          <div className="max-h-56 space-y-0.5 overflow-auto">
+            {CLASSES.map(className => (
+              <label key={className} className="flex cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-slate-50">
+                <input type="checkbox" checked={filterClassList.includes(className)} onChange={event => setFilterClassList(prev => event.target.checked ? [...prev, className] : prev.filter(c => c !== className))} className="rounded" />
+                {className}
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

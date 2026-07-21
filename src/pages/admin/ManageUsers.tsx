@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { Listbox } from '@headlessui/react';
-import { getUsersPaginated, createUser, deleteUser, updateUser } from '../../lib/db/profiles';
+import { getUsersPaginated, createUser, deleteUser, updateUser, resetUserPassword } from '../../lib/db/profiles';
 import { getStudentsByParent, getStudents } from '../../lib/db/students';
 import { User, Role, CLASSES, Student, SUBJECTS } from '../../types';
 import { useToast } from '../../context/ToastContext';
@@ -220,7 +220,6 @@ export function ManageUsers() {
   const handleEdit = async () => {
     if (!showEdit) return;
     const data: Partial<User> = { name: formName, email: formEmail };
-    if (formPassword.trim()) data.password = formPassword;
     if (showEdit.role === 'parent') {
       data.phone1 = formPhone1; data.phone2 = formPhone2;
       data.xafada = formXafada; data.udow = formUdow;
@@ -256,17 +255,15 @@ export function ManageUsers() {
   };
 
   const handleResetPassword = async (user: User) => {
-    const newPassword = Math.random().toString(36).slice(-10);
     try {
-      await updateUser(user.id, { password: newPassword });
+      await resetUserPassword(user.email);
       addToast({
         type: 'success',
-        title: `Password reset for ${user.name}`,
-        description: `New password: ${newPassword}`,
+        title: `Password reset email sent to ${user.name}`,
+        description: `Check ${user.email} for reset instructions`,
       });
-      await refresh();
     } catch (error) {
-      addToast({ type: 'error', title: 'Failed to reset password' });
+      addToast({ type: 'error', title: 'Failed to send password reset email' });
     }
   };
 
@@ -466,8 +463,10 @@ export function ManageUsers() {
             className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
           <input placeholder="Email" value={formEmail} onChange={e => setFormEmail(e.target.value)}
             className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
-          <input placeholder="Password (leave blank to keep current)" type="password" value={formPassword} onChange={e => setFormPassword(e.target.value)}
-            className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
+          <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-sm text-amber-800">
+            <KeyRound className="w-4 h-4 inline mr-1" />
+            Use the <strong>key icon</strong> in the actions column to send a password reset email.
+          </div>
 
           {showEdit?.role === 'parent' && (
             <>
