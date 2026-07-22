@@ -12,3 +12,5 @@ export * from './parent-portal';
 export * from './streams';
 export * from './subjects';
 export * from './bulk';
+export * from './promotions';
+export * from './quizzes';

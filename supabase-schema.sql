@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS subjects (
   "shortName" TEXT,
   color TEXT,
   "weeklyLessons" INTEGER NOT NULL DEFAULT 5,
+  department TEXT,
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
@@ -224,6 +225,108 @@ CREATE TABLE report_comments (
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX idx_report_comments_student_term ON report_comments("studentId", "termId");
+
+-- Track student promotions across academic years for progression history
+CREATE TABLE student_promotions (
+  id TEXT PRIMARY KEY,
+  "studentId" TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  "fromClass" TEXT NOT NULL,
+  "toClass" TEXT NOT NULL,
+  "academicYearId" TEXT REFERENCES academic_years(id) ON DELETE SET NULL,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_student_promotions_student ON student_promotions("studentId");
+CREATE INDEX idx_student_promotions_year ON student_promotions("academicYearId");
+
+-- Attendance records for daily roll-call (streams)
+CREATE TABLE IF NOT EXISTS attendance (
+  id TEXT PRIMARY KEY,
+  "studentId" TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  "className" TEXT NOT NULL,
+  date DATE NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('present', 'absent', 'late')),
+  note TEXT,
+  "teacherId" TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE("studentId", date)
+);
+CREATE INDEX idx_attendance_class_date ON attendance("className", date);
+CREATE INDEX idx_attendance_student ON attendance("studentId");
+
+-- Homework assignments (streams)
+CREATE TABLE IF NOT EXISTS homework (
+  id TEXT PRIMARY KEY,
+  "studentId" TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  "className" TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  "dueDate" DATE NOT NULL,
+  status TEXT NOT NULL DEFAULT 'assigned' CHECK (status IN ('assigned', 'submitted', 'graded')),
+  "teacherId" TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_homework_class ON homework("className");
+CREATE INDEX idx_homework_student ON homework("studentId");
+CREATE INDEX idx_homework_title_class ON homework("title", "className");
+
+-- Quiz/question system (separate from homework)
+CREATE TABLE questions (
+  id TEXT PRIMARY KEY,
+  prompt TEXT NOT NULL,
+  type TEXT NOT NULL CHECK (type IN ('multiple_choice', 'direct_answer')),
+  options JSONB,
+  "correctAnswer" TEXT,
+  rubric TEXT,
+  "teacherId" TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_questions_teacher ON questions("teacherId");
+
+CREATE TABLE quizzes (
+  id TEXT PRIMARY KEY,
+  "className" TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  title TEXT NOT NULL,
+  description TEXT,
+  "openDate" DATE NOT NULL,
+  "dueDate" DATE NOT NULL,
+  "timeLimit" INTEGER,
+  "questionOrder" TEXT DEFAULT 'created' CHECK ("questionOrder" IN ('created', 'randomized')),
+  "teacherId" TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'active', 'closed')),
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_quizzes_class ON quizzes("className");
+CREATE INDEX idx_quizzes_teacher ON quizzes("teacherId");
+
+CREATE TABLE quiz_questions (
+  id TEXT PRIMARY KEY,
+  "quizId" TEXT NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+  "questionId" TEXT NOT NULL REFERENCES questions(id),
+  "orderIndex" INTEGER NOT NULL,
+  points INTEGER NOT NULL DEFAULT 1,
+  "promptSnapshot" TEXT NOT NULL,
+  "optionsSnapshot" JSONB,
+  "correctAnswerSnapshot" TEXT,
+  "typeSnapshot" TEXT NOT NULL
+);
+CREATE INDEX idx_quiz_questions_quiz ON quiz_questions("quizId");
+
+CREATE TABLE quiz_attempts (
+  id TEXT PRIMARY KEY,
+  "quizId" TEXT NOT NULL REFERENCES quizzes(id) ON DELETE CASCADE,
+  "studentId" TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  answers JSONB NOT NULL DEFAULT '[]',
+  "totalEarned" INTEGER DEFAULT 0,
+  "totalPossible" INTEGER DEFAULT 0,
+  "startedAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  "submittedAt" TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'in_progress' CHECK (status IN ('in_progress', 'submitted', 'graded')),
+  UNIQUE("quizId", "studentId")
+);
+CREATE INDEX idx_quiz_attempts_quiz ON quiz_attempts("quizId");
+CREATE INDEX idx_quiz_attempts_student ON quiz_attempts("studentId");
 
 -- Enable Row Level Security (RLS)
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;

@@ -19,6 +19,7 @@ import { ExamVerification } from './pages/admin/ExamVerification';
 import { MonitorTeachers } from './pages/admin/MonitorTeachers';
 import { ClassProgress } from './pages/admin/ClassProgress';
 import { ClassAnnouncements } from './pages/admin/ClassAnnouncements';
+import { ClassPromotion } from './pages/admin/ClassPromotion';
 
 // Supervisor Pages
 import { SupervisorDashboard } from './pages/supervisor/SupervisorDashboard';
@@ -28,12 +29,17 @@ import { TeacherDashboard } from './pages/teacher/TeacherDashboard';
 import { TeacherStudents } from './pages/teacher/TeacherStudents';
 import { UploadResults } from './pages/teacher/UploadResults';
 import { AllResults } from './pages/teacher/AllResults';
+import { RecordAttendance } from './pages/teacher/RecordAttendance';
+import { AssignHomework } from './pages/teacher/AssignHomework';
+import { CreateQuiz } from './pages/teacher/CreateQuiz';
+import { GradeQuizzes } from './pages/teacher/GradeQuizzes';
 
 // Shared Reports
 import { ExamReport } from './pages/reports/ExamReport';
 
 // Parent Pages
 import { ParentDashboard } from './pages/parent/ParentDashboard';
+import { ParentQuizzes } from './pages/parent/ParentQuizzes';
 import { ChildrenView } from './pages/parent/ChildrenView';
 import { ExamResults } from './pages/parent/ExamResults';
 import { MonthlyReport } from './pages/parent/MonthlyReport';
@@ -81,6 +87,11 @@ function AppContent() {
             case '/admin/class-progress': return <ClassProgress />;
             case '/admin/exam-reports': return <ExamReport />;
             case '/admin/announcements': return <ClassAnnouncements />;
+            case '/admin/promotion': return <ClassPromotion />;
+            case '/admin/attendance': return <RecordAttendance />;
+            case '/admin/homework': return <AssignHomework />;
+            case '/admin/quizzes': return <CreateQuiz />;
+            case '/admin/grade-quizzes': return <GradeQuizzes />;
             case '/messages': return <MessagesPage />;
             case '/streams': return <StreamsPage />;
             default: return <AdminDashboard navigate={navigate} />;
@@ -94,6 +105,10 @@ function AppContent() {
               case '/supervisor/students': return <TeacherStudents />;
               case '/supervisor/verifications': return <ExamVerification />;
               case '/supervisor/reports': return <ExamReport />;
+              case '/supervisor/attendance': return <RecordAttendance />;
+              case '/supervisor/homework': return <AssignHomework />;
+              case '/supervisor/quizzes': return <CreateQuiz />;
+              case '/supervisor/grade-quizzes': return <GradeQuizzes />;
               case '/messages': return <MessagesPage />;
               case '/streams': return <StreamsPage />;
               default: return <SupervisorDashboard />;
@@ -109,6 +124,10 @@ function AppContent() {
             case '/teacher/all-results': return <AllResults />;
             case '/teacher/exam-reports': return <ExamReport />;
             case '/teacher/announcements': return <ClassAnnouncements />;
+            case '/teacher/attendance': return <RecordAttendance />;
+            case '/teacher/homework': return <AssignHomework />;
+            case '/teacher/quizzes': return <CreateQuiz />;
+            case '/teacher/grade-quizzes': return <GradeQuizzes />;
             case '/messages': return <MessagesPage />;
             case '/streams': return <StreamsPage />;
             default: return <TeacherDashboard navigate={navigate} />;
@@ -120,6 +139,7 @@ function AppContent() {
           switch (currentPath) {
             case '/dashboard': return <ParentDashboard />;
             case '/parent/children': return <ChildrenView />;
+            case '/parent/quizzes': return <ParentQuizzes />;
             case '/parent/results': return <ExamResults />;
             case '/parent/monthly': return <MonthlyReport />;
             case '/parent/midterm': return <MidtermReport />;

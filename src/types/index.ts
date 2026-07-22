@@ -363,6 +363,65 @@ export interface AttendanceRecord {
   createdAt: string;
 }
 
+export type QuestionType = 'multiple_choice' | 'direct_answer';
+
+export interface Question {
+  id: string;
+  prompt: string;
+  type: QuestionType;
+  options?: { label: string; text: string }[] | null;
+  correctAnswer?: string | null;
+  rubric?: string | null;
+  teacherId: string;
+  createdAt: string;
+}
+
+export interface Quiz {
+  id: string;
+  className: string;
+  subject: string;
+  title: string;
+  description?: string | null;
+  openDate: string;
+  dueDate: string;
+  timeLimit?: number | null;
+  questionOrder: 'created' | 'randomized';
+  teacherId: string;
+  status: 'draft' | 'active' | 'closed';
+  createdAt: string;
+}
+
+export interface QuizQuestion {
+  id: string;
+  quizId: string;
+  questionId: string;
+  orderIndex: number;
+  points: number;
+  promptSnapshot: string;
+  optionsSnapshot?: { label: string; text: string }[] | null;
+  correctAnswerSnapshot?: string | null;
+  typeSnapshot: QuestionType;
+}
+
+export interface QuizAttemptAnswer {
+  questionId: string;
+  answer: string;
+  pointsEarned?: number | null;
+  isCorrect?: boolean | null;
+}
+
+export interface QuizAttempt {
+  id: string;
+  quizId: string;
+  studentId: string;
+  answers: QuizAttemptAnswer[];
+  totalEarned: number;
+  totalPossible: number;
+  startedAt: string;
+  submittedAt?: string | null;
+  status: 'in_progress' | 'submitted' | 'graded';
+}
+
 export interface HomeworkRecord {
   id: string;
   studentId: string;
@@ -392,4 +451,54 @@ export interface Message {
   body: string;
   readAt?: string | null;
   createdAt: string;
+}
+
+export interface StudentPromotion {
+  id: string;
+  studentId: string;
+  fromClass: string;
+  toClass: string;
+  academicYearId?: string | null;
+  createdAt: string;
+}
+
+export interface PromoteResult {
+  promoted_id: string;
+  student_name: string;
+  old_class: string;
+  new_class: string;
+}
+
+const GRADE_PATTERN = /^Grade (\d+)-([A-Z])$/;
+const FOUNDATION_PATTERN = /^Foundation\s+([A-Z])$/i;
+const KG_PATTERN = /^KG-([A-Z])$/;
+const YEAR12_PATTERN = /^Year\s+12-([A-Z])$/i;
+
+export function getNextClass(currentClass: string): string | null {
+  const trimmed = currentClass.trim();
+
+  // Foundation -> KG (same section)
+  const foundationMatch = trimmed.match(FOUNDATION_PATTERN);
+  if (foundationMatch) {
+    return `KG-${foundationMatch[1].toUpperCase()}`;
+  }
+
+  // KG -> Grade 1 (same section)
+  const kgMatch = trimmed.match(KG_PATTERN);
+  if (kgMatch) {
+    return `Grade 1-${kgMatch[1].toUpperCase()}`;
+  }
+
+  // Grade N -> Grade N+1 (same section)
+  const gradeMatch = trimmed.match(GRADE_PATTERN);
+  if (gradeMatch) {
+    const gradeNum = parseInt(gradeMatch[1], 10);
+    if (gradeNum >= 12) return null; // Graduated
+    return `Grade ${gradeNum + 1}-${gradeMatch[2].toUpperCase()}`;
+  }
+
+  // Year 12 -> graduated
+  if (YEAR12_PATTERN.test(trimmed)) return null;
+
+  return null;
 }

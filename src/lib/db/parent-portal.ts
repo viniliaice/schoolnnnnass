@@ -1,5 +1,5 @@
 import { supabase } from '../supabase';
-import { AttendanceRecord, Exam, HomeworkRecord, Student } from '../../types';
+import { AttendanceRecord, Exam, HomeworkRecord, Student, Quiz } from '../../types';
 
 export async function getParentPortalSnapshot(parentId: string) {
   const { data: students, error: studentsError } = await supabase
@@ -10,7 +10,7 @@ export async function getParentPortalSnapshot(parentId: string) {
 
   const studentIds = (students || []).map((s: Student) => s.id);
   if (studentIds.length === 0) {
-    return { students: [], exams: [], attendance: [], homework: [] };
+    return { students: [], exams: [], attendance: [], homework: [], quizzes: [] };
   }
 
   const [examsRes, attendanceRes, homeworkRes] = await Promise.all([
@@ -38,10 +38,22 @@ export async function getParentPortalSnapshot(parentId: string) {
   if (attendanceRes.error) throw attendanceRes.error;
   if (homeworkRes.error) throw homeworkRes.error;
 
+  // Get class names to find active quizzes
+  const classNames = [...new Set((students || []).map(s => s.className))];
+  const today = new Date().toISOString().split('T')[0];
+  const { data: quizzes } = await supabase
+    .from('quizzes')
+    .select('*')
+    .in('className', classNames)
+    .eq('status', 'active')
+    .lte('openDate', today)
+    .gte('dueDate', today);
+
   return {
     students: students as Student[],
     exams: (examsRes.data || []) as Exam[],
     attendance: (attendanceRes.data || []) as AttendanceRecord[],
     homework: (homeworkRes.data || []) as HomeworkRecord[],
+    quizzes: (quizzes || []) as Quiz[],
   };
 }

@@ -10,7 +10,7 @@ import {
 } from '../../lib/db/students';
 import { getUserById } from '../../lib/db/profiles';
 import { getClasses } from '../../lib/db/classes';
-import { getCurrentTerm } from '../../lib/db/academic';
+import { getCurrentTerm, getAcademicYears, getTerms } from '../../lib/db/academic';
 import {
   getMonthlyReport,
   getMidtermReport,
@@ -20,7 +20,7 @@ import {
   getReportCommentsForStudentTerm,
 } from '../../lib/db/reports';
 import type { ReportComment } from '../../types';
-import { Student, MONTHS, MonthlyScore } from '../../types';
+import { Student, MONTHS, MonthlyScore, AcademicYear, Term } from '../../types';
 import { PDFDownloadLink, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 import type { MidtermReport, FinalReport } from '../../types';
 import { Calendar, FileBarChart, FileText, Award } from 'lucide-react';
@@ -95,6 +95,10 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
 
   const [reportType, setReportType] = useState<'Monthly' | 'Midterm' | 'Final'>('Monthly');
   const [selectedMonth, setSelectedMonth] = useState(MONTHS[new Date().getMonth()]);
+  const [academicYears, setAcademicYears] = useState<AcademicYear[]>([]);
+  const [terms, setTerms] = useState<Term[]>([]);
+  const [selectedYearId, setSelectedYearId] = useState<string>('');
+  const [selectedTermId, setSelectedTermId] = useState<string>('');
 
   const [parentPhones, setParentPhones] = useState<string[]>([]);
   const [selectedParentPhone, setSelectedParentPhone] = useState<string>('');
@@ -106,6 +110,42 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
   const [classes, setClasses] = useState<string[]>([]);
   const [selectedClass, setSelectedClass] = useState('All');
   const isSingleView = Boolean(initialStudentId);
+
+  // Load academic years and terms for the year/term filter
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [years, allTerms] = await Promise.all([
+          getAcademicYears(),
+          getTerms(),
+        ]);
+        setAcademicYears(years);
+        setTerms(allTerms as Term[]);
+
+        const currentTerm = await getCurrentTerm();
+        if (currentTerm) {
+          setSelectedTermId(currentTerm.id);
+          setSelectedYearId(currentTerm.academicYearId);
+        } else if (years.length > 0) {
+          setSelectedYearId(years[0].id);
+          const yearTerms = allTerms.filter(t => t.academicYearId === years[0].id);
+          if (yearTerms.length > 0) setSelectedTermId(yearTerms[0].id);
+        }
+      } catch (err) {
+        console.error('Failed to load academic years/terms', err);
+      }
+    };
+    load();
+  }, []);
+
+  // Filter terms when the selected year changes and update selectedTermId
+  useEffect(() => {
+    if (!selectedYearId) return;
+    const yearTerms = terms.filter(t => t.academicYearId === selectedYearId);
+    if (yearTerms.length > 0 && !yearTerms.find(t => t.id === selectedTermId)) {
+      setSelectedTermId(yearTerms[0].id);
+    }
+  }, [selectedYearId, terms]);
 
   // Load available classes and set default selected class
   useEffect(() => {
@@ -195,17 +235,14 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
   }, [selectedClass, session, initialStudentId, isSingleView]);
 
   useEffect(() => {
-    if (!selectedStudent) return;
+    if (!selectedStudent || !selectedTermId) return;
 
     const loadReport = async () => {
       setLoading(true);
       try {
-        const term = await getCurrentTerm();
-        if (!term) return;
-
         setCommentLoading(true);
         try {
-          const c = await getReportComment(selectedStudent, term.id);
+          const c = await getReportComment(selectedStudent, selectedTermId);
           setTeacherComment(c?.teacherComment || '');
         } catch (err) {
           // ignore
@@ -214,18 +251,18 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
         }
 
         if (reportType === 'Monthly') {
-          const rep = await getMonthlyReport(selectedStudent, term.id);
+          const rep = await getMonthlyReport(selectedStudent, selectedTermId);
           setMonthlyData(rep || []);
         } else if (reportType === 'Midterm') {
-          const rep = await getMidtermReport(selectedStudent, term.id);
+          const rep = await getMidtermReport(selectedStudent, selectedTermId);
           setMidtermData(rep || null);
         } else if (reportType === 'Final') {
-          const rep = await getFinalReport(selectedStudent, term.id);
+          const rep = await getFinalReport(selectedStudent, selectedTermId);
           setFinalData(rep || null);
         }
 
         try {
-          const comments = await getReportCommentsForStudentTerm(selectedStudent, term.id);
+          const comments = await getReportCommentsForStudentTerm(selectedStudent, selectedTermId);
           const map: Record<string, ReportComment | undefined> = {};
           for (const c of comments) {
             if (c.examId) map[c.examId] = c as any;
@@ -240,7 +277,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
     };
 
     loadReport();
-  }, [selectedStudent, reportType]);
+  }, [selectedStudent, reportType, selectedTermId]);
 
   const student = students.find(s => s.id === selectedStudent);
 
@@ -374,13 +411,15 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
       addToast({ type: 'error', title: 'Save failed', description: 'No student selected' });
       return;
     }
+    if (!selectedTermId) {
+      addToast({ type: 'error', title: 'Save failed', description: 'No term selected' });
+      return;
+    }
     setCommentLoading(true);
     try {
-      const term = await getCurrentTerm();
-      if (!term) throw new Error('No current term');
       const payload = {
         studentId: selectedStudent,
-        termId: term.id,
+        termId: selectedTermId,
         teacherComment: teacherComment || '',
         teacherId: session?.userId || undefined,
       } as any;
@@ -616,10 +655,28 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
         <p className="text-slate-500 mt-1">View Monthly, Midterm or Final reports for your students</p>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-4 items-end">
+      <div className="flex flex-col sm:flex-row gap-4 items-end flex-wrap">
         {!isSingleView ? (
           <>
-            <div className="w-56">
+            <div className="w-44">
+              <label className="text-xs font-semibold text-slate-500 uppercase mb-1.5 block">Academic Year</label>
+              <select value={selectedYearId} onChange={e => setSelectedYearId(e.target.value)}
+                className="w-full px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm">
+                {academicYears.map(y => (
+                  <option key={y.id} value={y.id}>{y.name}{y.isCurrent ? ' (Current)' : ''}</option>
+                ))}
+              </select>
+            </div>
+            <div className="w-32">
+              <label className="text-xs font-semibold text-slate-500 uppercase mb-1.5 block">Term</label>
+              <select value={selectedTermId} onChange={e => setSelectedTermId(e.target.value)}
+                className="w-full px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm">
+                {terms.filter(t => t.academicYearId === selectedYearId).map(t => (
+                  <option key={t.id} value={t.id}>{t.name}{t.isCurrent ? ' (Current)' : ''}</option>
+                ))}
+              </select>
+            </div>
+            <div className="w-44">
               <label className="text-xs font-semibold text-slate-500 uppercase mb-1.5 block">Class</label>
               <select value={selectedClass} onChange={e => setSelectedClass(e.target.value)}
                 className="w-full px-4 py-2 rounded-xl border border-slate-200 bg-white text-sm">

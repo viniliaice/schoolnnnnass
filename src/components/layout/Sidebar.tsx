@@ -4,7 +4,8 @@ import { Role } from '../../types';
 import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   Upload, LogOut, Menu, X, BookOpen, ChevronRight,
-  Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity
+  Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
+  CalendarCheck, BookOpenCheck, HelpCircle
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -26,8 +27,13 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Announcements', icon: BellRing, path: '/admin/announcements' },
     { label: 'Messages', icon: Mail, path: '/messages' },
     { label: 'Streams', icon: Activity, path: '/streams' },
+    { label: 'Record Attendance', icon: CalendarCheck, path: '/admin/attendance' },
+    { label: 'Assign Homework', icon: BookOpenCheck, path: '/admin/homework' },
+    { label: 'Create Quiz', icon: HelpCircle, path: '/admin/quizzes' },
+    { label: 'Grade Quizzes', icon: ClipboardCheck, path: '/admin/grade-quizzes' },
     { label: 'Exam Verification', icon: ClipboardCheck, path: '/admin/exams' },
     { label: 'Class Progress', icon: Calendar, path: '/admin/class-progress' },
+    { label: 'Promote Classes', icon: ArrowUpDown, path: '/admin/promotion' },
     { label: 'Monitor Teacher', icon: ClipboardCheck, path: '/admin/monitor' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/admin/exam-reports' },
   ],
@@ -40,11 +46,16 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Announcements', icon: BellRing, path: '/teacher/announcements' },
     { label: 'Messages', icon: Mail, path: '/messages' },
     { label: 'Streams', icon: Activity, path: '/streams' },
+    { label: 'Record Attendance', icon: CalendarCheck, path: '/teacher/attendance' },
+    { label: 'Assign Homework', icon: BookOpenCheck, path: '/teacher/homework' },
+    { label: 'Create Quiz', icon: HelpCircle, path: '/teacher/quizzes' },
+    { label: 'Grade Quizzes', icon: ClipboardCheck, path: '/teacher/grade-quizzes' },
   ],
   parent: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'My Children', icon: Users, path: '/parent/children' },
     { label: 'Exam Results', icon: BookOpen, path: '/parent/results' },
+    { label: 'Take Quiz', icon: HelpCircle, path: '/parent/quizzes' },
     { label: 'Monthly Reports', icon: Calendar, path: '/parent/monthly' },
     { label: 'Midterm Reports', icon: FileBarChart, path: '/parent/midterm' },
     { label: 'Final Reports', icon: Award, path: '/parent/final' },
@@ -58,6 +69,10 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Exam Reports', icon: FileBarChart, path: '/supervisor/reports' },
     { label: 'Messages', icon: Mail, path: '/messages' },
     { label: 'Streams', icon: Activity, path: '/streams' },
+    { label: 'Record Attendance', icon: CalendarCheck, path: '/supervisor/attendance' },
+    { label: 'Assign Homework', icon: BookOpenCheck, path: '/supervisor/homework' },
+    { label: 'Create Quiz', icon: HelpCircle, path: '/supervisor/quizzes' },
+    { label: 'Grade Quizzes', icon: ClipboardCheck, path: '/supervisor/grade-quizzes' },
   ],
 };
 
