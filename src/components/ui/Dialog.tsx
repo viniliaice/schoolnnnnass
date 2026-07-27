@@ -38,6 +38,7 @@ export function Dialog({ open, onClose, title, description, children, className 
           </div>
           <button
             onClick={onClose}
+            aria-label="Close dialog"
             className="p-2 rounded-lg hover:bg-slate-100 text-slate-400 hover:text-slate-600 transition-colors"
           >
             <X className="w-5 h-5" />

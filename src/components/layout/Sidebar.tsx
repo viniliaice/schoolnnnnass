@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, BookOpenCheck, HelpCircle
+  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -40,6 +40,7 @@ const navItems: Record<Role, NavItem[]> = {
   teacher: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'My Classes', icon: GraduationCap, path: '/teacher/students' },
+    { label: 'Lesson Plans', icon: NotepadText, path: '/teacher/lesson-plans' },
     { label: 'Upload Results', icon: Upload, path: '/teacher/results' },
     { label: 'My Submissions', icon: FileText, path: '/teacher/all-results' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/teacher/exam-reports' },
@@ -65,6 +66,7 @@ const navItems: Record<Role, NavItem[]> = {
   supervisor: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'My Classes', icon: GraduationCap, path: '/supervisor/students' },
+    { label: 'Lesson Plans', icon: NotepadText, path: '/supervisor/lesson-plans' },
     { label: 'Exam Verifications', icon: ClipboardCheck, path: '/supervisor/verifications' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/supervisor/reports' },
     { label: 'Messages', icon: Mail, path: '/messages' },

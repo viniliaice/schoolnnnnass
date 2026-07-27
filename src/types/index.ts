@@ -502,3 +502,196 @@ export function getNextClass(currentClass: string): string | null {
 
   return null;
 }
+
+// ============================================================================
+// AI Lesson & Unit Plan Review System
+// ============================================================================
+
+export type DayOfWeek = 'Saturday' | 'Sunday' | 'Monday' | 'Tuesday' | 'Wednesday';
+export const DAYS_OF_WEEK: DayOfWeek[] = ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday'];
+
+export type PlanStatus = 'draft' | 'submitted' | 'in_review' | 'approved' | 'rejected' | 'ai_failed';
+
+export type ReviewStatus = 'pending' | 'reviewed';
+
+export interface LessonPlan {
+  id: string;
+  teacher_id: string;
+  subject_id: string | null;
+  class_name: string;
+  week_label: string;
+  title: string;
+  status: PlanStatus;
+  period_count: number;
+  previous_score: number | null;
+  previous_reviewed_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PeriodActivity {
+  activity: string;
+  time: string;
+  resource: string;
+  place: string;
+}
+
+export interface LessonPlanPeriod {
+  id: string;
+  plan_id: string;
+  day: DayOfWeek;
+  period_number: number;
+  class_name: string | null;
+  subject: string | null;
+  is_free: boolean | null;
+  topic: string;
+  objective: string | null;
+  activities: string;
+  slide_number: string | null;
+  details: PeriodActivity[];
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CategoryScore {
+  score: number;
+  explanation: string;
+}
+
+export interface ImprovementItem {
+  area: string;
+  why: string;
+  recommendation: string;
+}
+
+export interface SupervisorNotes {
+  status_recommendation: string;
+  reasoning: string;
+}
+
+export interface AIReviewScores {
+  learning_objectives: CategoryScore;
+  lesson_structure: CategoryScore;
+  student_engagement: CategoryScore;
+  teaching_strategies: CategoryScore;
+  differentiation: CategoryScore;
+  assessment_methods: CategoryScore;
+  curriculum_alignment: CategoryScore;
+  classroom_management: CategoryScore;
+  resources_materials: CategoryScore;
+  overall_quality: CategoryScore;
+}
+
+export interface AdditionalData {
+  latency_ms: number;
+  model_used: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  retries?: number;
+}
+
+export interface AIReview {
+  id: string;
+  plan_id: string;
+  scores: AIReviewScores;
+  executive_summary: string;
+  total_score: number;
+  percentage: number;
+  performance_level: string;
+  strengths: string[];
+  improvements: ImprovementItem[];
+  ai_summary_notes: SupervisorNotes;
+  additional_data: AdditionalData;
+  status: ReviewStatus;
+  supervisor_comment: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// Raw LLM output shape (matches the system prompt JSON schema)
+export interface ReviewResult {
+  schema_version: number;
+  executive_summary: string;
+  category_scores: AIReviewScores;
+  total_score: number;
+  percentage: number;
+  performance_level: string;
+  score_explanation: string;
+  strengths: string[];
+  improvements: ImprovementItem[];
+  supervisor_notes: SupervisorNotes;
+}
+
+// Edge Function request payload
+export interface ReviewPayload {
+  plan_id: string;
+  periods: {
+    day: DayOfWeek;
+    period_number: number;
+    class_name?: string | null;
+    subject?: string | null;
+    is_free?: boolean | null;
+    topic: string;
+    objective?: string | null;
+    activities: string;
+    slide_number?: string | null;
+    details?: PeriodActivity[];
+  }[];
+}
+
+// Edge Function success response
+export interface ReviewResponse {
+  review_id: string;
+  plan_id: string;
+  executive_summary: string;
+  total_score: number;
+  percentage: number;
+  performance_level: string;
+  category_scores: AIReviewScores;
+  strengths: string[];
+  improvements: ImprovementItem[];
+  ai_summary_notes: SupervisorNotes;
+  latency_ms: number;
+  model_used: string;
+}
+
+// Edge Function error response
+export interface ReviewErrorResponse {
+  error: string;
+  code: 'TIMEOUT' | 'API_KEY_ERROR' | 'TOKEN_OVERFLOW' | 'RATE_LIMIT' | 'MALFORMED_JSON' | 'SAVE_ERROR' | 'INTERNAL_ERROR' | 'UNKNOWN';
+  latency_ms?: number;
+}
+
+// Period save payload (for the atomic RPC)
+export interface SavePeriodsPayload {
+  plan_id: string;
+  periods: {
+    day: DayOfWeek;
+    period_number: number;
+    class_name?: string | null;
+    subject?: string | null;
+    is_free?: boolean | null;
+    topic: string;
+    objective?: string | null;
+    activities?: string;
+    slide_number?: string | null;
+    details?: PeriodActivity[];
+  }[];
+}
+
+// Performance level helpers
+export const PERFORMANCE_LEVELS = [
+  { key: 'excellent', label: 'Excellent', min: 90, color: 'emerald' },
+  { key: 'very_good', label: 'Very Good', min: 80, color: 'blue' },
+  { key: 'good', label: 'Good', min: 70, color: 'amber' },
+  { key: 'needs_improvement', label: 'Needs Improvement', min: 60, color: 'orange' },
+  { key: 'requires_revision', label: 'Requires Significant Revision', min: 0, color: 'rose' },
+] as const;
+
+export function getPerformanceLevel(percentage: number): typeof PERFORMANCE_LEVELS[number] {
+  for (const level of PERFORMANCE_LEVELS) {
+    if (percentage >= level.min) return level;
+  }
+  return PERFORMANCE_LEVELS[PERFORMANCE_LEVELS.length - 1];
+}

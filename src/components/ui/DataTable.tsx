@@ -72,7 +72,7 @@ export function DataTable<TData>({
                   {headerGroup.headers.map((header) => (
                     <th
                       key={header.id}
-                      className="px-3 py-2 text-left text-xs font-semibold text-slate-500 uppercase"
+                      className="px-3 py-2 text-left text-xs font-semibold text-slate-500 uppercase tracking-wider"
                     >
                       {header.isPlaceholder ? null : (
                         <div

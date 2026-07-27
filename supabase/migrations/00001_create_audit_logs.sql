@@ -5,8 +5,8 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   "createdAt" timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_audit_logs_action ON audit_logs (action);
-CREATE INDEX idx_audit_logs_created_at ON audit_logs ("createdAt" DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_action ON audit_logs (action);
+CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs ("createdAt" DESC);
 
 ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
 

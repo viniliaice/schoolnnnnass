@@ -33,6 +33,8 @@ import { RecordAttendance } from './pages/teacher/RecordAttendance';
 import { AssignHomework } from './pages/teacher/AssignHomework';
 import { CreateQuiz } from './pages/teacher/CreateQuiz';
 import { GradeQuizzes } from './pages/teacher/GradeQuizzes';
+import { LessonPlanner } from './pages/teacher/LessonPlanner';
+import { LessonPlanReview } from './pages/supervisor/LessonPlanReview';
 
 // Shared Reports
 import { ExamReport } from './pages/reports/ExamReport';
@@ -105,6 +107,7 @@ function AppContent() {
               case '/supervisor/students': return <TeacherStudents />;
               case '/supervisor/verifications': return <ExamVerification />;
               case '/supervisor/reports': return <ExamReport />;
+              case '/supervisor/lesson-plans': return <LessonPlanReview />;
               case '/supervisor/attendance': return <RecordAttendance />;
               case '/supervisor/homework': return <AssignHomework />;
               case '/supervisor/quizzes': return <CreateQuiz />;
@@ -116,7 +119,7 @@ function AppContent() {
           }
 
         // Teacher routes
-        if (session.role === 'teacher') {
+          if (session.role === 'teacher') {
           switch (currentPath) {
             case '/dashboard': return <TeacherDashboard navigate={navigate} />;
             case '/teacher/students': return <TeacherStudents />;
@@ -128,6 +131,7 @@ function AppContent() {
             case '/teacher/homework': return <AssignHomework />;
             case '/teacher/quizzes': return <CreateQuiz />;
             case '/teacher/grade-quizzes': return <GradeQuizzes />;
+            case '/teacher/lesson-plans': return <LessonPlanner />;
             case '/messages': return <MessagesPage />;
             case '/streams': return <StreamsPage />;
             default: return <TeacherDashboard navigate={navigate} />;

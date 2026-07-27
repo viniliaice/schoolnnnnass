@@ -1,3 +1,12 @@
+---
+type: Design
+title: Attendance & Homework Creation — Design Doc
+description: Design document for adding attendance recording and homework assignment UI to the teacher/admin/supervisor portals
+resource: schoolnnnnass/DESIGN-attendance-homework-creation.md
+tags: [design, attendance, homework, ui, supabase]
+timestamp: 2026-07-27T00:00:00Z
+---
+
 # Attendance & Homework Creation — Design Doc
 
 ## Problem
