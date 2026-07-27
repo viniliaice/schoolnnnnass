@@ -40,7 +40,18 @@ Markuu macallinku soo galiyo natiijooyinka, waxay u baahan yihiin ogolaanshahaag
 
 Natiijooyinka la ansixiyay waxay si degdeg ah ugu soo baxaan waalidka iyo ardayda.
 
-## Tallaabada 4: Dib u eeg qorshayaasha casharrada
+## Tallaabada 4: La soco qorshayaasha cutubyada
+
+Macallimiintu waxay abuuraan qorshayaal cutub si ay u kala saaraan casharradooda.
+
+1. Guji **Unit Plans** bar-ka bidix.
+2. Waxaad arki doontaa dhamaan qorshayaasha cutubyada macallimiinta.
+3. Qorshe kastaa wuxuu tusayaa: fasalka, maadada, xilliga, usbuuca bilowga/dhamaadka, iyo ujeedooyinka.
+4. Guji qorshe si aad u aragto faahfaahinta.
+
+Markaad dib u eegayso qorshaha casharka, waa aad arki kartaa cutubka uu ka tirsan yahay iyo ujeedooyinka cutubka.
+
+## Tallaabada 5: Dib u eeg qorshayaasha casharrada
 
 Macallimiintu waxay soo gudbiyaan qorshayaasha casharrada.
 
@@ -59,13 +70,13 @@ Macallimiintu waxay soo gudbiyaan qorshayaasha casharrada.
 
 4. Geli jawaab celintaada oo guji **Approve** ama **Request Revision**.
 
-## Tallaabada 5: Daawado warbixinnada imtixaanka
+## Tallaabada 6: Daawado warbixinnada imtixaanka
 
 1. Guji **Reports** bar-ka bidix.
 2. Xulo fasalka iyo xilliga.
 3. Daawado xogta imtixaanka ee maado walba.
 
-## Tallaabada 6: Samee hawlo macallin
+## Tallaabada 7: Samee hawlo macallin
 
 Sida kormeeraha, waxaad samayn kartaa hawlo macallin ah:
 
@@ -76,10 +87,11 @@ Sida kormeeraha, waxaad samayn kartaa hawlo macallin ah:
 
 ## Waxaad dhammaysay
 
-Waxaad dhammaysay wareegga kormeeraha: la soco macallimiinta → xaqiiji imtixaannada → dib u eeg qorshayaasha → soo saar warbixinnada. Adigaa ilaaliya tayada xogta iyo heerarka waxbarista.
+Waxaad dhammaysay wareegga kormeeraha: la soco macallimiinta → xaqiiji imtixaannada → la soco qorshayaasha cutubyada → dib u eeg qorshayaasha casharrada → soo saar warbixinnada. Adigaa ilaaliya tayada xogta iyo heerarka waxbarista.
 
 ## Tallaabooyinka xiga
 
+- [Samee oo maamul qorshayaasha cutubyada](../how-tos/create-unit-plans.md)
 - [Geli oo xaqiiji natiijooyinka imtixaanka](../how-tos/enter-exam-results.md)
 - [Isticmaal qorsheeye casharrada AI](../how-tos/use-ai-lesson-planner.md)
 - [Dib u eegista qorshaha casharka AI](../explanations/ai-lesson-review.md)

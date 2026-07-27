@@ -101,10 +101,12 @@ export function useSubmitForReview() {
     mutationFn: ({
       planId,
       periods,
+      unitContext,
     }: {
       planId: string;
       periods: { day: DayOfWeek; period_number: number; topic: string; activities: string }[];
-    }) => submitForReview(planId, periods),
+      unitContext?: { name: string; objectives: string };
+    }) => submitForReview(planId, periods, unitContext),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['aiReview', data.plan_id] });
@@ -164,11 +166,13 @@ export function useRetryAIReview() {
     mutationFn: async ({
       planId,
       periods,
+      unitContext,
     }: {
       planId: string;
       periods: { day: DayOfWeek; period_number: number; topic: string; activities: string }[];
+      unitContext?: { name: string; objectives: string };
     }) => {
-      return retryAIReview(planId, periods);
+      return retryAIReview(planId, periods, unitContext);
     },
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', data.plan_id] });

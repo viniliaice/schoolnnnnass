@@ -39,6 +39,19 @@ App-ku wuxuu isticmaalaa `switch` fudud oo ku saabsan `currentPath` gudaha `App.
 
 Door kastaa wuxuu leeyahay bogag u gaar ah. Component-ka `AppContent` wuxuu hubiyaa `session.role` oo soo saaraa routes-ka saxda ah.
 
+### Qorshayaasha cutubyada (unit plans) heer sare ah
+
+Qorshayaasha cutubyadu waxay siiyaan qaab heer sare ah oo manhaj ah oo ka sarreeya qorshayaasha casharrada:
+
+```
+Macallimiintu → Abuuraan Qorshe Cutub → Fasalka iyo Maadada
+Macallimiintu → Abuuraan Qorshe Cashar → Ku xiraan Qorshaha Cutubka
+Macallimiintu → Gudbiyaan Qorshaha Casharka → AI wuxuu fahmaa macnaha cutubka
+Kormeerayaashu → Dib u eega Qorshaha Cutubka → iyo Qorshaha Casharka
+```
+
+Cutub kastaa wuxuu leeyahay: magac, fasalka, maadada, xilliga, usbuuca bilowga/dhamaadka, iyo ujeedooyin. Qorshe kasta oo cashar ah ayaa xiri karaa hal cutub.
+
 ### Imtixaannada tahay xarunta
 
 Wax walba waxay ku wareegaan imtixaannada:

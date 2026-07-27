@@ -6,10 +6,10 @@ Nidaam buuxa oo maamulka dugsiyada lagu maamulo, oo lagu dhisay React, Vite, iyo
 
 | Door | Waxaad samayn karto |
 |------|---------------------|
-| Admin | Maamul isticmaalayaasha, fasallada, imtixaanada, taariikhda dugsiyada |
-| Macallin | Gal natiijooyinka imtixaanada, qor xaadirinta, samee su'aalo |
+| Admin | Maamul isticmaalayaasha, fasallada, imtixaanada, taariikhda dugsiyada, qorshayaasha cutubyada |
+| Macallin | Gal natiijooyinka imtixaanada, qor xaadirinta, samee su'aalo, abuur qorshayaal cutub |
 | Waalid | Daawato warbixinnada carruurta, qaado su'aalaha, la soco horumarka |
-| Kormeere | Dib u eeg qorshayaasha casharrada, xaqiiji imtixaanada, la soco macallimiinta |
+| Kormeere | Dib u eeg qorshayaasha casharrada, qorshayaasha cutubyada, xaqiiji imtixaanada, la soco macallimiinta |
 
 ## Dukumintasho
 
@@ -28,6 +28,7 @@ Nidaam buuxa oo maamulka dugsiyada lagu maamulo, oo lagu dhisay React, Vite, iyo
 - [Samee oo maamul su'aalaha](how-tos/manage-quizzes.md)
 - [Qor xaadirinta ardayda](how-tos/record-attendance.md)
 - [Soo saar warbixinnada ardayda](how-tos/generate-reports.md)
+- [Samee oo maamul qorshayaasha cutubyada](how-tos/create-unit-plans.md)
 - [Isticmaal qorsheeye casharrada AI](how-tos/use-ai-lesson-planner.md)
 
 ### Sharaxaad

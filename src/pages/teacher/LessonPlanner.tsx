@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
 import { useTeacherPlans, useCreatePlan, useSavePeriods, useSubmitForReview, usePlanWithPeriods, useReview } from '../../lib/hooks/useLessonPlans';
+import { useUnitPlan } from '../../lib/hooks/useUnitPlans';
 import { DayOfWeek, DAYS_OF_WEEK, LessonPlanPeriod, PeriodActivity, Subject, AcademicYear } from '../../types';
 import { Loader2, Send, Save, BookOpen, FileText, Clock, History } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -103,10 +104,12 @@ export function LessonPlanner() {
   const [teacherClasses, setTeacherClasses] = useState<string[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [planId, setPlanId] = useState<string | null>(null);
+  const [selectedUnitId, setSelectedUnitId] = useState('');
   const [periods, setPeriods] = useState<PeriodCell[]>(() => createEmptyPeriods(5));
   const [isDirty, setIsDirty] = useState(false);
 
   const { data: existingPlans } = useTeacherPlans(session?.userId);
+  const { data: selectedUnit } = useUnitPlan(selectedUnitId || null);
   const { data: planWithPeriods } = usePlanWithPeriods(planId || undefined);
   const { data: review } = useReview(planId || undefined);
   const createPlanMut = useCreatePlan();
@@ -246,18 +249,26 @@ export function LessonPlanner() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     try {
       await savePeriodsMut.mutateAsync({ plan_id: planId, periods: periodsForSave });
-      await submitMut.mutateAsync({ planId, periods: periodsForSave });
+      const unitContext = selectedUnit
+        ? { name: selectedUnit.name, objectives: selectedUnit.objectives }
+        : undefined;
+      await submitMut.mutateAsync({ planId, periods: periodsForSave, unitContext });
       addToast({ type: 'success', title: 'Submitted for AI review' });
     } catch (err: any) {
       addToast({ type: 'error', title: 'Submission failed', description: err.message });
     } finally {
       isSubmittingRef.current = false;
     }
-  }, [planId, periods, periodsForSave, savePeriodsMut, submitMut, addToast]);
+  }, [planId, periods, periodsForSave, savePeriodsMut, submitMut, addToast, selectedUnit]);
 
   const handleSelectFromHistory = useCallback((selectedPlanId: string) => {
     setPlanId(selectedPlanId);
     setTab('plan');
+  }, []);
+
+  const handleNewPlan = useCallback(() => {
+    setPlanId(null);
+    setSelectedUnitId('');
   }, []);
 
   const loading = createPlanMut.isPending || savePeriodsMut.isPending || submitMut.isPending;
@@ -271,7 +282,7 @@ export function LessonPlanner() {
         isDirty={isDirty}
         loading={loading}
         submitPending={submitMut.isPending}
-        onNewPlan={() => setPlanId(null)}
+        onNewPlan={handleNewPlan}
         onGoToReview={() => setTab('review')}
         activeTab={tab}
         setActiveTab={setTab}
@@ -307,6 +318,8 @@ export function LessonPlanner() {
           teacherClasses={teacherClasses}
           onCreate={handleCreateOrSelectPlan}
           loading={loading}
+          unitId={selectedUnitId}
+          setUnitId={setSelectedUnitId}
         />
       )}
 

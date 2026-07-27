@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText
+  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -23,6 +23,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Manage Users', icon: Users, path: '/admin/users' },
     { label: 'Manage Students', icon: GraduationCap, path: '/admin/students' },
     { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
+    { label: 'Unit Plans', icon: Layers, path: '/admin/unit-plans' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
     { label: 'Announcements', icon: BellRing, path: '/admin/announcements' },
     { label: 'Messages', icon: Mail, path: '/messages' },
@@ -41,6 +42,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'My Classes', icon: GraduationCap, path: '/teacher/students' },
     { label: 'Lesson Plans', icon: NotepadText, path: '/teacher/lesson-plans' },
+    { label: 'Unit Plans', icon: Layers, path: '/teacher/unit-plans' },
     { label: 'Upload Results', icon: Upload, path: '/teacher/results' },
     { label: 'My Submissions', icon: FileText, path: '/teacher/all-results' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/teacher/exam-reports' },
@@ -67,6 +69,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'My Classes', icon: GraduationCap, path: '/supervisor/students' },
     { label: 'Lesson Plans', icon: NotepadText, path: '/supervisor/lesson-plans' },
+    { label: 'Unit Plans', icon: Layers, path: '/supervisor/unit-plans' },
     { label: 'Exam Verifications', icon: ClipboardCheck, path: '/supervisor/verifications' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/supervisor/reports' },
     { label: 'Messages', icon: Mail, path: '/messages' },

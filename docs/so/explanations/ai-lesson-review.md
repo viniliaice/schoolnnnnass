@@ -12,11 +12,12 @@ Kormeerayaashu ma eegi karaan qorshe kasta oo cashar ah si faahfaahsan. Macallim
 
 ```
 Macallinku wuxuu soo gudbiyaa qorshe
-  → Client-ku wuxuu u diraa edge function periods-ka
+  → Client-ku wuxuu u diraa period-ka + unit_context (haddii ay jirto) edge function-ka
   → Edge function-ku wuxuu u yeeraa LLM (GPT-4 ama la mid ah)
+  → LLM wuxuu helaa macnaha cutubka (name + objectives)
   → LLM wuxuu soo celiyaa structured JSON buundooyin ah
   → Edge function-ku wuxuu ku kaydiyaa table-ka ai_reviews
-  → Kormeeruhu wuxuu arkaa buundooyinka AI + wuxuu ku darayaa dib u eegistiisa
+  → Kormeeruhu wuxuu arkaa buundooyinka AI + macnaha cutubka + wuxuu ku darayaa dib u eegistiisa
 ```
 
 ### Edge function-ka
@@ -41,7 +42,7 @@ AI-ga wuxuu qiimeeyaa 10 qaybood, mid kastaa 0-100:
 | Teaching Strategies | Dhexe | Kala duwanaanshaha hababka? |
 | Differentiation | Dhexe | La qabsiga ardayda kala duwan? |
 | Assessment Methods | Sarreeya | Sida barashada loo hubiyo? |
-| Curriculum Alignment | Sarreeya | Ma ku habboon yahay heerarka? |
+| Curriculum Alignment | Sarreeya | Ma ku habboon yahay heerarka? AI-ga wuxuu isticmaalaa ujeedooyinka cutubka si uu u hubiyo |
 | Classroom Management | Hoose | Anshaxa iyo maamulka wakhtiga? |
 | Resources Materials | Hoose | Agabku ma habboon yahay oo ma heli karaa? |
 | Overall Quality | Sarreeya | Qiimeynta guud ee qorshaha |
@@ -51,11 +52,13 @@ AI-ga wuxuu qiimeeyaa 10 qaybood, mid kastaa 0-100:
 Prompt-ka nidaamsan wuxuu weydiisaa LLM-ka:
 
 1. Akhri mawduuca, ujeeddada, iyo hawlo kasta oo xilli ah
-2. Buundo qayb kasta 0-100
-3. Sharax buundo kasta
-4. Liiso xoogga iyo meelaha loo baahan yahay hagaajin
-5. Qor soo koobid guud
-6. Ku talo heerka (approve/revise/reject)
+2. Haddii unit_context la helo, akhri magaca cutubka iyo ujeedooyinkiisa
+3. Isbarbardhig qorshaha casharka usbuuca ujeedooyinka cutubka — ma taageerayaan midba midka kale?
+4. Buundo qayb kasta 0-100 (Curriculum Alignment wuxuu tixgelinayaa ujeedooyinka cutubka)
+5. Sharax buundo kasta
+6. Liiso xoogga iyo meelaha loo baahan yahay hagaajin
+7. Qor soo koobid guud
+8. Ku talo heerka (approve/revise/reject)
 
 ### Qaabka jawaabta
 
@@ -90,7 +93,7 @@ LLM wuxuu soo celiyaa JSON qaabeysan:
 ### Hawsha kormeeraha
 
 1. Dib u eegista AI waxay si toos ah u kaydantaa gudbinta
-2. Kormeeruhu wuxuu furaa qorshaha oo wuxuu arkaa buundooyinka AI
+2. Kormeeruhu wuxuu furaa qorshaha oo wuxuu arkaa buundooyinka AI iyo macnaha cutubka
 3. Wuxuu akhriyaa soo koobista AI
 4. Wuxuu ku darayaa faalladiisa
 5. Wuxuu ansixinayaa ama codsanayaa dib u hagaajin

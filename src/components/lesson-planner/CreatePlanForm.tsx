@@ -1,5 +1,6 @@
 import { Loader2, BookOpen } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
 
 interface CreatePlanFormProps {
   className: string;
@@ -11,6 +12,8 @@ interface CreatePlanFormProps {
   teacherClasses: string[];
   onCreate: () => void;
   loading: boolean;
+  unitId: string;
+  setUnitId: (value: string) => void;
 }
 
 export function CreatePlanForm({
@@ -23,7 +26,11 @@ export function CreatePlanForm({
   teacherClasses,
   onCreate,
   loading,
+  unitId,
+  setUnitId,
 }: CreatePlanFormProps) {
+  const { data: unitPlans = [] } = useUnitPlansByClass(className || null);
+
   return (
     <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
       <div className="flex items-center gap-3 mb-6">
@@ -69,6 +76,20 @@ export function CreatePlanForm({
           placeholder="e.g. Week 31 - Math - Fractions"
           className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
         />
+      </div>
+      <div>
+        <label className="block text-sm font-medium text-slate-700 mb-1">Unit (optional)</label>
+        <select
+          value={unitId}
+          onChange={(e) => setUnitId(e.target.value)}
+          className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
+          disabled={!className}
+        >
+          <option value="">No unit</option>
+          {unitPlans.map((u) => (
+            <option key={u.id} value={u.id}>{u.name}</option>
+          ))}
+        </select>
       </div>
       <button
         onClick={onCreate}

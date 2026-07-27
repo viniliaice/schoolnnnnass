@@ -49,7 +49,19 @@ Macallimiintu waxay u baahan yihiin qoondeyn fasallo-maadooyin ka hor imtixaanna
 4. U qoondee macallin.
 5. Guji **Save**.
 
-## Tallaabada 5: Geli natiijada imtixaanka
+## Tallaabada 5: Maamul qorshayaasha cutubyada (unit plans)
+
+Qorshayaasha cutubyada waxay u oggolaanayaan macallimiinta inay isku xiraan qorshayaasha casharrada usbuuca iyagoo ku daraya cutubyo weyn oo manhaj ah.
+
+1. Guji **Unit Plans** bar-ka bidix.
+2. Waxaad arki doontaa liiska qorshayaasha cutubyada.
+3. Guji **Create Unit Plan** si aad u abuurto mid cusub.
+4. Buuxi: magaca, fasalka, maadada, xilliga, usbuuca bilowga/dhamaadka, iyo ujeedooyinka.
+5. Guji **Save**.
+
+Macallimiintu haddaba waxay xiri karaan qorshahooda casharrada cutubkan, taasoo ka dhigaysa dib u eegista AI mid macne badan.
+
+## Tallaabada 6: Geli natiijada imtixaanka
 
 1. Guji **Exam Reports** ama fasalka.
 2. Xulo fasalka, maadada, bisha, iyo nooca imtixaanka (tusaale "CA").
@@ -59,7 +71,7 @@ Macallimiintu waxay u baahan yihiin qoondeyn fasallo-maadooyin ka hor imtixaanna
 
 Imtixaanku wuxuu ku kaydmaa xaalad "pending" — kormeerayaashu way xaqiijin ka hor warbixinnada.
 
-## Tallaabada 6: Xaqiiji inay shaqaysay
+## Tallaabada 7: Xaqiiji inay shaqaysay
 
 1. Ku noqo dashboard-ka.
 2. Tirada imtixaanka waa inay korortaa.
@@ -72,5 +84,6 @@ Waxaad dhammaysay wareegga koowaad: samee qaabka dugsiyeed → u qoondee macalli
 ## Tallaabooyinka xiga
 
 - [Samee sannad dugsiyeed iyo xilli](../how-tos/setup-academic-year.md)
+- [Samee oo maamul qorshayaasha cutubyada](../how-tos/create-unit-plans.md)
 - [Geli oo xaqiiji natiijooyinka imtixaanka](../how-tos/enter-exam-results.md)
 - [Soo saar warbixinnada ardayda](../how-tos/generate-reports.md)

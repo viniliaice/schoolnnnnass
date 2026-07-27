@@ -70,7 +70,8 @@ export async function savePeriods(payload: SavePeriodsPayload): Promise<LessonPl
 
 export async function submitForReview(
   planId: string,
-  periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[]
+  periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
+  unitContext?: { name: string; objectives: string }
 ): Promise<ReviewResponse> {
   const jwt = (await supabase.auth.getSession()).data.session?.access_token;
   if (!jwt) throw new Error('Not authenticated');
@@ -93,7 +94,7 @@ export async function submitForReview(
         Authorization: `Bearer ${jwt}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ plan_id: planId, periods: periodInputs }),
+      body: JSON.stringify({ plan_id: planId, periods: periodInputs, unit_context: unitContext }),
     }
   );
 
@@ -129,7 +130,8 @@ export async function updateReviewStatus(
 
 export async function retryAIReview(
   planId: string,
-  periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[]
+  periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
+  unitContext?: { name: string; objectives: string }
 ): Promise<ReviewResponse> {
   const jwt = (await supabase.auth.getSession()).data.session?.access_token;
   if (!jwt) throw new Error('Not authenticated');
@@ -142,7 +144,7 @@ export async function retryAIReview(
         Authorization: `Bearer ${jwt}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({ plan_id: planId, periods: periodInputs }),
+      body: JSON.stringify({ plan_id: planId, periods: periodInputs, unit_context: unitContext }),
     }
   );
 

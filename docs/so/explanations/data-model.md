@@ -23,6 +23,7 @@ profiles (isticmaalayaasha)
   ├── students (hal profile → arday badan via parentId)
   ├── exams (hal macallin → imtixaan badan via teacherId)
   ├── class_subjects (hal macallin → qoondayn badan)
+  ├── unit_plans (hal macallin → qorsheyaal cutub badan via teacherId)
   └── auth_id → auth.users (Supabase auth)
 
 students
@@ -33,6 +34,13 @@ students
 class_subjects
   ├── className + subjectId → subjects
   └── teacherId → profiles
+
+unit_plans
+  ├── subject_id → subjects
+  ├── class_name → (text, denormalized)
+  ├── term_id → terms
+  ├── teacher_id → profiles
+  └── lesson_plans (hal cutub → qorsheyaal cashar badan via unit_id SET NULL)
 ```
 
 ### Sababta profiles loo isticmaalay, ee ma aha users
@@ -53,6 +61,28 @@ Kala saaridaani waxay ka dhigan tahay:
 - Auth waxaa maamula Supabase (badqab, la dayactiro)
 - Xogta barnaamijku waa gacanteeda (qaab dabacsan)
 - `auth_id` wuxuu u oggolaanayaa soo celinta session-ka
+
+### Qorshayaasha cutubyada (unit_plans)
+
+Qorshaha cutubku wuxuu ka kooban yahay:
+
+```
+unit_plans
+├── id (TEXT PRIMARY KEY)
+├── name (magaca cutubka)
+├── subject_id → subjects
+├── class_name (fasalka)
+├── term_id → terms
+├── week_number_start (usbuuca bilowga)
+├── week_number_end (usbuuca dhamaadka)
+├── objectives (ujeedooyinka barashada)
+├── teacher_id → profiles
+└── created_at / updated_at
+```
+
+Qorshayaasha casharrada waxay ku xirmaan karaan cutub iyada oo la isticmaalayo `unit_id → unit_plans(id) ON DELETE SET NULL`. Haddii cutubka la tirtiro, qorshayaasha casharku way sii jiraan laakiin ma laha cutub.
+
+Tan waxay u oggolaanaysaa AI-ga inuu fahmo macnaha guud markuu buundeevo qorshaha casharka. Gaar ahaan, **Curriculum Alignment** wuxuu isbarbardhigaa casharrada usbuuca ujeedooyinka cutubka. Haddii cutubku doonayo "jajabka oo la barto" laakiin casharradu ku saabsan yihiin "dhufsashada," AI-ga wuxuu u dhigayaa buundo hoose. Tani waxay ka dhigan tahay in AI-ga uu eegayo cutubka markuu xaqiijinayo qorshaha casharka.
 
 ### Sababta imtixaannadu yihiin xarunta
 
@@ -103,6 +133,11 @@ Arday: WHERE studentId = auth.uid()
 ```
 
 Kormeerayaashu RLS ma qabso — waxay u baahan yihiin inay arkaan xogta oo dhan xaqiijinta.
+
+**Unit_plans RLS:**
+- Admin: ALL (CRUD oo dhan)
+- Macallin: ALL laakiin `teacher_id = auth.uid()` (wuxuu arkaa oo keliya kuwiisa)
+- Kormeere: SELECT oo keliya (wuxuu arkaa dhamaan)
 
 ## Isbarbardhig
 

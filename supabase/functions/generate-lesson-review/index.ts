@@ -74,6 +74,7 @@ interface PeriodActivity {
 interface ReviewPayload {
   plan_id: string;
   periods: { day: string; period_number: number; class_name?: string; subject?: string; is_free?: boolean; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[];
+  unit_context?: { name: string; objectives: string };
 }
 
 interface TokenUsage {
@@ -82,6 +83,13 @@ interface TokenUsage {
 }
 
 function buildPrompt(payload: ReviewPayload): string {
+  let preamble = 'Lesson Plan Review Request\n\n';
+
+  if (payload.unit_context) {
+    preamble += `Curriculum Unit: ${payload.unit_context.name}\n`;
+    preamble += `Unit Objectives: ${payload.unit_context.objectives}\n\n`;
+  }
+
   const periodsText = payload.periods
     .map(p => {
       let text = `Day: ${p.day} | Period ${p.period_number}`;
@@ -106,7 +114,7 @@ function buildPrompt(payload: ReviewPayload): string {
     })
     .join('\n');
 
-  return `Lesson Plan Review Request\n\nTitle: Weekly Lesson Plan\n\nPeriod Breakdown:\n${periodsText}\n\nEvaluate this plan across all 10 categories.`;
+  return `${preamble}Period Breakdown:\n${periodsText}\n\nEvaluate this plan across all 10 categories.`;
 }
 
 async function callNVIDIA(prompt: string, apiKey: string, signal: AbortSignal): Promise<{ result: ReviewResult; usage: TokenUsage }> {

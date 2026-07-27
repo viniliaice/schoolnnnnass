@@ -35,6 +35,7 @@ import { CreateQuiz } from './pages/teacher/CreateQuiz';
 import { GradeQuizzes } from './pages/teacher/GradeQuizzes';
 import { LessonPlanner } from './pages/teacher/LessonPlanner';
 import { LessonPlanReview } from './pages/supervisor/LessonPlanReview';
+import { UnitPlans } from './pages/teacher/UnitPlans';
 
 // Shared Reports
 import { ExamReport } from './pages/reports/ExamReport';
@@ -90,6 +91,7 @@ function AppContent() {
             case '/admin/exam-reports': return <ExamReport />;
             case '/admin/announcements': return <ClassAnnouncements />;
             case '/admin/promotion': return <ClassPromotion />;
+            case '/admin/unit-plans': return <UnitPlans />;
             case '/admin/attendance': return <RecordAttendance />;
             case '/admin/homework': return <AssignHomework />;
             case '/admin/quizzes': return <CreateQuiz />;
@@ -108,6 +110,7 @@ function AppContent() {
               case '/supervisor/verifications': return <ExamVerification />;
               case '/supervisor/reports': return <ExamReport />;
               case '/supervisor/lesson-plans': return <LessonPlanReview />;
+              case '/supervisor/unit-plans': return <UnitPlans />;
               case '/supervisor/attendance': return <RecordAttendance />;
               case '/supervisor/homework': return <AssignHomework />;
               case '/supervisor/quizzes': return <CreateQuiz />;
@@ -131,6 +134,7 @@ function AppContent() {
             case '/teacher/homework': return <AssignHomework />;
             case '/teacher/quizzes': return <CreateQuiz />;
             case '/teacher/grade-quizzes': return <GradeQuizzes />;
+            case '/teacher/unit-plans': return <UnitPlans />;
             case '/teacher/lesson-plans': return <LessonPlanner />;
             case '/messages': return <MessagesPage />;
             case '/streams': return <StreamsPage />;

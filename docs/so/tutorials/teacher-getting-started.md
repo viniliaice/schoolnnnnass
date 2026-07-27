@@ -62,7 +62,25 @@ Natiijooyinku waxay ku kaydmaan xaalad "pending" — kormeeruhu waa inuu xaqiiji
 5. Deji taariikhda dhamaynta.
 6. Guji **Assign**.
 
-## Tallaabada 6: Abuur su'aalo (quiz)
+## Tallaabada 6: Abuur qorshe cutub (unit plan)
+
+Qorshaha cutubku waa heer sare oo ka sarreeya qorshaha casharka. Wuxuu isku xiraa qorshayaasha casharrada usbuuca iyagoo ku daraya cutubyo weyn oo manhaj ah.
+
+1. Guji **Unit Plans** bar-ka bidix.
+2. Guji **Create Unit Plan**.
+3. Buuxi:
+   - **Name:** tusaale "Jajabka iyo Dhabannada"
+   - **Class:** xulo fasalka
+   - **Subject:** xulo maadada
+   - **Term:** xulo xilliga
+   - **Week Number Start:** usbuuca bilowga
+   - **Week Number End:** usbuuca dhamaadka
+   - **Objectives:** ujeedooyinka barashada cutubka
+4. Guji **Save**.
+
+Markaad abuurtid qorshe cashar, waxaad dooran kartaa cutubkan liiska, si AI-ga u arko macnaha guud ee cutubka.
+
+## Tallaabada 7: Abuur su'aalo (quiz)
 
 1. Guji **Quizzes** bar-ka bidix.
 2. Guji **Create Quiz**.
@@ -73,25 +91,26 @@ Natiijooyinku waxay ku kaydmaan xaalad "pending" — kormeeruhu waa inuu xaqiiji
    - **Direct answer** — ardaygu wuxuu galiyaa jawaabtiisa
 6. Guji **Publish**.
 
-## Tallaabada 7: Isticmaal qorsheeye casharrada AI
+## Tallaabada 8: Isticmaal qorsheeye casharrada AI
 
 1. Guji **Lesson Plans** bar-ka bidix.
 2. Guji **Create Plan**.
-3. Xulo usbuuca, maadada, iyo fasalka.
+3. Xulo usbuuca, maadada, iyo fasalka. Ikhtiyaar ahaan, xulo cutub (unit) liiska si AI-ga u arko macnaha guud.
 4. Xilli kasta, buuxi:
    - **Topic** — waxaad baraysid
    - **Objective** — ujeeddada barashada
    - **Activities** — waxa ardaydu qaban doonaan
 5. Guji **Submit for Review**.
 
-AI-ga wuxuu dib u eegi doonaa qorshahaaga oo wuxuu ku siin doonaa buundo 10 qaybood.
+AI-ga wuxuu dib u eegi doonaa qorshahaaga isagoo tixgelinaya ujeedooyinka cutubka, wuxuuna ku siin doonaa buundo 10 qaybood.
 
 ## Waxaad dhammaysay
 
-Waxaad dhammaysay hawsha macallinka oo dhan: daawado fasallada → geli buundooyinka → qor xaadirinta → qoondee shaqo guri → samee su'aalo → qorshee casharro.
+Waxaad dhammaysay hawsha macallinka oo dhan: daawado fasallada → geli buundooyinka → qor xaadirinta → qoondee shaqo guri → abuur qorshe cutub → samee su'aalo → qorshee casharro oo AI ku xaqiiji.
 
 ## Tallaabooyinka xiga
 
+- [Samee oo maamul qorshayaasha cutubyada](../how-tos/create-unit-plans.md)
 - [Geli oo xaqiiji natiijooyinka imtixaanka](../how-tos/enter-exam-results.md)
 - [Samee oo maamul su'aalaha](../how-tos/manage-quizzes.md)
 - [Isticmaal qorsheeye casharrada AI](../how-tos/use-ai-lesson-planner.md)

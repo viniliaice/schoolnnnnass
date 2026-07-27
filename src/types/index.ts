@@ -638,6 +638,10 @@ export interface ReviewPayload {
     slide_number?: string | null;
     details?: PeriodActivity[];
   }[];
+  unit_context?: {
+    name: string;
+    objectives: string;
+  };
 }
 
 // Edge Function success response
@@ -661,6 +665,34 @@ export interface ReviewErrorResponse {
   error: string;
   code: 'TIMEOUT' | 'API_KEY_ERROR' | 'TOKEN_OVERFLOW' | 'RATE_LIMIT' | 'MALFORMED_JSON' | 'SAVE_ERROR' | 'INTERNAL_ERROR' | 'UNKNOWN';
   latency_ms?: number;
+}
+
+// ============================================================================
+// Unit Plans
+// ============================================================================
+
+export interface UnitPlan {
+  id: string;
+  name: string;
+  subject_id: string;
+  class_name: string;
+  term_id: string;
+  week_number_start: number;
+  week_number_end: number;
+  objectives: string;
+  teacher_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface UnitPlanInput {
+  name: string;
+  subject_id: string;
+  class_name: string;
+  term_id: string;
+  week_number_start: number;
+  week_number_end: number;
+  objectives: string;
 }
 
 // Period save payload (for the atomic RPC)
