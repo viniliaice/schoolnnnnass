@@ -128,6 +128,7 @@ export function AcademicWorkspace() {
     setMappings,
     teachers,
     currentTerm,
+    partialErrors,
   } = useAcademicWorkspaceData(handleLoadError);
   const [selectedClass, setSelectedClass] = useState(CLASSES[0] || '');
   const [query, setQuery] = useState('');
@@ -1226,6 +1227,24 @@ Ms. Nasra,nasra@school.edu,TempPass123!,Grade 9-A;Grade 10-A,English;Somali,20`
           </div>
         </div>
       </div>
+
+      {partialErrors.length > 0 && !loading && (
+        <div className="rounded-3xl border border-red-200 bg-red-50 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2 font-semibold text-red-800">
+              <AlertTriangle className="h-5 w-5 shrink-0" />
+              Some data failed to load
+            </div>
+            <button onClick={refresh} className="shrink-0 rounded-xl bg-red-100 px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-200">
+              <RefreshCw className={cn('mr-1 inline h-3 w-3', refreshing && 'animate-spin')} />
+              Retry
+            </button>
+          </div>
+          <p className="mt-1 text-sm text-red-700">
+            Could not fetch: <strong>{partialErrors.join(', ')}</strong>. Other data is displayed below.
+          </p>
+        </div>
+      )}
 
       {warnings.length > 0 && (
         <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4">
