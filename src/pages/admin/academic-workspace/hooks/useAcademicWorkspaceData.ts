@@ -38,13 +38,18 @@ async function fetchWithRetry<T>(
 ): Promise<T | undefined> {
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     try {
-      return await withTimeout(fn(), FETCH_TIMEOUT_MS, label);
+      console.log(`[AcademicWorkspace] Fetching ${label} (attempt ${attempt + 1}/${MAX_RETRIES + 1})...`);
+      const result = await withTimeout(fn(), FETCH_TIMEOUT_MS, label);
+      console.log(`[AcademicWorkspace] ✅ ${label} loaded:`, Array.isArray(result) ? `${result.length} rows` : result);
+      return result;
     } catch (err) {
+      console.warn(`[AcademicWorkspace] ⚠️ ${label} attempt ${attempt + 1} failed:`, err);
       if (attempt === MAX_RETRIES) {
-        console.warn(`[AcademicWorkspace] ${label} failed after ${MAX_RETRIES + 1} attempts:`, err);
+        console.warn(`[AcademicWorkspace] ❌ ${label} failed after ${MAX_RETRIES + 1} attempts`);
         return undefined;
       }
       const delay = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+      console.log(`[AcademicWorkspace] Retrying ${label} in ${delay}ms...`);
       await new Promise(resolve => setTimeout(resolve, delay));
     }
   }
@@ -65,19 +70,23 @@ export function useAcademicWorkspaceData(onError?: (error: unknown) => void) {
   // Track if component is still mounted to avoid setting state on unmounted component
   const mountedRef = useRef(true);
 
+  // ── CRITICAL FIX: Reset mounted ref on every mount (React 19 Strict Mode compatible) ──
   useEffect(() => {
-    return () => { mountedRef.current = false; };
+    console.log('[AcademicWorkspace] Hook mounted — setting mountedRef = true');
+    mountedRef.current = true;
+    return () => {
+      console.log('[AcademicWorkspace] Hook unmounting — setting mountedRef = false');
+      mountedRef.current = false;
+    };
   }, []);
 
   const refresh = useCallback(async () => {
+    console.log('[AcademicWorkspace] refresh() called — mounted:', mountedRef.current);
     setRefreshing(true);
     setPartialErrors([]);
 
     try {
-      // ── Each query runs independently with timeout + retry + graceful fallback ──
-      // If one fails/times out, the others still succeed and the workspace loads with partial data.
-      // The 15s per-attempt timeout prevents the entire page from hanging forever.
-
+      console.log('[AcademicWorkspace] Starting parallel data fetch...');
       const [subjectRows, yearRows, termRows, mappingRows, teacherRows, activeTerm] = await Promise.all([
         fetchWithRetry('subjects', getSubjects),
         fetchWithRetry('academic years', getAcademicYears),
@@ -87,6 +96,15 @@ export function useAcademicWorkspaceData(onError?: (error: unknown) => void) {
         fetchWithRetry('current term', getCurrentTerm),
       ]);
 
+      console.log('[AcademicWorkspace] All fetches complete. Results:', {
+        subjects: subjectRows?.length ?? 'FAILED',
+        years: yearRows?.length ?? 'FAILED',
+        terms: termRows?.length ?? 'FAILED',
+        mappings: mappingRows?.length ?? 'FAILED',
+        teachers: teacherRows?.length ?? 'FAILED',
+        currentTerm: activeTerm?.name ?? 'NONE',
+      });
+
       // Track which queries failed or timed out
       const errors: string[] = [];
       if (subjectRows === undefined) errors.push('subjects');
@@ -95,42 +113,67 @@ export function useAcademicWorkspaceData(onError?: (error: unknown) => void) {
       if (mappingRows === undefined) errors.push('class assignments');
       if (teacherRows === undefined) errors.push('teachers');
 
+      // ── CRITICAL: Always set loading=false regardless of mountedRef ──
+      // The mountedRef guard is only for data updates, NOT for loading state.
+      // If we skip setLoading(false), the skeleton stays forever.
+      console.log('[AcademicWorkspace] Setting loading=false (mounted:', mountedRef.current, ')');
+      setLoading(false);
+
       if (mountedRef.current) {
         // Apply whatever data we successfully fetched
-        if (subjectRows !== undefined) setSubjects(subjectRows);
-        if (yearRows !== undefined) setYears(yearRows);
-        if (termRows !== undefined) setTerms(termRows);
-        if (mappingRows !== undefined) setMappings(mappingRows as MappingRow[]);
-        if (teacherRows !== undefined) setTeachers(teacherRows);
-        if (activeTerm) setCurrentTerm(activeTerm);
+        if (subjectRows !== undefined) {
+          console.log(`[AcademicWorkspace] Setting ${subjectRows.length} subjects`);
+          setSubjects(subjectRows);
+        }
+        if (yearRows !== undefined) {
+          console.log(`[AcademicWorkspace] Setting ${yearRows.length} years`);
+          setYears(yearRows);
+        }
+        if (termRows !== undefined) {
+          console.log(`[AcademicWorkspace] Setting ${termRows.length} terms`);
+          setTerms(termRows);
+        }
+        if (mappingRows !== undefined) {
+          console.log(`[AcademicWorkspace] Setting ${mappingRows.length} mappings`);
+          setMappings(mappingRows as MappingRow[]);
+        }
+        if (teacherRows !== undefined) {
+          console.log(`[AcademicWorkspace] Setting ${teacherRows.length} teachers`);
+          setTeachers(teacherRows);
+        }
+        if (activeTerm) {
+          console.log(`[AcademicWorkspace] Setting currentTerm: ${activeTerm.name}`);
+          setCurrentTerm(activeTerm);
+        }
 
         setPartialErrors(errors);
 
         // Only call onError if ALL core queries failed (nothing to show)
         const coreOk = subjectRows !== undefined || mappingRows !== undefined;
         if (!coreOk) {
+          console.error('[AcademicWorkspace] ALL core queries failed!');
           onError?.(new Error('Failed to load academic workspace data. Check your connection.'));
         } else if (errors.length > 0) {
           console.warn(`[AcademicWorkspace] Loaded with partial data. Missing: ${errors.join(', ')}`);
         }
-
-        setLoading(false);
+      } else {
+        console.warn('[AcademicWorkspace] Component unmounted — skipping data state updates (but loading was set to false)');
       }
     } catch (error) {
-      // This should only catch unexpected errors now (individual queries have their own try/catch)
       console.error('[AcademicWorkspace] Unexpected error during refresh:', error);
+      // ── CRITICAL: Always set loading=false even on unexpected errors ──
+      setLoading(false);
       if (mountedRef.current) {
         onError?.(error);
-        setLoading(false);
       }
     } finally {
-      if (mountedRef.current) {
-        setRefreshing(false);
-      }
+      console.log('[AcademicWorkspace] refresh() finally block — setting refreshing=false');
+      setRefreshing(false);
     }
   }, [onError]);
 
   useEffect(() => {
+    console.log('[AcademicWorkspace] Effect running — calling refresh()');
     refresh();
   }, [refresh]);
 

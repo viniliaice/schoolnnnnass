@@ -111,11 +111,14 @@ export function AcademicWorkspace() {
   const { addToast } = useToast();
   const [loadError, setLoadError] = useState<unknown>(null);
 
+  // ── Stabilize handleLoadError — don't depend on addToast identity ──
+  const addToastRef = useRef(addToast);
+  addToastRef.current = addToast;
   const handleLoadError = useCallback((error: unknown) => {
-    console.error('Academic workspace refresh failed:', error);
+    console.error('[AcademicWorkspace] Load error:', error);
     setLoadError(error);
-    addToast({ type: 'error', title: 'Failed to load academic workspace' });
-  }, [addToast]);
+    addToastRef.current({ type: 'error', title: 'Failed to load academic workspace' });
+  }, []);
 
   const {
     loading,
@@ -130,6 +133,16 @@ export function AcademicWorkspace() {
     currentTerm,
     partialErrors,
   } = useAcademicWorkspaceData(handleLoadError);
+
+  // ── FAILSAFE: Auto-dismiss skeleton after 30s even if hook has issues ──
+  const [forceShow, setForceShow] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      console.warn('[AcademicWorkspace] FAILSAFE: Forcing content visible after 30s');
+      setForceShow(true);
+    }, 30_000);
+    return () => clearTimeout(timer);
+  }, []);
   const [selectedClass, setSelectedClass] = useState(CLASSES[0] || '');
   const [query, setQuery] = useState('');
   const [view, setView] = useState<WorkspaceView>('cards');
@@ -1104,7 +1117,7 @@ Ms. Nasra,nasra@school.edu,TempPass123!,Grade 9-A;Grade 10-A,English;Somali,20`
     return () => document.removeEventListener('mousedown', handler);
   }, [showClassFilter]);
 
-  if (loading || (refreshing && !subjects.length)) {
+  if ((loading || (refreshing && !subjects.length)) && !forceShow) {
     return (
       <div className="space-y-5">
         <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
