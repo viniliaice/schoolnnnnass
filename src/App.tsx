@@ -11,7 +11,6 @@ import { queryClient } from './lib/queryClient';
 // Admin Pages
 import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { ManageUsers } from './pages/admin/ManageUsers';
-import { ManageClassSubjects } from './pages/admin/ManageClassSubjects';
 import { ManageStudents } from './pages/admin/ManageStudents';
 import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
@@ -81,7 +80,6 @@ function AppContent() {
           switch (currentPath) {
             case '/dashboard': return <AdminDashboard navigate={navigate} />;
             case '/admin/users': return <ManageUsers />;
-            case '/admin/class-subjects': return <ManageClassSubjects />;
             case '/admin/students': return <ManageStudents />;
             case '/admin/academic': return <ManageAcademic />;
             case '/admin/bulk': return <BulkUpload />;
@@ -92,6 +90,7 @@ function AppContent() {
             case '/admin/announcements': return <ClassAnnouncements />;
             case '/admin/promotion': return <ClassPromotion />;
             case '/admin/unit-plans': return <UnitPlans />;
+            case '/admin/lesson-plans': return <LessonPlanReview />;
             case '/admin/attendance': return <RecordAttendance />;
             case '/admin/homework': return <AssignHomework />;
             case '/admin/quizzes': return <CreateQuiz />;
