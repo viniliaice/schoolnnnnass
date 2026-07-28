@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Listbox } from '@headlessui/react';
 import { getStudentsPaginated, getStudentsByClasses, createStudent, updateStudent, deleteStudent, getStudentById } from '../../lib/db/students';
-import { getUsersByRole, getUserById } from '../../lib/db/profiles';
+import { getUsersByRole, getUsersByIds } from '../../lib/db/profiles';
 import { getExamsByStudent } from '../../lib/db/exams';
 import { getCurrentTerm } from '../../lib/db/academic';
 import { getReportCommentsForStudentTerm as getReportCommentsForStudentTermDirect } from '../../lib/db/reports';
@@ -92,7 +92,8 @@ export function ManageStudents() {
         const parentIdsFromStudents = Array.from(new Set((studentsData || []).map((s: Student) => s.parentId).filter((x): x is string => !!x)));
         const missingParentIds = parentIdsFromStudents.filter((id: string) => !parentsData.some(p => p.id === id));
         if (missingParentIds.length > 0) {
-          const fetched = await Promise.all(missingParentIds.map(id => getUserById(id)));
+          // Batch-fetch all missing parents in a SINGLE query instead of N individual requests
+          const fetched = await getUsersByIds(missingParentIds);
           for (const u of fetched) {
             if (u) parentsData.push(u);
           }
@@ -110,7 +111,8 @@ export function ManageStudents() {
       const parentIdsFromStudents = Array.from(new Set((studentsData.students || []).map((s: Student) => s.parentId).filter((x): x is string => !!x)));
       const missingParentIds = parentIdsFromStudents.filter((id: string) => !parentsData.some(p => p.id === id));
       if (missingParentIds.length > 0) {
-        const fetched = await Promise.all(missingParentIds.map(id => getUserById(id)));
+        // Batch-fetch all missing parents in a SINGLE query instead of N individual requests
+        const fetched = await getUsersByIds(missingParentIds);
         for (const u of fetched) {
           if (u) parentsData.push(u);
         }
