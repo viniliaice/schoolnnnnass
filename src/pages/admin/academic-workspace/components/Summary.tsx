@@ -1,18 +1,18 @@
-import type { ComponentType } from 'react';
+import { memo, type ComponentType } from 'react';
 import { cn } from '../../../../utils/cn';
 
 type IconComponent = ComponentType<{ className?: string }>;
 
-export function InfoPill({ label, value }: { label: string; value: string }) {
+export const InfoPill = memo(function InfoPill({ label, value }: { label: string; value: string }) {
   return (
     <div className="rounded-2xl bg-slate-50 px-3 py-2">
       <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-slate-400">{label}</p>
       <p className="text-sm font-semibold text-slate-800">{value}</p>
     </div>
   );
-}
+});
 
-export function SummaryCard({
+export const SummaryCard = memo(function SummaryCard({
   icon: Icon,
   label,
   value,
@@ -38,4 +38,4 @@ export function SummaryCard({
       <p className="text-sm text-slate-500">{label}</p>
     </div>
   );
-}
+});

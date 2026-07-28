@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   BarChart3,
@@ -275,7 +275,7 @@ export function AcademicWorkspace() {
     if (!bulkTeacherId && teachers[0]?.id) setBulkTeacherId(teachers[0].id);
     if (!replaceFromTeacherId && teachers[0]?.id) setReplaceFromTeacherId(teachers[0].id);
     if (!replaceToTeacherId && (teachers[1]?.id || teachers[0]?.id)) setReplaceToTeacherId(teachers[1]?.id || teachers[0].id);
-  }, [addSubjectId, bulkSubjectId, bulkTeacherId, replaceFromTeacherId, replaceToTeacherId, subjects, teachers]);
+  }, [bulkSubjectId, bulkTeacherId, replaceFromTeacherId, replaceToTeacherId, subjects, teachers]);
 
   const openSubject = (subject?: Subject) => {
     const meta = subject ? subjectMeta[subject.id] : undefined;
@@ -414,7 +414,7 @@ export function AcademicWorkspace() {
     }
   };
 
-  const updateMappingTeacher = async (row: any, teacherId: string) => {
+  const updateMappingTeacher = useCallback(async (row: any, teacherId: string) => {
     try {
       await updateClassSubject(row.id, { teacherId: teacherId || undefined } as any);
       setMappings(prev => prev.map(item => item.id === row.id ? { ...item, teacherId: teacherId || undefined, users: teacherId ? { name: teachersById.get(teacherId)?.name || '' } : undefined } : item));
@@ -424,7 +424,7 @@ export function AcademicWorkspace() {
       console.error(error);
       addToast({ type: 'error', title: 'Failed to update teacher' });
     }
-  };
+  }, [teachersById, addToast]);
 
   const removeMapping = async (row: any) => {
     if (!confirm(`Remove ${getSubjectName(row, subjectsById)} from ${row.className}?`)) return;
@@ -561,7 +561,7 @@ export function AcademicWorkspace() {
     }
   };
 
-  const createMatrixMapping = async (className: string, subjectId: string) => {
+  const createMatrixMapping = useCallback(async (className: string, subjectId: string) => {
     try {
       const created = await createClassSubject({ className, subjectId, teacherId: undefined } as any);
       setMappings(prev => [...prev, created as any]);
@@ -573,7 +573,7 @@ export function AcademicWorkspace() {
       console.error(error);
       addToast({ type: 'error', title: 'Failed to add subject to class' });
     }
-  };
+  }, [refresh, addToast]);
 
   // ── Teacher Upload / Import handlers ──────────────────────────────
   const importTeachersFromCsv = async () => {
@@ -833,7 +833,7 @@ export function AcademicWorkspace() {
           )}
           {slideOver === 'analytics' && (
             <div className="space-y-4">
-              <WorkloadAnalytics subjects={subjects} mappings={mappings} teachers={teachers} />
+              <WorkloadAnalytics subjects={subjects} mappings={mappings} teachers={teachers} workloadByTeacher={workloadByTeacher} />
             </div>
           )}
 
@@ -1412,15 +1412,15 @@ Ms. Nasra,nasra@school.edu,TempPass123!,Grade 9-A;Grade 10-A,English;Somali,20`
   );
 }
 
-function SideSection({ icon: Icon, title, onAdd, children }: { icon: typeof BookOpen; title: string; onAdd: () => void; children: ReactNode }) {
+const SideSection = memo(function SideSection({ icon: Icon, title, onAdd, children }: { icon: typeof BookOpen; title: string; onAdd: () => void; children: ReactNode }) {
   return <section><div className="mb-2 flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-bold text-slate-900"><Icon className="h-4 w-4 text-indigo-500" />{title}</h3><button onClick={onAdd} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-indigo-600"><Plus size={16} /></button></div><div className="max-h-56 space-y-1 overflow-auto pr-1">{children}</div></section>;
-}
+});
 
-function StructureRow({ active, label, sub, onEdit, onDelete }: { active?: boolean; label: string; sub?: string; onEdit: () => void; onDelete: () => void }) {
+const StructureRow = memo(function StructureRow({ active, label, sub, onEdit, onDelete }: { active?: boolean; label: string; sub?: string; onEdit: () => void; onDelete: () => void }) {
   return <div className={cn('group rounded-2xl px-2 py-2', active ? 'bg-indigo-50' : 'hover:bg-slate-50')}><div className="flex items-center justify-between gap-2"><button onClick={onEdit} className="min-w-0 text-left"><p className={cn('truncate text-sm font-semibold', active ? 'text-indigo-700' : 'text-slate-700')}>{label}</p>{sub && <p className="truncate text-xs text-slate-400">{sub}</p>}</button><button onClick={onDelete} className="opacity-0 text-slate-400 hover:text-red-600 group-hover:opacity-100"><Trash2 size={14} /></button></div></div>;
-}
+});
 
-function ClassMultiSelect({ value, onChange, classes }: { value: string[]; onChange: (value: string[]) => void; classes: string[] }) {
+const ClassMultiSelect = memo(function ClassMultiSelect({ value, onChange, classes }: { value: string[]; onChange: (value: string[]) => void; classes: string[] }) {
   return (
     <div className="mt-3 rounded-2xl border border-slate-200 p-2">
       <div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold text-slate-500">Target classes</span><button onClick={() => onChange(classes)} className="text-xs font-semibold text-indigo-600">Select all</button></div>
@@ -1434,9 +1434,9 @@ function ClassMultiSelect({ value, onChange, classes }: { value: string[]; onCha
       </div>
     </div>
   );
-}
+});
 
-function MatrixView({ classes, subjects, mappingLookup, teachers, teachersById, onTeacherChange, onCreateMapping, onFocusClass }: {
+const MatrixView = memo(function MatrixView({ classes, subjects, mappingLookup, teachers, teachersById, onTeacherChange, onCreateMapping, onFocusClass }: {
   classes: string[];
   subjects: Subject[];
   mappingLookup: Map<string, any>;
@@ -1481,4 +1481,4 @@ function MatrixView({ classes, subjects, mappingLookup, teachers, teachersById, 
       </table>
     </div>
   );
-}
+});

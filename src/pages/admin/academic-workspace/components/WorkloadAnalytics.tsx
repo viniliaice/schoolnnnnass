@@ -1,22 +1,23 @@
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import type { ClassSubject, Subject, User } from '../../../../types';
 import { CLASSES } from '../../../../types';
-import { calculateTeacherWorkload, DEFAULT_WEEKLY_LESSONS, TEACHER_WEEKLY_LIMIT } from '../utils/workload';
+import { TEACHER_WEEKLY_LIMIT } from '../utils/workload';
 import { cn } from '../../../../utils/cn';
 
 type MappingRow = ClassSubject & { subjects?: { name: string }; users?: { name: string } };
 
-export function WorkloadAnalytics({
+export const WorkloadAnalytics = memo(function WorkloadAnalytics({
   subjects,
   mappings,
   teachers,
+  workloadByTeacher,
 }: {
   subjects: Subject[];
   mappings: MappingRow[];
   teachers: User[];
+  workloadByTeacher: Map<string, number>;
 }) {
   const teachersById = useMemo(() => new Map(teachers.map(t => [t.id, t])), [teachers]);
-  const subjectsById = useMemo(() => new Map(subjects.map(s => [s.id, s])), [subjects]);
 
   // O(1) lookup map — eliminates O(S×C×M) .find() scans in heatmap
   const mappingLookup = useMemo(() => {
@@ -27,25 +28,41 @@ export function WorkloadAnalytics({
     return map;
   }, [mappings]);
 
-  const workloadByTeacher = useMemo(
-    () => calculateTeacherWorkload(mappings, Object.fromEntries(subjects.map(s => [s.id, { weeklyLessons: s.weeklyLessons }]))),
-    [mappings, subjects],
-  );
+  // O(M) single-pass: group mappings by className
+  const mappingsByClass = useMemo(() => {
+    const map = new Map<string, MappingRow[]>();
+    for (const m of mappings) {
+      let arr = map.get(m.className);
+      if (!arr) { arr = []; map.set(m.className, arr); }
+      arr.push(m);
+    }
+    return map;
+  }, [mappings]);
+
+  // O(C) using pre-grouped data instead of O(C×M) CLASSES.map(mappings.filter)
+  const classCoverage = useMemo(() => {
+    return CLASSES.map(className => {
+      const classMappings = mappingsByClass.get(className);
+      if (!classMappings || classMappings.length === 0) {
+        return { className, assigned: 0, total: subjects.length, withTeacher: 0, totalMappings: 0 };
+      }
+      const assigned = new Set(classMappings.map(r => r.subjectId)).size;
+      const withTeacher = classMappings.filter(r => r.teacherId).length;
+      return { className, assigned, total: subjects.length, withTeacher, totalMappings: classMappings.length };
+    });
+  }, [mappingsByClass, subjects.length]);
+
+  // O(M) single-pass: build set of configured class names (for heatmap header)
+  const activeClasses = useMemo(() => {
+    const configuredSet = new Set<string>();
+    for (const m of mappings) configuredSet.add(m.className);
+    return CLASSES.filter(cn => configuredSet.has(cn));
+  }, [mappings]);
 
   const sortedTeachers = useMemo(
     () => Array.from(workloadByTeacher.entries()).sort((a, b) => b[1] - a[1]),
     [workloadByTeacher],
   );
-
-  const classCoverage = useMemo(() => {
-    return CLASSES.map(className => {
-      const classMappings = mappings.filter(r => r.className === className);
-      const totalSubjects = subjects.length;
-      const assigned = new Set(classMappings.map(r => r.subjectId)).size;
-      const withTeacher = classMappings.filter(r => r.teacherId).length;
-      return { className, assigned, total: totalSubjects, withTeacher, totalMappings: classMappings.length };
-    });
-  }, [mappings, subjects]);
 
   const maxWorkload = Math.max(...workloadByTeacher.values(), TEACHER_WEEKLY_LIMIT);
 
@@ -122,39 +139,30 @@ export function WorkloadAnalytics({
             <thead className="bg-slate-50">
               <tr>
                 <th className="sticky left-0 z-10 bg-slate-50 px-2 py-1 text-left text-[11px] font-semibold text-slate-600">Subject</th>
-                {CLASSES.filter(cn => mappings.some(r => r.className === cn)).map(cn => (
+                {activeClasses.map(cn => (
                   <th key={cn} className="px-2 py-1 text-center text-[11px] font-semibold text-slate-600">{cn}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {(() => {
-                // Pre-compute configured classes once for the heatmap
-                const activeClasses = CLASSES.filter(c => {
-                  for (const m of mappings) {
-                    if (m.className === c) return true;
-                  }
-                  return false;
-                });
-                return subjects.map(subject => (
-                  <tr key={subject.id} className="border-t border-slate-100">
-                    <td className="sticky left-0 z-10 bg-white px-2 py-1 text-[11px] font-medium text-slate-900">{subject.shortName || subject.name}</td>
-                    {activeClasses.map(c => {
-                      const row = mappingLookup.get(`${c}::${subject.id}`);
-                      const hasTeacher = row?.teacherId;
-                      return (
-                        <td key={c} className={cn('px-2 py-1 text-center text-[11px]', row ? (hasTeacher ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700') : 'bg-slate-50 text-slate-300')}>
-                          {row ? (hasTeacher ? '✓' : '○') : '—'}
-                        </td>
-                      );
-                    })}
-                  </tr>
-                ));
-              })()}
+              {subjects.map(subject => (
+                <tr key={subject.id} className="border-t border-slate-100">
+                  <td className="sticky left-0 z-10 bg-white px-2 py-1 text-[11px] font-medium text-slate-900">{subject.shortName || subject.name}</td>
+                  {activeClasses.map(c => {
+                    const row = mappingLookup.get(`${c}::${subject.id}`);
+                    const hasTeacher = row?.teacherId;
+                    return (
+                      <td key={c} className={cn('px-2 py-1 text-center text-[11px]', row ? (hasTeacher ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700') : 'bg-slate-50 text-slate-300')}>
+                        {row ? (hasTeacher ? '✓' : '○') : '—'}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>
       </section>
     </div>
   );
-}
+});
