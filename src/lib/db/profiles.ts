@@ -120,3 +120,17 @@ export async function deleteUser(id: string): Promise<boolean> {
 
   return true;
 }
+
+/**
+ * Lightweight function to fetch all teacher profiles.
+ * Uses a simple eq filter (not ilike), no count, no pagination.
+ * Much lighter on the server than getUsersByRole.
+ */
+export async function getAllTeachers(): Promise<User[]> {
+  const { data, error } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('role', 'teacher');
+  if (error) throw error;
+  return (data || []) as User[];
+}

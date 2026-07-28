@@ -3,7 +3,7 @@ import type { AcademicYear, ClassSubject, Subject, Term, User } from '../../../.
 import { getAcademicYears, getCurrentTerm, getTerms } from '../../../../lib/db/academic';
 import { getClassSubjects } from '../../../../lib/db/classes';
 import { getSubjects } from '../../../../lib/db/subjects';
-import { getUsersByRole } from '../../../../lib/db/profiles';
+import { getAllTeachers } from '../../../../lib/db/profiles';
 
 type MappingRow = ClassSubject & { subjects?: { name: string }; users?: { name: string } };
 
@@ -20,12 +20,12 @@ export function useAcademicWorkspaceData(onError?: (error: unknown) => void) {
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [subjectRows, yearRows, termRows, mappingRows, teacherRows, activeTerm] = await Promise.all([
+      // Fetch core data in parallel — teacher list fetched separately with graceful fallback
+      const [subjectRows, yearRows, termRows, mappingRows, activeTerm] = await Promise.all([
         getSubjects(),
         getAcademicYears(),
         getTerms(),
         getClassSubjects(),
-        getUsersByRole('teacher'),
         getCurrentTerm().catch(() => null),
       ]);
 
@@ -33,8 +33,17 @@ export function useAcademicWorkspaceData(onError?: (error: unknown) => void) {
       setYears(yearRows);
       setTerms(termRows);
       setMappings(mappingRows as MappingRow[]);
-      setTeachers(teacherRows || []);
       setCurrentTerm(activeTerm);
+
+      // Fetch teachers separately — if it fails, the workspace still loads with empty teachers
+      try {
+        const teacherRows = await getAllTeachers();
+        setTeachers(teacherRows);
+      } catch (teacherError) {
+        console.warn('Failed to fetch teachers, workspace loaded without teacher list:', teacherError);
+        setTeachers([]);
+      }
+
       setLoading(false);
     } catch (error) {
       onError?.(error);
