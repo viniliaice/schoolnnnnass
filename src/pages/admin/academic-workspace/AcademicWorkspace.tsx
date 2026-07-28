@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   AlertTriangle,
   BarChart3,
@@ -7,6 +7,8 @@ import {
   CheckCircle2,
   CheckSquare,
   Copy,
+  Download,
+  FileDown,
   FileText,
   Grid3X3,
   Layers3,
@@ -17,6 +19,7 @@ import {
   Search,
   Settings2,
   Trash2,
+  Upload,
   UserCheck,
   Users,
   X,
@@ -38,6 +41,7 @@ import {
 } from '../../../lib/db/classes';
 import { createSubject, deleteSubject, updateSubject } from '../../../lib/db/subjects';
 import { createAuditLog } from '../../../lib/db/audit';
+import { bulkCreateTeachersWithAssignments } from '../../../lib/db/bulk';
 import { cn } from '../../../utils/cn';
 import { calculateTeacherWorkload, DEFAULT_WEEKLY_LESSONS, TEACHER_WEEKLY_LIMIT, type SubjectMeta } from './utils/workload';
 import { buildAcademicWarnings } from './utils/warnings';
@@ -48,7 +52,7 @@ import { CurriculumPdfDocument } from './components/CurriculumPdf';
 import { WorkloadAnalytics } from './components/WorkloadAnalytics';
 
 type WorkspaceView = 'cards' | 'matrix';
-type SlideOverMode = 'subject' | 'year' | 'term' | 'bulk' | 'analytics' | null;
+type SlideOverMode = 'subject' | 'year' | 'term' | 'bulk' | 'analytics' | 'teachers' | null;
 const SUBJECT_COLORS = ['#4f46e5', '#0891b2', '#059669', '#d97706', '#dc2626', '#7c3aed', '#0f766e', '#be123c'];
 
 function getSubjectName(row: any, subjectsById: Map<string, Subject>) {
@@ -67,15 +71,54 @@ function uniq<T>(items: T[]) {
   return Array.from(new Set(items));
 }
 
+/** CSV example for teacher upload */
+const TEACHER_UPLOAD_CSV = `Name,Email,Password,Classes (semicolon-separated),Subjects (semicolon-separated names),Weekly Periods
+Mr. Abdirahman Ali,abdirahman@school.edu,TempPass123!,Grade 7-A;Grade 7-B,Mathematics;Science,25
+Ms. Nasra Ibrahim,nasra@school.edu,TempPass123!,Grade 9-A;Grade 10-A,English;Somali,20
+Mr. Yusuf Hassan,yusuf@school.edu,TempPass123!,Grade 8-A;Grade 8-B,Islamic Studies;Arabic,22`;
+
+/** Parse teacher CSV text into entries */
+interface ParsedTeacherEntry {
+  name: string;
+  email: string;
+  password: string;
+  assignedClasses: string[];
+  subjectNames: string[];
+  weeklyPeriods: number;
+}
+
+function parseTeacherCsv(text: string): ParsedTeacherEntry[] {
+  const lines = text.trim().split('\n').filter(l => l.trim());
+  const entries: ParsedTeacherEntry[] = [];
+  for (const line of lines) {
+    // Skip header row
+    if (line.toLowerCase().includes('email') && line.toLowerCase().includes('name')) continue;
+    const parts = line.split(',').map(s => s.trim());
+    if (parts.length < 2 || !parts[0] || !parts[1]) continue;
+    entries.push({
+      name: parts[0] || '',
+      email: parts[1] || '',
+      password: parts[2] || 'TempPass123!',
+      assignedClasses: (parts[3] || '').split(';').map(s => s.trim()).filter(Boolean),
+      subjectNames: (parts[4] || '').split(';').map(s => s.trim()).filter(Boolean),
+      weeklyPeriods: parseInt(parts[5] || '0', 10) || 0,
+    });
+  }
+  return entries;
+}
+
 export function AcademicWorkspace() {
   const { addToast } = useToast();
   const [loadError, setLoadError] = useState<unknown>(null);
 
+  // ── Stabilize handleLoadError — don't depend on addToast identity ──
+  const addToastRef = useRef(addToast);
+  addToastRef.current = addToast;
   const handleLoadError = useCallback((error: unknown) => {
-    console.error('Academic workspace refresh failed:', error);
+    console.error('[AcademicWorkspace] Load error:', error);
     setLoadError(error);
-    addToast({ type: 'error', title: 'Failed to load academic workspace' });
-  }, [addToast]);
+    addToastRef.current({ type: 'error', title: 'Failed to load academic workspace' });
+  }, []);
 
   const {
     loading,
@@ -88,7 +131,18 @@ export function AcademicWorkspace() {
     setMappings,
     teachers,
     currentTerm,
+    partialErrors,
   } = useAcademicWorkspaceData(handleLoadError);
+
+  // ── FAILSAFE: Auto-dismiss skeleton after 30s even if hook has issues ──
+  const [forceShow, setForceShow] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      console.warn('[AcademicWorkspace] FAILSAFE: Forcing content visible after 30s');
+      setForceShow(true);
+    }, 30_000);
+    return () => clearTimeout(timer);
+  }, []);
   const [selectedClass, setSelectedClass] = useState(CLASSES[0] || '');
   const [query, setQuery] = useState('');
   const [view, setView] = useState<WorkspaceView>('cards');
@@ -121,6 +175,30 @@ export function AcademicWorkspace() {
   const classFilterRef = useRef<HTMLButtonElement>(null);
   const classFilterDropdownRef = useRef<HTMLDivElement>(null);
 
+  // ── Teacher upload state ──────────────────────────────────────────
+  const [teacherCsv, setTeacherCsv] = useState('');
+  const [teacherCsvMode, setTeacherCsvMode] = useState(false);
+  const [uploadingTeachers, setUploadingTeachers] = useState(false);
+  const [teacherUploadResult, setTeacherUploadResult] = useState<{
+    created: number;
+    assignments: number;
+    skipped: string[];
+    failedAssignments: string[];
+  } | null>(null);
+  // Inline add-teacher form
+  const [showInlineTeacherForm, setShowInlineTeacherForm] = useState(false);
+  const [inlineTeacherForm, setInlineTeacherForm] = useState({
+    name: '',
+    email: '',
+    password: 'TempPass123!',
+    classes: [] as string[],
+    subjects: [] as string[],
+    weeklyPeriods: 25,
+  });
+
+  // ── P0 #1: Lazy-load PDF export ──
+  const [showPdfExport, setShowPdfExport] = useState(false);
+
   const subjectsById = useMemo(() => new Map(subjects.map(subject => [subject.id, subject])), [subjects]);
   const teachersById = useMemo(() => new Map(teachers.map(teacher => [teacher.id, teacher])), [teachers]);
 
@@ -152,14 +230,35 @@ export function AcademicWorkspace() {
     [mappings, selectedClass],
   );
 
+  // ── P0 #3: Pre-computed O(1) lookup map for matrix/heatmap ──
+  // Key = "className::subjectId" → mapping row. Eliminates O(S×C×M) .find() scans.
+  const mappingLookup = useMemo(() => {
+    const map = new Map<string, (typeof mappings)[number]>();
+    for (const m of mappings) {
+      map.set(`${m.className}::${m.subjectId}`, m);
+    }
+    return map;
+  }, [mappings]);
+
+  // ── P0 #3b: Pre-computed set of configured class names ──
+  const configuredClassSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of mappings) set.add(m.className);
+    return set;
+  }, [mappings]);
+
   const workloadByTeacher = useMemo(
     () => calculateTeacherWorkload(mappings, subjectMeta),
     [mappings, subjectMeta],
   );
 
+  // ── P0 #5: summary now uses O(M) single-pass instead of O(C×M) ──
   const summary = useMemo(() => {
-    const configuredClasses = CLASSES.filter(className => mappings.some(row => row.className === className)).length;
-    const missingTeachers = mappings.filter(row => !row.teacherId).length;
+    const configuredClasses = configuredClassSet.size;
+    let missingTeachers = 0;
+    for (const row of mappings) {
+      if (!row.teacherId) missingTeachers++;
+    }
     const teacherAssigned = mappings.length - missingTeachers;
     const completion = mappings.length > 0 ? Math.round((teacherAssigned / mappings.length) * 100) : 0;
     return {
@@ -169,7 +268,7 @@ export function AcademicWorkspace() {
       missingTeachers,
       completion,
     };
-  }, [mappings, subjects]);
+  }, [mappings, subjects, configuredClassSet]);
 
   const warnings = useMemo(
     () => buildAcademicWarnings({
@@ -189,7 +288,7 @@ export function AcademicWorkspace() {
     if (!bulkTeacherId && teachers[0]?.id) setBulkTeacherId(teachers[0].id);
     if (!replaceFromTeacherId && teachers[0]?.id) setReplaceFromTeacherId(teachers[0].id);
     if (!replaceToTeacherId && (teachers[1]?.id || teachers[0]?.id)) setReplaceToTeacherId(teachers[1]?.id || teachers[0].id);
-  }, [addSubjectId, bulkSubjectId, bulkTeacherId, replaceFromTeacherId, replaceToTeacherId, subjects, teachers]);
+  }, [bulkSubjectId, bulkTeacherId, replaceFromTeacherId, replaceToTeacherId, subjects, teachers]);
 
   const openSubject = (subject?: Subject) => {
     const meta = subject ? subjectMeta[subject.id] : undefined;
@@ -328,7 +427,7 @@ export function AcademicWorkspace() {
     }
   };
 
-  const updateMappingTeacher = async (row: any, teacherId: string) => {
+  const updateMappingTeacher = useCallback(async (row: any, teacherId: string) => {
     try {
       await updateClassSubject(row.id, { teacherId: teacherId || undefined } as any);
       setMappings(prev => prev.map(item => item.id === row.id ? { ...item, teacherId: teacherId || undefined, users: teacherId ? { name: teachersById.get(teacherId)?.name || '' } : undefined } : item));
@@ -338,7 +437,7 @@ export function AcademicWorkspace() {
       console.error(error);
       addToast({ type: 'error', title: 'Failed to update teacher' });
     }
-  };
+  }, [teachersById, addToast]);
 
   const removeMapping = async (row: any) => {
     if (!confirm(`Remove ${getSubjectName(row, subjectsById)} from ${row.className}?`)) return;
@@ -475,7 +574,7 @@ export function AcademicWorkspace() {
     }
   };
 
-  const createMatrixMapping = async (className: string, subjectId: string) => {
+  const createMatrixMapping = useCallback(async (className: string, subjectId: string) => {
     try {
       const created = await createClassSubject({ className, subjectId, teacherId: undefined } as any);
       setMappings(prev => [...prev, created as any]);
@@ -487,6 +586,137 @@ export function AcademicWorkspace() {
       console.error(error);
       addToast({ type: 'error', title: 'Failed to add subject to class' });
     }
+  }, [refresh, addToast]);
+
+  // ── Teacher Upload / Import handlers ──────────────────────────────
+  const importTeachersFromCsv = async () => {
+    const parsed = parseTeacherCsv(teacherCsv);
+    if (parsed.length === 0) {
+      addToast({ type: 'error', title: 'No valid rows found in CSV' });
+      return;
+    }
+
+    // Resolve subject names → IDs
+    const subjectNameToId = new Map<string, string>();
+    for (const subject of subjects) {
+      subjectNameToId.set(subject.name.toLowerCase(), subject.id);
+      if (subject.shortName) subjectNameToId.set(subject.shortName.toLowerCase(), subject.id);
+    }
+
+    const entries = parsed.map(entry => {
+      const resolvedSubjectIds = entry.subjectNames
+        .map(name => subjectNameToId.get(name.toLowerCase()))
+        .filter((id): id is string => Boolean(id));
+
+      return {
+        name: entry.name,
+        email: entry.email,
+        password: entry.password,
+        assignedClasses: entry.assignedClasses,
+        assignedSubjects: resolvedSubjectIds,
+        weeklyPeriods: entry.weeklyPeriods,
+      };
+    }).filter(entry => entry.assignedSubjects.length > 0 && entry.assignedClasses.length > 0);
+
+    if (entries.length === 0) {
+      addToast({ type: 'error', title: 'No valid entries — check subject names match existing subjects' });
+      return;
+    }
+
+    setUploadingTeachers(true);
+    try {
+      const result = await bulkCreateTeachersWithAssignments(entries);
+      setTeacherUploadResult({
+        created: result.teachers.length,
+        assignments: result.assignments.length,
+        skipped: result.skippedTeachers,
+        failedAssignments: result.skippedAssignments,
+      });
+      createAuditLog('bulk.assign', {
+        action: 'teacher-bulk-upload',
+        created: result.teachers.length,
+        assignments: result.assignments.length,
+      });
+      addToast({
+        type: result.teachers.length > 0 ? 'success' : 'info',
+        title: `${result.teachers.length} teacher(s) created, ${result.assignments.length} assignment(s) made`,
+      });
+      setTeacherCsv('');
+      setTeacherCsvMode(false);
+      await refresh();
+    } catch (error) {
+      console.error(error);
+      addToast({ type: 'error', title: 'Teacher upload failed' });
+    } finally {
+      setUploadingTeachers(false);
+    }
+  };
+
+  const addSingleTeacher = async () => {
+    if (!inlineTeacherForm.name.trim() || !inlineTeacherForm.email.trim()) {
+      addToast({ type: 'error', title: 'Name and email required' });
+      return;
+    }
+    if (inlineTeacherForm.classes.length === 0 || inlineTeacherForm.subjects.length === 0) {
+      addToast({ type: 'error', title: 'Select at least one class and subject' });
+      return;
+    }
+
+    setUploadingTeachers(true);
+    try {
+      const result = await bulkCreateTeachersWithAssignments([{
+        name: inlineTeacherForm.name.trim(),
+        email: inlineTeacherForm.email.trim(),
+        password: inlineTeacherForm.password || 'TempPass123!',
+        assignedClasses: inlineTeacherForm.classes,
+        assignedSubjects: inlineTeacherForm.subjects,
+        weeklyPeriods: inlineTeacherForm.weeklyPeriods,
+      }]);
+
+      if (result.teachers.length > 0) {
+        addToast({
+          type: 'success',
+          title: `${inlineTeacherForm.name} added with ${result.assignments.length} assignment(s)`,
+        });
+        setTeacherUploadResult({
+          created: result.teachers.length,
+          assignments: result.assignments.length,
+          skipped: result.skippedTeachers,
+          failedAssignments: result.skippedAssignments,
+        });
+        setShowInlineTeacherForm(false);
+        setInlineTeacherForm({
+          name: '',
+          email: '',
+          password: 'TempPass123!',
+          classes: [],
+          subjects: [],
+          weeklyPeriods: 25,
+        });
+      } else if (result.skippedTeachers.length > 0) {
+        addToast({ type: 'info', title: `Teacher already exists: ${result.skippedTeachers[0]}` });
+      } else {
+        addToast({ type: 'error', title: 'Failed to add teacher' });
+      }
+      await refresh();
+    } catch (error) {
+      console.error(error);
+      addToast({ type: 'error', title: 'Failed to add teacher' });
+    } finally {
+      setUploadingTeachers(false);
+    }
+  };
+
+  const downloadTeacherTemplate = () => {
+    const blob = new Blob([TEACHER_UPLOAD_CSV], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'teachers_template.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
   };
 
   const workloadBadge = (teacherId?: string) => {
@@ -510,6 +740,7 @@ export function AcademicWorkspace() {
                 {slideOver === 'term' && (termForm.id ? 'Edit Term' : 'Create Term')}
                 {slideOver === 'bulk' && 'Bulk Operations'}
                 {slideOver === 'analytics' && 'Workload Analytics'}
+                {slideOver === 'teachers' && 'Upload & Manage Teachers'}
               </h2>
             </div>
             <button onClick={() => setSlideOver(null)} className="rounded-full bg-slate-100 p-2 text-slate-500 hover:bg-slate-200"><X size={18} /></button>
@@ -615,7 +846,247 @@ export function AcademicWorkspace() {
           )}
           {slideOver === 'analytics' && (
             <div className="space-y-4">
-              <WorkloadAnalytics subjects={subjects} mappings={mappings} teachers={teachers} />
+              <WorkloadAnalytics subjects={subjects} mappings={mappings} teachers={teachers} workloadByTeacher={workloadByTeacher} />
+            </div>
+          )}
+
+          {slideOver === 'teachers' && (
+            <div className="space-y-6">
+              {/* ── Result banner ── */}
+              {teacherUploadResult && (
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+                  <p className="text-sm font-semibold text-emerald-800">
+                    ✅ {teacherUploadResult.created} teacher(s) created · {teacherUploadResult.assignments} assignment(s) made
+                  </p>
+                  {teacherUploadResult.skipped.length > 0 && (
+                    <p className="mt-1 text-xs text-amber-700">Skipped: {teacherUploadResult.skipped.join(', ')}</p>
+                  )}
+                  {teacherUploadResult.failedAssignments.length > 0 && (
+                    <p className="mt-1 text-xs text-red-600">Failed assignments: {teacherUploadResult.failedAssignments.join(', ')}</p>
+                  )}
+                  <button onClick={() => setTeacherUploadResult(null)} className="mt-2 text-xs font-semibold text-emerald-700 hover:underline">Dismiss</button>
+                </div>
+              )}
+
+              {/* ── Action buttons ── */}
+              <div className="grid grid-cols-2 gap-3">
+                <button
+                  onClick={() => { setTeacherCsvMode(prev => !prev); setShowInlineTeacherForm(false); }}
+                  className={cn('flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition-all', teacherCsvMode ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100')}
+                >
+                  <Upload size={16} /> CSV Upload
+                </button>
+                <button
+                  onClick={() => { setShowInlineTeacherForm(prev => !prev); setTeacherCsvMode(false); }}
+                  className={cn('flex items-center justify-center gap-2 rounded-2xl px-4 py-3 text-sm font-semibold transition-all', showInlineTeacherForm ? 'bg-teal-600 text-white' : 'bg-teal-50 text-teal-700 hover:bg-teal-100')}
+                >
+                  <Plus size={16} /> Add Teacher
+                </button>
+              </div>
+
+              <button
+                onClick={downloadTeacherTemplate}
+                className="flex w-full items-center justify-center gap-2 rounded-2xl border border-dashed border-slate-300 px-4 py-3 text-sm font-semibold text-slate-600 hover:border-indigo-300 hover:text-indigo-600"
+              >
+                <FileDown size={16} /> Download CSV Template
+              </button>
+
+              {/* ── CSV upload area ── */}
+              {teacherCsvMode && (
+                <div className="space-y-3 rounded-2xl border border-slate-200 p-4">
+                  <p className="text-xs text-slate-500">
+                    <strong>Format:</strong> Name, Email, Password, Classes (semicolon), Subjects (semicolon names), Weekly Periods
+                  </p>
+                  <div className="rounded-xl bg-slate-50 p-3">
+                    <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-slate-400">Example</p>
+                    <pre className="whitespace-pre-wrap font-mono text-[11px] text-slate-600">{
+`Mr. Abdirahman,abdirahman@school.edu,TempPass123!,Grade 7-A;Grade 7-B,Mathematics;Science,25
+Ms. Nasra,nasra@school.edu,TempPass123!,Grade 9-A;Grade 10-A,English;Somali,20`
+                    }</pre>
+                  </div>
+                  <textarea
+                    value={teacherCsv}
+                    onChange={event => setTeacherCsv(event.target.value)}
+                    rows={8}
+                    placeholder="Paste your teacher CSV data here…"
+                    className="w-full resize-none rounded-xl border border-slate-200 px-3 py-2 font-mono text-xs focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200 focus:outline-none"
+                  />
+                  <button
+                    onClick={importTeachersFromCsv}
+                    disabled={uploadingTeachers || !teacherCsv.trim()}
+                    className="w-full rounded-xl bg-indigo-600 px-4 py-2.5 font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+                  >
+                    {uploadingTeachers ? 'Uploading…' : 'Upload Teachers & Assignments'}
+                  </button>
+                </div>
+              )}
+
+              {/* ── Inline single teacher form ── */}
+              {showInlineTeacherForm && (
+                <div className="space-y-3 rounded-2xl border border-slate-200 p-4">
+                  <label className="block text-sm font-medium text-slate-700">Name
+                    <input
+                      value={inlineTeacherForm.name}
+                      onChange={event => setInlineTeacherForm(prev => ({ ...prev, name: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2"
+                      placeholder="Mr. Abdirahman Ali"
+                    />
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">Email
+                    <input
+                      value={inlineTeacherForm.email}
+                      onChange={event => setInlineTeacherForm(prev => ({ ...prev, email: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2"
+                      placeholder="teacher@school.edu"
+                    />
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">Password
+                    <input
+                      value={inlineTeacherForm.password}
+                      onChange={event => setInlineTeacherForm(prev => ({ ...prev, password: event.target.value }))}
+                      className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2"
+                      placeholder="TempPass123!"
+                    />
+                  </label>
+                  <label className="block text-sm font-medium text-slate-700">Weekly Periods
+                    <input
+                      type="number"
+                      min={1}
+                      max={40}
+                      value={inlineTeacherForm.weeklyPeriods}
+                      onChange={event => setInlineTeacherForm(prev => ({ ...prev, weeklyPeriods: Number(event.target.value) }))}
+                      className="mt-1 w-full rounded-xl border border-slate-200 px-3 py-2"
+                    />
+                  </label>
+
+                  {/* Classes multi-select */}
+                  <div>
+                    <p className="mb-1 text-sm font-medium text-slate-700">Classes</p>
+                    <div className="max-h-32 overflow-auto rounded-xl border border-slate-200 p-2">
+                      {CLASSES.map(className => (
+                        <label key={className} className="flex items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-slate-50">
+                          <input
+                            type="checkbox"
+                            checked={inlineTeacherForm.classes.includes(className)}
+                            onChange={event => {
+                              const val = event.target.checked
+                                ? [...inlineTeacherForm.classes, className]
+                                : inlineTeacherForm.classes.filter(c => c !== className);
+                              setInlineTeacherForm(prev => ({ ...prev, classes: val }));
+                            }}
+                          />
+                          {className}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Subjects multi-select */}
+                  <div>
+                    <p className="mb-1 text-sm font-medium text-slate-700">Subjects</p>
+                    <div className="max-h-32 overflow-auto rounded-xl border border-slate-200 p-2">
+                      {subjects.map(subject => (
+                        <label key={subject.id} className="flex items-center gap-2 rounded-lg px-2 py-1 text-sm hover:bg-slate-50">
+                          <input
+                            type="checkbox"
+                            checked={inlineTeacherForm.subjects.includes(subject.id)}
+                            onChange={event => {
+                              const val = event.target.checked
+                                ? [...inlineTeacherForm.subjects, subject.id]
+                                : inlineTeacherForm.subjects.filter(id => id !== subject.id);
+                              setInlineTeacherForm(prev => ({ ...prev, subjects: val }));
+                            }}
+                          />
+                          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: subjectMeta[subject.id]?.color || '#94a3b8' }} />
+                          {subject.name}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <button
+                    onClick={addSingleTeacher}
+                    disabled={uploadingTeachers}
+                    className="w-full rounded-xl bg-teal-600 px-4 py-2.5 font-semibold text-white hover:bg-teal-700 disabled:opacity-50"
+                  >
+                    {uploadingTeachers ? 'Creating…' : 'Add Teacher & Assign'}
+                  </button>
+                </div>
+              )}
+
+              {/* ── Teacher Overview Table ── */}
+              <div>
+                <h3 className="mb-3 text-sm font-bold text-slate-900">All Teachers & Workload</h3>
+                {teachers.length === 0 ? (
+                  <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center text-sm text-slate-500">
+                    No teachers yet. Upload teachers above to get started.
+                  </div>
+                ) : (
+                  <div className="overflow-auto rounded-2xl border border-slate-200">
+                    <table className="w-full text-sm">
+                      <thead className="bg-slate-50">
+                        <tr>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600">Teacher</th>
+                          <th className="px-3 py-2 text-left font-semibold text-slate-600">Email</th>
+                          <th className="px-3 py-2 text-center font-semibold text-slate-600">Classes</th>
+                          <th className="px-3 py-2 text-center font-semibold text-slate-600">Subjects</th>
+                          <th className="px-3 py-2 text-center font-semibold text-slate-600">Workload</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {teachers.map(teacher => {
+                          const workload = workloadByTeacher.get(teacher.id) || 0;
+                          const assignedClasses = Array.from(new Set(
+                            mappings.filter(m => m.teacherId === teacher.id).map(m => m.className),
+                          ));
+                          const assignedSubjectIds = Array.from(new Set(
+                            mappings.filter(m => m.teacherId === teacher.id).map(m => m.subjectId),
+                          ));
+                          return (
+                            <tr key={teacher.id} className="border-t border-slate-100">
+                              <td className="px-3 py-2 font-medium text-slate-900">{teacher.name}</td>
+                              <td className="px-3 py-2 text-slate-500">{teacher.email}</td>
+                              <td className="px-3 py-2 text-center">
+                                <div className="flex flex-wrap justify-center gap-1">
+                                  {assignedClasses.slice(0, 3).map(cn => (
+                                    <span key={cn} className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-semibold text-indigo-700">{cn}</span>
+                                  ))}
+                                  {assignedClasses.length > 3 && (
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">+{assignedClasses.length - 3}</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <div className="flex flex-wrap justify-center gap-1">
+                                  {assignedSubjectIds.slice(0, 3).map(sid => {
+                                    const sub = subjectsById.get(sid);
+                                    return sub ? (
+                                      <span key={sid} className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ backgroundColor: (subjectMeta[sid]?.color || '#94a3b8') + '20', color: subjectMeta[sid]?.color || '#475569' }}>{sub.shortName || sub.name}</span>
+                                    ) : null;
+                                  })}
+                                  {assignedSubjectIds.length > 3 && (
+                                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-semibold text-slate-500">+{assignedSubjectIds.length - 3}</span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <span className={cn(
+                                  'rounded-full px-2 py-0.5 text-xs font-semibold',
+                                  workload > TEACHER_WEEKLY_LIMIT ? 'bg-red-100 text-red-700' :
+                                  workload >= 22 ? 'bg-amber-100 text-amber-700' :
+                                  'bg-emerald-100 text-emerald-700'
+                                )}>
+                                  {workload}/{TEACHER_WEEKLY_LIMIT}
+                                </span>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </div>
@@ -646,7 +1117,7 @@ export function AcademicWorkspace() {
     return () => document.removeEventListener('mousedown', handler);
   }, [showClassFilter]);
 
-  if (loading || (refreshing && !subjects.length)) {
+  if ((loading || (refreshing && !subjects.length)) && !forceShow) {
     return (
       <div className="space-y-5">
         <div className="rounded-3xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -713,6 +1184,7 @@ export function AcademicWorkspace() {
                   <button onClick={() => { openYear(); setShowMoreMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50">New Year</button>
                   <button onClick={() => { openTerm(); setShowMoreMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50">New Term</button>
                   <button onClick={() => { setSlideOver('analytics'); setShowMoreMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><BarChart3 className="mr-2 inline h-4 w-4" />Analytics</button>
+                  <button onClick={() => { setSlideOver('teachers'); setShowMoreMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-teal-700 hover:bg-teal-50"><Users className="mr-2 inline h-4 w-4" />Upload Teachers</button>
                   <button onClick={() => { refresh(); setShowMoreMenu(false); }} className="w-full rounded-xl px-3 py-2 text-left text-sm font-semibold text-slate-700 hover:bg-slate-50"><RefreshCw className={cn('mr-2 inline h-4 w-4', refreshing && 'animate-spin')} />Refresh</button>
                 </div>
               )}
@@ -721,6 +1193,7 @@ export function AcademicWorkspace() {
               <button onClick={() => openYear()} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">New Year</button>
               <button onClick={() => openTerm()} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700">New Term</button>
               <button onClick={() => setSlideOver('analytics')} className="rounded-2xl bg-slate-100 px-3 py-2 text-sm font-semibold text-slate-700"><BarChart3 className="mr-1 inline h-4 w-4" />Analytics</button>
+              <button onClick={() => setSlideOver('teachers')} className="rounded-2xl bg-teal-50 px-3 py-2 text-sm font-semibold text-teal-700 hover:bg-teal-100"><Users className="mr-1 inline h-4 w-4" />Teachers</button>
               <button onClick={refresh} className="rounded-2xl border border-slate-200 p-2 text-slate-500 hover:bg-slate-50"><RefreshCw className={cn('h-4 w-4', refreshing && 'animate-spin')} /></button>
             </div>
           </div>
@@ -733,6 +1206,16 @@ export function AcademicWorkspace() {
         <SummaryCard icon={UserCheck} label="Teachers Assigned" value={summary.teacherAssigned} />
         <SummaryCard icon={AlertTriangle} label="Missing Teachers" value={summary.missingTeachers} tone={summary.missingTeachers ? 'warn' : 'ok'} />
         <SummaryCard icon={CheckCircle2} label="Completion" value={`${summary.completion}%`} tone={summary.completion === 100 ? 'ok' : 'neutral'} />
+        <div className="rounded-3xl border border-teal-200 bg-teal-50 p-4 text-teal-700">
+          <button onClick={() => setSlideOver('teachers')} className="w-full text-left hover:opacity-80">
+            <Upload className="mb-2 h-5 w-5" />
+            <p className="text-sm font-semibold">Upload Teachers</p>
+            <p className="text-xs">CSV bulk + periods</p>
+          </button>
+          <div className="mt-3 border-t border-teal-200 pt-3">
+            <p className="text-xs text-teal-600">{teachers.length} teacher{teachers.length !== 1 ? 's' : ''} registered</p>
+          </div>
+        </div>
         <div className="rounded-3xl border border-indigo-200 bg-indigo-50 p-4 text-indigo-700">
           <button onClick={() => setSlideOver('bulk')} className="w-full text-left hover:opacity-80">
             <Settings2 className="mb-2 h-5 w-5" />
@@ -740,13 +1223,41 @@ export function AcademicWorkspace() {
             <p className="text-xs">Copy, assign, replace</p>
           </button>
           <div className="mt-3 border-t border-indigo-200 pt-3">
-            <PDFDownloadLink document={<CurriculumPdfDocument subjects={subjects} mappings={mappings} teachers={teachers} currentTerm={currentTerm} currentYear={currentYear} />} fileName="curriculum-plan.pdf" className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-indigo-700 shadow-sm hover:bg-indigo-50">
-              <FileText size={14} />
-              Export PDF
-            </PDFDownloadLink>
+            {!showPdfExport ? (
+              <button
+                onClick={() => setShowPdfExport(true)}
+                className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-indigo-700 shadow-sm hover:bg-indigo-50"
+              >
+                <FileText size={14} />
+                Export PDF
+              </button>
+            ) : (
+              <PDFDownloadLink document={<CurriculumPdfDocument subjects={subjects} mappings={mappings} teachers={teachers} currentTerm={currentTerm} currentYear={currentYear} />} fileName="curriculum-plan.pdf" className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-indigo-700 shadow-sm hover:bg-indigo-50">
+                <FileText size={14} />
+                Export PDF
+              </PDFDownloadLink>
+            )}
           </div>
         </div>
       </div>
+
+      {partialErrors.length > 0 && !loading && (
+        <div className="rounded-3xl border border-red-200 bg-red-50 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2 font-semibold text-red-800">
+              <AlertTriangle className="h-5 w-5 shrink-0" />
+              Some data failed to load
+            </div>
+            <button onClick={refresh} className="shrink-0 rounded-xl bg-red-100 px-3 py-1.5 text-xs font-semibold text-red-800 hover:bg-red-200">
+              <RefreshCw className={cn('mr-1 inline h-3 w-3', refreshing && 'animate-spin')} />
+              Retry
+            </button>
+          </div>
+          <p className="mt-1 text-sm text-red-700">
+            Could not fetch: <strong>{partialErrors.join(', ')}</strong>. Other data is displayed below.
+          </p>
+        </div>
+      )}
 
       {warnings.length > 0 && (
         <div className="rounded-3xl border border-amber-200 bg-amber-50 p-4">
@@ -904,7 +1415,7 @@ export function AcademicWorkspace() {
               })}
             </div>
           ) : (
-            <MatrixView classes={filteredClasses} subjects={subjects} mappings={mappings} teachers={teachers} teachersById={teachersById} onTeacherChange={updateMappingTeacher} onCreateMapping={createMatrixMapping} onFocusClass={setSelectedClass} />
+            <MatrixView classes={filteredClasses} subjects={subjects} mappingLookup={mappingLookup} teachers={teachers} teachersById={teachersById} onTeacherChange={updateMappingTeacher} onCreateMapping={createMatrixMapping} onFocusClass={setSelectedClass} />
           )}
         </main>
       </div>
@@ -914,15 +1425,15 @@ export function AcademicWorkspace() {
   );
 }
 
-function SideSection({ icon: Icon, title, onAdd, children }: { icon: typeof BookOpen; title: string; onAdd: () => void; children: ReactNode }) {
+const SideSection = memo(function SideSection({ icon: Icon, title, onAdd, children }: { icon: typeof BookOpen; title: string; onAdd: () => void; children: ReactNode }) {
   return <section><div className="mb-2 flex items-center justify-between"><h3 className="flex items-center gap-2 text-sm font-bold text-slate-900"><Icon className="h-4 w-4 text-indigo-500" />{title}</h3><button onClick={onAdd} className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-indigo-600"><Plus size={16} /></button></div><div className="max-h-56 space-y-1 overflow-auto pr-1">{children}</div></section>;
-}
+});
 
-function StructureRow({ active, label, sub, onEdit, onDelete }: { active?: boolean; label: string; sub?: string; onEdit: () => void; onDelete: () => void }) {
+const StructureRow = memo(function StructureRow({ active, label, sub, onEdit, onDelete }: { active?: boolean; label: string; sub?: string; onEdit: () => void; onDelete: () => void }) {
   return <div className={cn('group rounded-2xl px-2 py-2', active ? 'bg-indigo-50' : 'hover:bg-slate-50')}><div className="flex items-center justify-between gap-2"><button onClick={onEdit} className="min-w-0 text-left"><p className={cn('truncate text-sm font-semibold', active ? 'text-indigo-700' : 'text-slate-700')}>{label}</p>{sub && <p className="truncate text-xs text-slate-400">{sub}</p>}</button><button onClick={onDelete} className="opacity-0 text-slate-400 hover:text-red-600 group-hover:opacity-100"><Trash2 size={14} /></button></div></div>;
-}
+});
 
-function ClassMultiSelect({ value, onChange, classes }: { value: string[]; onChange: (value: string[]) => void; classes: string[] }) {
+const ClassMultiSelect = memo(function ClassMultiSelect({ value, onChange, classes }: { value: string[]; onChange: (value: string[]) => void; classes: string[] }) {
   return (
     <div className="mt-3 rounded-2xl border border-slate-200 p-2">
       <div className="mb-2 flex items-center justify-between"><span className="text-xs font-semibold text-slate-500">Target classes</span><button onClick={() => onChange(classes)} className="text-xs font-semibold text-indigo-600">Select all</button></div>
@@ -936,12 +1447,12 @@ function ClassMultiSelect({ value, onChange, classes }: { value: string[]; onCha
       </div>
     </div>
   );
-}
+});
 
-function MatrixView({ classes, subjects, mappings, teachers, teachersById, onTeacherChange, onCreateMapping, onFocusClass }: {
+const MatrixView = memo(function MatrixView({ classes, subjects, mappingLookup, teachers, teachersById, onTeacherChange, onCreateMapping, onFocusClass }: {
   classes: string[];
   subjects: Subject[];
-  mappings: any[];
+  mappingLookup: Map<string, any>;
   teachers: User[];
   teachersById: Map<string, User>;
   onTeacherChange: (row: any, teacherId: string) => void;
@@ -962,7 +1473,7 @@ function MatrixView({ classes, subjects, mappings, teachers, teachersById, onTea
             <tr key={subject.id} className="border-t border-slate-100">
               <td className="sticky left-0 z-10 bg-white px-4 py-3 font-semibold text-slate-900">{subject.name}</td>
               {classes.map(className => {
-                const row = mappings.find(item => item.className === className && item.subjectId === subject.id);
+                const row = mappingLookup.get(`${className}::${subject.id}`);
                 return (
                   <td key={`${className}-${subject.id}`} className="px-3 py-2">
                     {row ? (
@@ -983,4 +1494,4 @@ function MatrixView({ classes, subjects, mappings, teachers, teachersById, onTea
       </table>
     </div>
   );
-}
+});
