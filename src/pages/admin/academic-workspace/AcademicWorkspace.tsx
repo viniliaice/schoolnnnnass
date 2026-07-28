@@ -182,6 +182,9 @@ export function AcademicWorkspace() {
     weeklyPeriods: 25,
   });
 
+  // ── P0 #1: Lazy-load PDF export ──
+  const [showPdfExport, setShowPdfExport] = useState(false);
+
   const subjectsById = useMemo(() => new Map(subjects.map(subject => [subject.id, subject])), [subjects]);
   const teachersById = useMemo(() => new Map(teachers.map(teacher => [teacher.id, teacher])), [teachers]);
 
@@ -213,14 +216,35 @@ export function AcademicWorkspace() {
     [mappings, selectedClass],
   );
 
+  // ── P0 #3: Pre-computed O(1) lookup map for matrix/heatmap ──
+  // Key = "className::subjectId" → mapping row. Eliminates O(S×C×M) .find() scans.
+  const mappingLookup = useMemo(() => {
+    const map = new Map<string, (typeof mappings)[number]>();
+    for (const m of mappings) {
+      map.set(`${m.className}::${m.subjectId}`, m);
+    }
+    return map;
+  }, [mappings]);
+
+  // ── P0 #3b: Pre-computed set of configured class names ──
+  const configuredClassSet = useMemo(() => {
+    const set = new Set<string>();
+    for (const m of mappings) set.add(m.className);
+    return set;
+  }, [mappings]);
+
   const workloadByTeacher = useMemo(
     () => calculateTeacherWorkload(mappings, subjectMeta),
     [mappings, subjectMeta],
   );
 
+  // ── P0 #5: summary now uses O(M) single-pass instead of O(C×M) ──
   const summary = useMemo(() => {
-    const configuredClasses = CLASSES.filter(className => mappings.some(row => row.className === className)).length;
-    const missingTeachers = mappings.filter(row => !row.teacherId).length;
+    const configuredClasses = configuredClassSet.size;
+    let missingTeachers = 0;
+    for (const row of mappings) {
+      if (!row.teacherId) missingTeachers++;
+    }
     const teacherAssigned = mappings.length - missingTeachers;
     const completion = mappings.length > 0 ? Math.round((teacherAssigned / mappings.length) * 100) : 0;
     return {
@@ -230,7 +254,7 @@ export function AcademicWorkspace() {
       missingTeachers,
       completion,
     };
-  }, [mappings, subjects]);
+  }, [mappings, subjects, configuredClassSet]);
 
   const warnings = useMemo(
     () => buildAcademicWarnings({
@@ -1185,10 +1209,20 @@ Ms. Nasra,nasra@school.edu,TempPass123!,Grade 9-A;Grade 10-A,English;Somali,20`
             <p className="text-xs">Copy, assign, replace</p>
           </button>
           <div className="mt-3 border-t border-indigo-200 pt-3">
-            <PDFDownloadLink document={<CurriculumPdfDocument subjects={subjects} mappings={mappings} teachers={teachers} currentTerm={currentTerm} currentYear={currentYear} />} fileName="curriculum-plan.pdf" className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-indigo-700 shadow-sm hover:bg-indigo-50">
-              <FileText size={14} />
-              Export PDF
-            </PDFDownloadLink>
+            {!showPdfExport ? (
+              <button
+                onClick={() => setShowPdfExport(true)}
+                className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-indigo-700 shadow-sm hover:bg-indigo-50"
+              >
+                <FileText size={14} />
+                Export PDF
+              </button>
+            ) : (
+              <PDFDownloadLink document={<CurriculumPdfDocument subjects={subjects} mappings={mappings} teachers={teachers} currentTerm={currentTerm} currentYear={currentYear} />} fileName="curriculum-plan.pdf" className="flex items-center gap-2 rounded-xl bg-white px-3 py-2 text-xs font-semibold text-indigo-700 shadow-sm hover:bg-indigo-50">
+                <FileText size={14} />
+                Export PDF
+              </PDFDownloadLink>
+            )}
           </div>
         </div>
       </div>
@@ -1349,7 +1383,7 @@ Ms. Nasra,nasra@school.edu,TempPass123!,Grade 9-A;Grade 10-A,English;Somali,20`
               })}
             </div>
           ) : (
-            <MatrixView classes={filteredClasses} subjects={subjects} mappings={mappings} teachers={teachers} teachersById={teachersById} onTeacherChange={updateMappingTeacher} onCreateMapping={createMatrixMapping} onFocusClass={setSelectedClass} />
+            <MatrixView classes={filteredClasses} subjects={subjects} mappingLookup={mappingLookup} teachers={teachers} teachersById={teachersById} onTeacherChange={updateMappingTeacher} onCreateMapping={createMatrixMapping} onFocusClass={setSelectedClass} />
           )}
         </main>
       </div>
@@ -1383,10 +1417,10 @@ function ClassMultiSelect({ value, onChange, classes }: { value: string[]; onCha
   );
 }
 
-function MatrixView({ classes, subjects, mappings, teachers, teachersById, onTeacherChange, onCreateMapping, onFocusClass }: {
+function MatrixView({ classes, subjects, mappingLookup, teachers, teachersById, onTeacherChange, onCreateMapping, onFocusClass }: {
   classes: string[];
   subjects: Subject[];
-  mappings: any[];
+  mappingLookup: Map<string, any>;
   teachers: User[];
   teachersById: Map<string, User>;
   onTeacherChange: (row: any, teacherId: string) => void;
@@ -1407,7 +1441,7 @@ function MatrixView({ classes, subjects, mappings, teachers, teachersById, onTea
             <tr key={subject.id} className="border-t border-slate-100">
               <td className="sticky left-0 z-10 bg-white px-4 py-3 font-semibold text-slate-900">{subject.name}</td>
               {classes.map(className => {
-                const row = mappings.find(item => item.className === className && item.subjectId === subject.id);
+                const row = mappingLookup.get(`${className}::${subject.id}`);
                 return (
                   <td key={`${className}-${subject.id}`} className="px-3 py-2">
                     {row ? (

@@ -3,13 +3,9 @@ import type { AcademicYear, ClassSubject, Subject, Term, User } from '../../../.
 import { getAcademicYears, getCurrentTerm, getTerms } from '../../../../lib/db/academic';
 import { getClassSubjects } from '../../../../lib/db/classes';
 import { getSubjects } from '../../../../lib/db/subjects';
-import { getUsers } from '../../../../lib/db/profiles';
+import { getUsersByRole } from '../../../../lib/db/profiles';
 
 type MappingRow = ClassSubject & { subjects?: { name: string }; users?: { name: string } };
-
-function normalizeRole(user: User) {
-  return String(user.role || '').toLowerCase().trim();
-}
 
 export function useAcademicWorkspaceData(onError?: (error: unknown) => void) {
   const [loading, setLoading] = useState(true);
@@ -24,12 +20,12 @@ export function useAcademicWorkspaceData(onError?: (error: unknown) => void) {
   const refresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      const [subjectRows, yearRows, termRows, mappingRows, users, activeTerm] = await Promise.all([
+      const [subjectRows, yearRows, termRows, mappingRows, teacherRows, activeTerm] = await Promise.all([
         getSubjects(),
         getAcademicYears(),
         getTerms(),
         getClassSubjects(),
-        getUsers(),
+        getUsersByRole('teacher'),
         getCurrentTerm().catch(() => null),
       ]);
 
@@ -37,7 +33,7 @@ export function useAcademicWorkspaceData(onError?: (error: unknown) => void) {
       setYears(yearRows);
       setTerms(termRows);
       setMappings(mappingRows as MappingRow[]);
-      setTeachers((users || []).filter(user => normalizeRole(user) === 'teacher'));
+      setTeachers(teacherRows || []);
       setCurrentTerm(activeTerm);
       setLoading(false);
     } catch (error) {

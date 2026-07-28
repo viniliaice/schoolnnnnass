@@ -18,6 +18,15 @@ export function WorkloadAnalytics({
   const teachersById = useMemo(() => new Map(teachers.map(t => [t.id, t])), [teachers]);
   const subjectsById = useMemo(() => new Map(subjects.map(s => [s.id, s])), [subjects]);
 
+  // O(1) lookup map — eliminates O(S×C×M) .find() scans in heatmap
+  const mappingLookup = useMemo(() => {
+    const map = new Map<string, MappingRow>();
+    for (const m of mappings) {
+      map.set(`${m.className}::${m.subjectId}`, m);
+    }
+    return map;
+  }, [mappings]);
+
   const workloadByTeacher = useMemo(
     () => calculateTeacherWorkload(mappings, Object.fromEntries(subjects.map(s => [s.id, { weeklyLessons: s.weeklyLessons }]))),
     [mappings, subjects],
@@ -119,20 +128,29 @@ export function WorkloadAnalytics({
               </tr>
             </thead>
             <tbody>
-              {subjects.map(subject => (
-                <tr key={subject.id} className="border-t border-slate-100">
-                  <td className="sticky left-0 z-10 bg-white px-2 py-1 text-[11px] font-medium text-slate-900">{subject.shortName || subject.name}</td>
-                  {CLASSES.filter(c => mappings.some(r => r.className === c)).map(c => {
-                    const row = mappings.find(r => r.className === c && r.subjectId === subject.id);
-                    const hasTeacher = row?.teacherId;
-                    return (
-                      <td key={c} className={cn('px-2 py-1 text-center text-[11px]', row ? (hasTeacher ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700') : 'bg-slate-50 text-slate-300')}>
-                        {row ? (hasTeacher ? '✓' : '○') : '—'}
-                      </td>
-                    );
-                  })}
-                </tr>
-              ))}
+              {(() => {
+                // Pre-compute configured classes once for the heatmap
+                const activeClasses = CLASSES.filter(c => {
+                  for (const m of mappings) {
+                    if (m.className === c) return true;
+                  }
+                  return false;
+                });
+                return subjects.map(subject => (
+                  <tr key={subject.id} className="border-t border-slate-100">
+                    <td className="sticky left-0 z-10 bg-white px-2 py-1 text-[11px] font-medium text-slate-900">{subject.shortName || subject.name}</td>
+                    {activeClasses.map(c => {
+                      const row = mappingLookup.get(`${c}::${subject.id}`);
+                      const hasTeacher = row?.teacherId;
+                      return (
+                        <td key={c} className={cn('px-2 py-1 text-center text-[11px]', row ? (hasTeacher ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700') : 'bg-slate-50 text-slate-300')}>
+                          {row ? (hasTeacher ? '✓' : '○') : '—'}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ));
+              })()}
             </tbody>
           </table>
         </div>
