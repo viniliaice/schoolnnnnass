@@ -1,16 +1,12 @@
--- Migration: Add per-period class_name, subject, and is_free columns
--- These columns are used by the UI to track which class and subject each period
--- belongs to, and whether a period is a free period. Without them, this data
--- is lost on save/reload.
+/* Add per-period class_name, subject, and is_free columns */
+/* These columns are used by the UI to track which class and subject each period belongs to */
 
 ALTER TABLE lesson_plan_periods
   ADD COLUMN IF NOT EXISTS class_name TEXT,
   ADD COLUMN IF NOT EXISTS subject TEXT,
   ADD COLUMN IF NOT EXISTS is_free BOOLEAN NOT NULL DEFAULT false;
 
--- ============================================================================
--- UPDATE ATOMIC SAVE RPC to include new columns
--- ============================================================================
+/* Update the atomic save RPC to include the new columns */
 DROP FUNCTION IF EXISTS save_lesson_plan_periods(TEXT, JSONB);
 
 CREATE OR REPLACE FUNCTION save_lesson_plan_periods(
