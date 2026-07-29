@@ -12,11 +12,7 @@ CREATE OR REPLACE FUNCTION save_lesson_plan_periods(
   LANGUAGE plpgsql
   SECURITY DEFINER
 AS $$
-DECLARE
-  _sp TEXT := 'save_periods';
 BEGIN
-  SAVEPOINT _sp;
-
   DELETE FROM lesson_plan_periods WHERE plan_id = p_plan_id;
 
   INSERT INTO lesson_plan_periods (
@@ -39,15 +35,9 @@ BEGIN
     row_number() OVER () - 1
   FROM jsonb_array_elements(p_periods) AS elem;
 
-  RELEASE SAVEPOINT _sp;
-
   RETURN QUERY
   SELECT * FROM lesson_plan_periods
   WHERE plan_id = p_plan_id
   ORDER BY day, period_number;
-EXCEPTION
-  WHEN OTHERS THEN
-    ROLLBACK TO SAVEPOINT _sp;
-    RAISE;
 END;
 $$;
