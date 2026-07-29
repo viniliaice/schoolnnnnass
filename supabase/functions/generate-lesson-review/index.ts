@@ -441,6 +441,14 @@ serve(async (req: Request) => {
       });
 
     if (insertError) {
+      // Rollback: try to restore the previous status
+      // Since the plan was already 'submitted' or similar before this call,
+      // we set it back to the original status so teacher can retry
+      await supabase
+        .from('lesson_plans')
+        .update({ status: plan.status, updated_at: new Date().toISOString() })
+        .eq('id', payload.plan_id);
+      
       return corsResponse({
         error: 'Failed to save review',
         code: 'SAVE_ERROR',
@@ -448,8 +456,8 @@ serve(async (req: Request) => {
       }, { status: 500 });
     }
 
-    // Update plan status to submitted/in_review, carry forward previous audit trail
-    await supabase
+    // Update plan status to in_review - carry forward previous audit trail
+    const { error: statusUpdateError } = await supabase
       .from('lesson_plans')
       .update({
         status: 'in_review',
@@ -458,6 +466,12 @@ serve(async (req: Request) => {
         updated_at: new Date().toISOString(),
       })
       .eq('id', payload.plan_id);
+
+    // If status update fails but review was saved, that's OK - the review exists
+    // and can be retrieved. The status will be updated on next action or manual fix.
+    if (statusUpdateError) {
+      console.error(`Failed to update plan status to in_review for ${payload.plan_id}:`, statusUpdateError);
+    }
 
     return corsResponse({
       review_id: reviewId,

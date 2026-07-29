@@ -74,31 +74,54 @@ export async function submitForReview(
   periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
   unitContext?: { name: string; objectives: string }
 ): Promise<ReviewResponse> {
-  const { data: plan } = await supabase
+  // First, verify the plan exists and is in a valid state
+  const { data: plan, error: fetchError } = await supabase
     .from('lesson_plans')
     .select('id, teacher_id, status')
     .eq('id', planId)
     .single();
-  if (!plan) throw new Error('Plan not found');
+  if (fetchError || !plan) throw new Error('Plan not found');
   if (plan.status === 'in_review' || plan.status === 'approved') {
     throw new Error(`Plan is already ${plan.status}`);
   }
+  if (plan.status === 'submitted') {
+    throw new Error('Plan has already been submitted for review');
+  }
 
-  // Set plan status to 'submitted' so the supervisor can see it
-  const { error: statusError } = await supabase
-    .from('lesson_plans')
-    .update({ status: 'submitted', updated_at: new Date().toISOString() })
-    .eq('id', planId);
-  if (statusError) throw new Error('Failed to update plan status');
-
+  // Call the edge function to generate AI review first
+  // The edge function will set status to 'in_review' on success
+  // or 'ai_failed' on failure
   const { data, error } = await supabase.functions.invoke('generate-lesson-review', {
     body: { plan_id: planId, periods: periodInputs, unit_context: unitContext },
   });
 
   if (error) {
+    // If edge function failed, the status should already be set to 'ai_failed' by the edge function
+    // But if not (e.g., network error before edge function could update), roll back to draft
+    const { data: currentPlan } = await supabase
+      .from('lesson_plans')
+      .select('status')
+      .eq('id', planId)
+      .single();
+    
+    if (currentPlan?.status !== 'ai_failed' && currentPlan?.status !== 'in_review') {
+      // Edge function didn't update status, roll back to draft
+      await supabase
+        .from('lesson_plans')
+        .update({ status: 'draft', updated_at: new Date().toISOString() })
+        .eq('id', planId);
+    }
+    
     const msg = error.context?.message || error.message || 'Review request failed';
     throw new Error(msg);
   }
+
+  // Update status to 'submitted' so supervisor can see the plan
+  // The edge function already set it to 'in_review', so we just ensure it's visible
+  await supabase
+    .from('lesson_plans')
+    .update({ status: 'submitted', updated_at: new Date().toISOString() })
+    .eq('id', planId);
 
   return data as ReviewResponse;
 }
@@ -130,17 +153,41 @@ export async function retryAIReview(
   periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
   unitContext?: { name: string; objectives: string }
 ): Promise<ReviewResponse> {
-  // Set status to 'submitted' while retrying
-  await supabase
+  // First verify the plan exists and is in a retryable state
+  const { data: plan, error: fetchError } = await supabase
     .from('lesson_plans')
-    .update({ status: 'submitted', updated_at: new Date().toISOString() })
-    .eq('id', planId);
+    .select('id, status')
+    .eq('id', planId)
+    .single();
+  if (fetchError || !plan) throw new Error('Plan not found');
+  if (plan.status !== 'ai_failed') {
+    throw new Error('Only plans with failed AI reviews can be retried');
+  }
 
+  // Call the edge function to retry AI review
+  // The edge function will set status to 'in_review' on success
+  // or 'ai_failed' on failure
   const { data, error } = await supabase.functions.invoke('generate-lesson-review', {
     body: { plan_id: planId, periods: periodInputs, unit_context: unitContext },
   });
 
   if (error) {
+    // If edge function failed, the status should already be set to 'ai_failed' by the edge function
+    // But if not (e.g., network error before edge function could update), roll back to 'ai_failed'
+    const { data: currentPlan } = await supabase
+      .from('lesson_plans')
+      .select('status')
+      .eq('id', planId)
+      .single();
+    
+    if (currentPlan?.status !== 'ai_failed' && currentPlan?.status !== 'in_review') {
+      // Edge function didn't update status, set back to ai_failed
+      await supabase
+        .from('lesson_plans')
+        .update({ status: 'ai_failed', updated_at: new Date().toISOString() })
+        .eq('id', planId);
+    }
+    
     const msg = error.context?.message || error.message || 'Review request failed';
     throw new Error(msg);
   }
