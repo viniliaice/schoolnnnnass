@@ -1,12 +1,13 @@
 import { useState } from 'react';
 import { useSupervisorPlans, usePlanWithPeriods, useReview, useApprovePlan, useRejectPlan, useRetryAIReview } from '../../lib/hooks/useLessonPlans';
-import { DAYS_OF_WEEK } from '../../types';
-import { ClipboardCheck, ChevronRight } from 'lucide-react';
+import { DAYS_OF_WEEK, PlanStatus } from '../../types';
+import { ClipboardCheck, ChevronRight, Filter } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
 export function LessonPlanReview() {
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [comment, setComment] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | PlanStatus>('all');
 
   const { data: plans } = useSupervisorPlans();
   const { data: planWithPeriods } = usePlanWithPeriods(selectedPlanId || undefined);
@@ -55,11 +56,26 @@ export function LessonPlanReview() {
       <div className={cn('flex gap-6', 'flex-col xl:flex-row')}>
         {/* Left: Plan list */}
         <div className="w-full xl:w-80 shrink-0">
+          <div className="flex items-center gap-2 mb-3">
+            <Filter className="w-4 h-4 text-slate-400" />
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as 'all' | PlanStatus)}
+              className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
+            >
+              <option value="all">All Statuses</option>
+              <option value="submitted">Submitted (pending AI)</option>
+              <option value="in_review">In Review</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="ai_failed">AI Failed</option>
+            </select>
+          </div>
           <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100">
             {(!plans || plans.length === 0) && (
               <div className="p-8 text-center text-sm text-slate-500">No submitted plans</div>
             )}
-            {plans?.map((plan) => (
+            {plans?.filter((plan) => statusFilter === 'all' || plan.status === statusFilter).map((plan) => (
               <button
                 key={plan.id}
                 onClick={() => setSelectedPlanId(plan.id)}
@@ -76,9 +92,11 @@ export function LessonPlanReview() {
                     plan.status === 'approved' ? 'bg-emerald-100 text-emerald-700' :
                     plan.status === 'rejected' ? 'bg-rose-100 text-rose-700' :
                     plan.status === 'in_review' ? 'bg-amber-100 text-amber-700' :
+                    plan.status === 'submitted' ? 'bg-blue-100 text-blue-700' :
+                    plan.status === 'ai_failed' ? 'bg-orange-100 text-orange-700' :
                     'bg-slate-100 text-slate-600'
                   )}>
-                    {plan.status.replace('_', ' ')}
+                    {plan.status === 'ai_failed' ? 'AI Failed' : plan.status.replace('_', ' ')}
                   </span>
                 </div>
                 <ChevronRight className="w-4 h-4 text-slate-400" />
@@ -218,6 +236,17 @@ export function LessonPlanReview() {
             )}
 
             {/* Approval Panel */}
+            {planWithPeriods.plan.status === 'submitted' && !review ? (
+              <div className="bg-white rounded-2xl border border-blue-200 p-6 space-y-4">
+                <div className="flex items-center gap-3">
+                  <h2 className="text-lg font-bold text-slate-900">Supervisor Decision</h2>
+                  <span className="ml-auto px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700 animate-pulse">
+                    Awaiting AI Review...
+                  </span>
+                </div>
+                <p className="text-sm text-slate-600">The teacher has submitted this plan. AI review is being generated — please check back shortly.</p>
+              </div>
+            ) : (
             <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
               <h2 className="text-lg font-bold text-slate-900">Supervisor Decision</h2>
               <textarea
@@ -230,20 +259,21 @@ export function LessonPlanReview() {
               <div className="flex gap-3">
                 <button
                   onClick={handleApprove}
-                  disabled={pending}
+                  disabled={pending || !review}
                   className="flex-1 py-2.5 rounded-xl bg-emerald-600 text-white font-medium text-sm hover:bg-emerald-700 disabled:opacity-50 transition-colors"
                 >
                   Approve
                 </button>
                 <button
                   onClick={handleReject}
-                  disabled={pending}
+                  disabled={pending || !review}
                   className="flex-1 py-2.5 rounded-xl bg-rose-600 text-white font-medium text-sm hover:bg-rose-700 disabled:opacity-50 transition-colors"
                 >
                   Request Revisions
                 </button>
               </div>
             </div>
+            )}
           </div>
         )}
       </div>

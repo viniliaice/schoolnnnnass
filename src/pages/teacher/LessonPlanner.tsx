@@ -180,7 +180,18 @@ export function LessonPlanner() {
   }, [planWithPeriods]);
 
   const updateCell = useCallback((day: DayOfWeek, periodNumber: number, field: string, value: any) => {
-    setPeriods((prev) => prev.map((c) => (c.day === day && c.period_number === periodNumber ? { ...c, [field]: value } : c)));
+    setPeriods((prev) => prev.map((c) => {
+      if (c.day !== day || c.period_number !== periodNumber) return c;
+      // Auto-toggle isFree when subject is set to __FREE__
+      if (field === 'subject' && value === '__FREE__') {
+        return { ...c, subject: '__FREE__', isFree: true };
+      }
+      // When unchecking isFree, clear the __FREE__ subject marker
+      if (field === 'isFree' && value === false && c.subject === '__FREE__') {
+        return { ...c, isFree: false, subject: '' };
+      }
+      return { ...c, [field]: value };
+    }));
     setIsDirty(true);
   }, []);
 
@@ -213,8 +224,8 @@ export function LessonPlanner() {
     day: p.day,
     period_number: p.period_number,
     class_name: p.className || null,
-    subject: p.subject || null,
-    is_free: p.isFree || false,
+    subject: (p.isFree || p.subject === '__FREE__') ? null : (p.subject || null),
+    is_free: p.isFree || p.subject === '__FREE__',
     topic: p.topic,
     objective: p.objective || null,
     activities: generateActivitiesText(p.details),
@@ -245,10 +256,13 @@ export function LessonPlanner() {
 
   const handleCreateOrSelectPlan = useCallback(async () => {
     if (!session) return;
-    if (existingPlans?.length) {
-      setPlanId(existingPlans[0].id);
+    // Look for an existing plan matching the current week
+    const matchingPlan = existingPlans?.find((p) => p.week_label === weekLabel);
+    if (matchingPlan) {
+      setPlanId(matchingPlan.id);
       return;
     }
+    // No match — create a new plan for the current week
     try {
       const plan = await createPlanMut.mutateAsync({
         teacher_id: session.userId,
@@ -267,7 +281,7 @@ export function LessonPlanner() {
 
   const handleSubmit = useCallback(async () => {
     if (!planId || isSubmittingRef.current) return;
-    const emptyCells = periods.filter((p) => !p.isFree && !p.topic.trim());
+    const emptyCells = periods.filter((p) => !p.isFree && p.subject !== '__FREE__' && !p.topic.trim());
     if (emptyCells.length > 0) {
       addToast({ type: 'error', title: 'All periods must have a topic' });
       return;

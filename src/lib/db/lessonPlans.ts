@@ -19,6 +19,7 @@ export async function fetchPlansBySupervisor(): Promise<(LessonPlan & { teacher_
   const { data, error } = await supabase
     .from('lesson_plans')
     .select('*, profiles!lesson_plans_teacher_id_fkey(name)')
+    .in('status', ['submitted', 'in_review', 'approved', 'rejected', 'ai_failed'])
     .order('created_at', { ascending: false });
   if (error) throw error;
   return (data || []).map((p: any) => ({
@@ -83,6 +84,13 @@ export async function submitForReview(
     throw new Error(`Plan is already ${plan.status}`);
   }
 
+  // Set plan status to 'submitted' so the supervisor can see it
+  const { error: statusError } = await supabase
+    .from('lesson_plans')
+    .update({ status: 'submitted', updated_at: new Date().toISOString() })
+    .eq('id', planId);
+  if (statusError) throw new Error('Failed to update plan status');
+
   const { data, error } = await supabase.functions.invoke('generate-lesson-review', {
     body: { plan_id: planId, periods: periodInputs, unit_context: unitContext },
   });
@@ -122,6 +130,12 @@ export async function retryAIReview(
   periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
   unitContext?: { name: string; objectives: string }
 ): Promise<ReviewResponse> {
+  // Set status to 'submitted' while retrying
+  await supabase
+    .from('lesson_plans')
+    .update({ status: 'submitted', updated_at: new Date().toISOString() })
+    .eq('id', planId);
+
   const { data, error } = await supabase.functions.invoke('generate-lesson-review', {
     body: { plan_id: planId, periods: periodInputs, unit_context: unitContext },
   });

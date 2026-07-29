@@ -46,9 +46,11 @@ export function PlanHistoryTable({ onSelectPlan }: PlanHistoryTableProps) {
         >
           <option value="all">All</option>
           <option value="draft">Draft</option>
+          <option value="submitted">Submitted</option>
           <option value="in_review">In Review</option>
           <option value="approved">Approved</option>
           <option value="rejected">Rejected</option>
+          <option value="ai_failed">AI Failed</option>
         </select>
       </div>
       <div className="divide-y divide-slate-100">

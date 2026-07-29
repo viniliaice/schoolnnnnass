@@ -110,6 +110,7 @@ export function useSubmitForReview() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['aiReview', data.plan_id] });
+      qc.invalidateQueries({ queryKey: ['lessonPlans'] });
     },
   });
 }

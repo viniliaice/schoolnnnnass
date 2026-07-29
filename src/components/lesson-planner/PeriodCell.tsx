@@ -47,7 +47,7 @@ export function PeriodCell({
 
   const { day, period_number, subject, className, isFree, topic, objective, slide_number, details } = cell;
 
-  if (isFree) {
+  if (isFree || subject === '__FREE__') {
     return (
       <td className="p-2 border-l border-slate-100 align-top">
         <div className="text-center py-4 text-slate-400 text-xs">

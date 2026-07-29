@@ -36,9 +36,9 @@ export function ReviewStep({
   onSubmit,
   isSubmitting,
 }: ReviewStepProps) {
-  const freeCount = periods.filter((p) => p.isFree).length;
-  const filledCount = periods.filter((p) => !p.isFree && p.topic.trim()).length;
-  const emptyCount = periods.filter((p) => !p.isFree && !p.topic.trim()).length;
+  const freeCount = periods.filter((p) => p.isFree || p.subject === '__FREE__').length;
+  const filledCount = periods.filter((p) => !p.isFree && p.subject !== '__FREE__' && p.topic.trim()).length;
+  const emptyCount = periods.filter((p) => !p.isFree && p.subject !== '__FREE__' && !p.topic.trim()).length;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6">
@@ -114,7 +114,7 @@ export function ReviewStep({
                     if (!cell) return <td key={day} className="p-2 border-l border-slate-100 align-top" />;
                     return (
                       <td key={day} className="p-2 border-l border-slate-100 align-top">
-                        {cell.isFree ? (
+                        {cell.isFree || cell.subject === '__FREE__' ? (
                           <div className="text-center py-4 text-slate-400 text-xs">
                             <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-slate-100 text-slate-600">
                               <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
