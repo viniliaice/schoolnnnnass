@@ -1,5 +1,5 @@
 import { supabase } from '../supabase';
-import type { LessonPlan, LessonPlanPeriod, PeriodActivity, AIReview, DayOfWeek, PlanStatus, ReviewResponse, ReviewErrorResponse, SavePeriodsPayload } from '../../types';
+import type { LessonPlan, LessonPlanPeriod, PeriodActivity, AIReview, DayOfWeek, PlanStatus, ReviewResponse, SavePeriodsPayload } from '../../types';
 
 function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -62,7 +62,7 @@ export async function deletePlan(id: string): Promise<void> {
 export async function savePeriods(payload: SavePeriodsPayload): Promise<LessonPlanPeriod[]> {
   const { data, error } = await supabase.rpc('save_lesson_plan_periods', {
     p_plan_id: payload.plan_id,
-    p_periods: JSON.stringify(payload.periods),
+    p_periods: payload.periods as any,
   });
   if (error) throw error;
   return data || [];
@@ -73,9 +73,6 @@ export async function submitForReview(
   periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
   unitContext?: { name: string; objectives: string }
 ): Promise<ReviewResponse> {
-  const jwt = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!jwt) throw new Error('Not authenticated');
-
   const { data: plan } = await supabase
     .from('lesson_plans')
     .select('id, teacher_id, status')
@@ -86,24 +83,16 @@ export async function submitForReview(
     throw new Error(`Plan is already ${plan.status}`);
   }
 
-  const res = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-lesson-review`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ plan_id: planId, periods: periodInputs, unit_context: unitContext }),
-    }
-  );
+  const { data, error } = await supabase.functions.invoke('generate-lesson-review', {
+    body: { plan_id: planId, periods: periodInputs, unit_context: unitContext },
+  });
 
-  if (!res.ok) {
-    const err: ReviewErrorResponse = await res.json();
-    throw new Error(err.error);
+  if (error) {
+    const msg = error.context?.message || error.message || 'Review request failed';
+    throw new Error(msg);
   }
 
-  return res.json();
+  return data as ReviewResponse;
 }
 
 export async function fetchReviewByPlanId(planId: string): Promise<AIReview | null> {
@@ -133,27 +122,16 @@ export async function retryAIReview(
   periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
   unitContext?: { name: string; objectives: string }
 ): Promise<ReviewResponse> {
-  const jwt = (await supabase.auth.getSession()).data.session?.access_token;
-  if (!jwt) throw new Error('Not authenticated');
+  const { data, error } = await supabase.functions.invoke('generate-lesson-review', {
+    body: { plan_id: planId, periods: periodInputs, unit_context: unitContext },
+  });
 
-  const res = await fetch(
-    `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-lesson-review`,
-    {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${jwt}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ plan_id: planId, periods: periodInputs, unit_context: unitContext }),
-    }
-  );
-
-  if (!res.ok) {
-    const err: ReviewErrorResponse = await res.json();
-    throw new Error(err.error);
+  if (error) {
+    const msg = error.context?.message || error.message || 'Review request failed';
+    throw new Error(msg);
   }
 
-  return res.json();
+  return data as ReviewResponse;
 }
 
 export async function approvePlan(id: string): Promise<void> {

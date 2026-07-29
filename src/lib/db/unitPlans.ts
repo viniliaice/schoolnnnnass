@@ -77,6 +77,24 @@ export async function updateUnitPlan(id: string, plan: Partial<UnitPlanInput>): 
   return data;
 }
 
+export async function fetchUnitPlanByClassSubjectTerm(
+  className: string,
+  subjectId: string,
+  termId: string
+): Promise<UnitPlan | null> {
+  const { data, error } = await supabase
+    .from('unit_plans')
+    .select('*')
+    .eq('class_name', className)
+    .eq('subject_id', subjectId)
+    .eq('term_id', termId)
+    .order('updated_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw error;
+  return data;
+}
+
 export async function deleteUnitPlan(id: string): Promise<void> {
   const { error } = await supabase.from('unit_plans').delete().eq('id', id);
   if (error) throw error;

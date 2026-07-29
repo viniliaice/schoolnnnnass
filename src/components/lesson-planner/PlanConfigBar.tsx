@@ -1,4 +1,4 @@
-import { Subject } from '../../types';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface PlanConfigBarProps {
   className: string;
@@ -7,6 +7,10 @@ interface PlanConfigBarProps {
   setPeriodCount: (value: number) => void;
   teacherClasses: string[];
   weekLabel: string;
+  weekStartDate: string;
+  weekEndDate: string;
+  onPrevWeek: () => void;
+  onNextWeek: () => void;
 }
 
 export function PlanConfigBar({
@@ -16,6 +20,10 @@ export function PlanConfigBar({
   setPeriodCount,
   teacherClasses,
   weekLabel,
+  weekStartDate,
+  weekEndDate,
+  onPrevWeek,
+  onNextWeek,
 }: PlanConfigBarProps) {
   return (
     <div className="flex items-center gap-4 bg-slate-50 rounded-xl px-4 py-2 border border-slate-200">
@@ -40,9 +48,22 @@ export function PlanConfigBar({
           <option value={6}>6</option>
         </select>
       </div>
-      <div className="flex items-center gap-1.5 text-xs text-slate-500 ml-auto">
-        <span>Week:</span>
-        <span className="font-mono">{weekLabel}</span>
+      <div className="flex items-center gap-1 ml-auto">
+        <button
+          onClick={onPrevWeek}
+          className="p-1 rounded-lg hover:bg-white text-slate-500 hover:text-slate-700 transition-colors"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+        <span className="text-xs text-slate-500">
+          {weekStartDate} — {weekEndDate}
+        </span>
+        <button
+          onClick={onNextWeek}
+          className="p-1 rounded-lg hover:bg-white text-slate-500 hover:text-slate-700 transition-colors"
+        >
+          <ChevronRight className="w-4 h-4" />
+        </button>
       </div>
     </div>
   );

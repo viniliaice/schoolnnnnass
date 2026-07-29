@@ -42,6 +42,8 @@ import {
 import { createSubject, deleteSubject, updateSubject } from '../../../lib/db/subjects';
 import { createAuditLog } from '../../../lib/db/audit';
 import { bulkCreateTeachersWithAssignments } from '../../../lib/db/bulk';
+import { updateUser } from '../../../lib/db/profiles';
+import { supabase } from '../../../lib/supabase';
 import { cn } from '../../../utils/cn';
 import { calculateTeacherWorkload, DEFAULT_WEEKLY_LESSONS, TEACHER_WEEKLY_LIMIT, type SubjectMeta } from './utils/workload';
 import { buildAcademicWarnings } from './utils/warnings';
@@ -88,22 +90,34 @@ interface ParsedTeacherEntry {
 }
 
 function parseTeacherCsv(text: string): ParsedTeacherEntry[] {
+  console.log('[parseTeacherCsv] Input text length:', text.length);
+  console.log('[parseTeacherCsv] Raw text:', text);
   const lines = text.trim().split('\n').filter(l => l.trim());
+  console.log('[parseTeacherCsv] Lines after split+filter:', lines.length, lines);
   const entries: ParsedTeacherEntry[] = [];
   for (const line of lines) {
-    // Skip header row
-    if (line.toLowerCase().includes('email') && line.toLowerCase().includes('name')) continue;
+    if (line.toLowerCase().includes('email') && line.toLowerCase().includes('name')) {
+      console.log('[parseTeacherCsv] Skipping header line:', line);
+      continue;
+    }
     const parts = line.split(',').map(s => s.trim());
-    if (parts.length < 2 || !parts[0] || !parts[1]) continue;
-    entries.push({
+    console.log('[parseTeacherCsv] Parts from line:', parts);
+    if (parts.length < 2 || !parts[0] || !parts[1]) {
+      console.log('[parseTeacherCsv] Skipping line — not enough parts or missing name/email:', parts);
+      continue;
+    }
+    const entry = {
       name: parts[0] || '',
       email: parts[1] || '',
       password: parts[2] || 'TempPass123!',
       assignedClasses: (parts[3] || '').split(';').map(s => s.trim()).filter(Boolean),
       subjectNames: (parts[4] || '').split(';').map(s => s.trim()).filter(Boolean),
       weeklyPeriods: parseInt(parts[5] || '0', 10) || 0,
-    });
+    };
+    console.log('[parseTeacherCsv] Parsed entry:', entry);
+    entries.push(entry);
   }
+  console.log('[parseTeacherCsv] Total entries parsed:', entries.length);
   return entries;
 }
 
@@ -171,6 +185,7 @@ export function AcademicWorkspace() {
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [filterClassList, setFilterClassList] = useState<string[]>([]);
   const [showClassFilter, setShowClassFilter] = useState(false);
+  const [classesWithStudents, setClassesWithStudents] = useState<Set<string> | null>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const classFilterRef = useRef<HTMLButtonElement>(null);
   const classFilterDropdownRef = useRef<HTMLDivElement>(null);
@@ -185,6 +200,10 @@ export function AcademicWorkspace() {
     skipped: string[];
     failedAssignments: string[];
   } | null>(null);
+  // Teacher-subject assignment
+  const [teacherAssignCsv, setTeacherAssignCsv] = useState('');
+  const [uploadingAssign, setUploadingAssign] = useState(false);
+  const [teacherAssignView, setTeacherAssignView] = useState<'matrix' | 'csv'>('matrix');
   // Inline add-teacher form
   const [showInlineTeacherForm, setShowInlineTeacherForm] = useState(false);
   const [inlineTeacherForm, setInlineTeacherForm] = useState({
@@ -216,14 +235,31 @@ export function AcademicWorkspace() {
     });
   }, [subjects, query, departmentFilter]);
 
+  // Fetch classes that have at least one student
+  useEffect(() => {
+    supabase
+      .from('students')
+      .select('className')
+      .then(({ data, error }) => {
+        if (!error && data) {
+          const set = new Set(data.map(s => s.className).filter(Boolean));
+          setClassesWithStudents(set);
+          if (!set.has(selectedClass)) {
+            const first = CLASSES.find(c => set.has(c));
+            if (first) setSelectedClass(first);
+          }
+        }
+      });
+  }, []);
+
   const filteredClasses = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (filterClassList.length === 0 && !needle) return [];
-    let list = CLASSES;
+    let list = classesWithStudents ? CLASSES.filter(c => classesWithStudents.has(c)) : CLASSES;
     if (needle) list = list.filter(className => className.toLowerCase().includes(needle));
     if (filterClassList.length > 0) list = list.filter(className => filterClassList.includes(className));
     return list;
-  }, [query, filterClassList]);
+  }, [query, filterClassList, classesWithStudents]);
 
   const selectedClassMappings = useMemo(
     () => mappings.filter(row => row.className === selectedClass),
@@ -590,22 +626,32 @@ export function AcademicWorkspace() {
 
   // ── Teacher Upload / Import handlers ──────────────────────────────
   const importTeachersFromCsv = async () => {
+    console.log('[importTeachersFromCsv] Starting CSV import');
+    console.log('[importTeachersFromCsv] teacherCsv state:', teacherCsv);
     const parsed = parseTeacherCsv(teacherCsv);
+    console.log('[importTeachersFromCsv] Parsed entries:', parsed.length, parsed);
     if (parsed.length === 0) {
+      console.log('[importTeachersFromCsv] No valid rows — aborting');
       addToast({ type: 'error', title: 'No valid rows found in CSV' });
       return;
     }
 
     // Resolve subject names → IDs
     const subjectNameToId = new Map<string, string>();
+    console.log('[importTeachersFromCsv] Available subjects:', subjects.map(s => ({ name: s.name, shortName: s.shortName, id: s.id })));
     for (const subject of subjects) {
       subjectNameToId.set(subject.name.toLowerCase(), subject.id);
       if (subject.shortName) subjectNameToId.set(subject.shortName.toLowerCase(), subject.id);
     }
+    console.log('[importTeachersFromCsv] Subject name→ID map:', Object.fromEntries(subjectNameToId));
 
     const entries = parsed.map(entry => {
       const resolvedSubjectIds = entry.subjectNames
-        .map(name => subjectNameToId.get(name.toLowerCase()))
+        .map(name => {
+          const found = subjectNameToId.get(name.toLowerCase());
+          console.log(`[importTeachersFromCsv] Resolving subject "${name}" → ${found || 'NOT FOUND'}`);
+          return found;
+        })
         .filter((id): id is string => Boolean(id));
 
       return {
@@ -616,16 +662,25 @@ export function AcademicWorkspace() {
         assignedSubjects: resolvedSubjectIds,
         weeklyPeriods: entry.weeklyPeriods,
       };
-    }).filter(entry => entry.assignedSubjects.length > 0 && entry.assignedClasses.length > 0);
+    }).filter(entry => {
+      const keep = entry.assignedSubjects.length > 0 && entry.assignedClasses.length > 0;
+      if (!keep) console.log('[importTeachersFromCsv] Filtering out entry (no subjects or no classes):', entry);
+      return keep;
+    });
+
+    console.log('[importTeachersFromCsv] Entries after subject resolution + filter:', entries.length, entries);
 
     if (entries.length === 0) {
+      console.log('[importTeachersFromCsv] No valid entries after filtering — aborting');
       addToast({ type: 'error', title: 'No valid entries — check subject names match existing subjects' });
       return;
     }
 
     setUploadingTeachers(true);
     try {
+      console.log('[importTeachersFromCsv] Calling bulkCreateTeachersWithAssignments with:', entries);
       const result = await bulkCreateTeachersWithAssignments(entries);
+      console.log('[importTeachersFromCsv] Result:', result);
       setTeacherUploadResult({
         created: result.teachers.length,
         assignments: result.assignments.length,
@@ -645,7 +700,7 @@ export function AcademicWorkspace() {
       setTeacherCsvMode(false);
       await refresh();
     } catch (error) {
-      console.error(error);
+      console.error('[importTeachersFromCsv] Bulk create failed:', error);
       addToast({ type: 'error', title: 'Teacher upload failed' });
     } finally {
       setUploadingTeachers(false);
@@ -717,6 +772,141 @@ export function AcademicWorkspace() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  // ── Teacher Subject Assignment ─────────────────────────────────────
+
+  const teacherSubjById = useMemo(() => {
+    const map = new Map<string, Subject>();
+    for (const s of subjects) map.set(s.id, s);
+    return map;
+  }, [subjects]);
+
+  const toggleTeacherSubject = useCallback(async (teacherId: string, subjectId: string) => {
+    const teacher = teachersById.get(teacherId);
+    if (!teacher) return;
+    const current = teacher.assignedSubjects || [];
+    const next = current.includes(subjectId)
+      ? current.filter(id => id !== subjectId)
+      : [...current, subjectId];
+    try {
+      await updateUser(teacherId, { assignedSubjects: next });
+      await refresh();
+      addToast({ type: 'success', title: `${teacher.name} ${current.includes(subjectId) ? 'removed from' : 'assigned'} ${teacherSubjById.get(subjectId)?.name || subjectId}` });
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'Failed to update', description: err.message });
+    }
+  }, [teachersById, teacherSubjById, refresh, addToast]);
+
+  // Build matrix CSV template from actual subjects + classes
+  const TEACHER_ASSIGN_CSV_TEMPLATE = useMemo(() => {
+    const sortedClasses = CLASSES.filter(c => classesWithStudents?.has(c) ?? true);
+    const header = ',' + sortedClasses.join(',');
+    const rows = subjects.map(s => {
+      const cells = sortedClasses.map(c => {
+        const row = mappings.find(m => m.className === c && m.subjectId === s.id);
+        if (!row) return '';
+        const teacher = row.teacherId ? teachersById.get(row.teacherId) : null;
+        return teacher?.email || '';
+      });
+      return s.name + ',' + cells.join(',');
+    });
+    return [header, ...rows].join('\n');
+  }, [subjects, mappings, teachersById, classesWithStudents]);
+
+  const downloadTeacherAssignTemplate = () => {
+    const blob = new Blob([TEACHER_ASSIGN_CSV_TEMPLATE], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'teacher_subjects_matrix.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadTeacherList = () => {
+    const csv = 'Name,Email\n' + teachers
+      .filter(t => t.role === 'teacher')
+      .map(t => `${t.name},${t.email}`)
+      .join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'teacher_list.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleTeacherAssignCsv = async () => {
+    const lines = teacherAssignCsv.trim().split('\n').filter(l => l.trim());
+    if (lines.length < 2) {
+      addToast({ type: 'error', title: 'CSV must have a header row and at least one data row' });
+      return;
+    }
+
+    // Build lookup maps
+    const subjectByName = new Map<string, string>();
+    for (const s of subjects) {
+      subjectByName.set(s.name.toLowerCase(), s.id);
+      if (s.shortName) subjectByName.set(s.shortName.toLowerCase(), s.id);
+    }
+    const teacherByEmail = new Map<string, User>();
+    for (const t of teachers) {
+      if (t.email) teacherByEmail.set(t.email.toLowerCase(), t);
+    }
+
+    // Parse header: first cell empty, rest are class names
+    const headerParts = lines[0].split(',').map(s => s.trim());
+    const classNames = headerParts.slice(1).filter(Boolean);
+
+    let updated = 0;
+    let created = 0;
+    let errors: string[] = [];
+    setUploadingAssign(true);
+
+    try {
+      for (let i = 1; i < lines.length; i++) {
+        const parts = lines[i].split(',').map(s => s.trim());
+        const subjectName = parts[0];
+        const subjectId = subjectByName.get(subjectName.toLowerCase());
+        if (!subjectId) { errors.push(`✕ Unknown subject: "${subjectName}"`); continue; }
+
+        for (let j = 0; j < classNames.length; j++) {
+          const email = parts[j + 1];
+          if (!email) continue;
+          const teacher = teacherByEmail.get(email.toLowerCase());
+          if (!teacher) { errors.push(`✕ Unknown teacher email: "${email}"`); continue; }
+
+          const className = classNames[j];
+          const existingMapping = mappings.find(m => m.className === className && m.subjectId === subjectId);
+
+          try {
+            if (existingMapping) {
+              await updateClassSubject(existingMapping.id, { teacherId: teacher.id });
+              updated++;
+            } else {
+              await createClassSubject({ className, subjectId, teacherId: teacher.id, createdAt: new Date().toISOString() } as any);
+              created++;
+            }
+          } catch (err) {
+            errors.push(`✕ ${className} / ${subjectName} / ${email} — ${String(err)}`);
+          }
+        }
+      }
+
+      await refresh();
+      addToast({ type: 'success', title: 'Matrix uploaded', description: `${created} created, ${updated} updated, ${errors.length} error(s)` });
+      setTeacherAssignCsv('');
+    } catch (err: any) {
+      addToast({ type: 'error', title: 'CSV upload failed', description: err.message });
+    } finally {
+      setUploadingAssign(false);
+    }
   };
 
   const workloadBadge = (teacherId?: string) => {
@@ -1333,7 +1523,7 @@ Ms. Nasra,nasra@school.edu,TempPass123!,Grade 9-A;Grade 10-A,English;Somali,20`
                 <div className="absolute left-0 top-full z-40 mt-1 w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                   <button onClick={() => { setFilterClassList([]); setShowClassFilter(false); }} className="w-full rounded-xl px-3 py-1.5 text-left text-sm font-semibold text-indigo-600 hover:bg-slate-50">Show all</button>
                   <div className="max-h-56 space-y-0.5 overflow-auto">
-                    {CLASSES.map(className => (
+                    {(classesWithStudents ? CLASSES.filter(c => classesWithStudents.has(c)) : CLASSES).map(className => (
                       <label key={className} className="flex cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-slate-50">
                         <input type="checkbox" checked={filterClassList.includes(className)} onChange={event => setFilterClassList(prev => event.target.checked ? [...prev, className] : prev.filter(c => c !== className))} className="rounded" />
                         {className}
@@ -1420,6 +1610,56 @@ Ms. Nasra,nasra@school.edu,TempPass123!,Grade 9-A;Grade 10-A,English;Somali,20`
         </main>
       </div>
 
+      {/* ── Teacher Subject Assignments ───────────────────────────────── */}
+      <section className="mt-10 space-y-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">Teacher Subjects</h2>
+            <p className="text-sm text-slate-500">Assign subjects to teachers in the matrix, or upload a CSV for bulk assignment.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button onClick={downloadTeacherAssignTemplate} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
+              <Download className="mr-1 inline h-4 w-4" />Download CSV
+            </button>
+            <button onClick={downloadTeacherList} className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-600 hover:bg-slate-50">
+              <Download className="mr-1 inline h-4 w-4" />Teacher Emails
+            </button>
+            <button onClick={() => setTeacherAssignView('matrix')} className={cn('rounded-xl px-3 py-2 text-sm font-semibold', teacherAssignView === 'matrix' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600')}>Matrix</button>
+            <button onClick={() => setTeacherAssignView('csv')} className={cn('rounded-xl px-3 py-2 text-sm font-semibold', teacherAssignView === 'csv' ? 'bg-slate-900 text-white' : 'bg-slate-100 text-slate-600')}>CSV Upload</button>
+          </div>
+        </div>
+
+        {teacherAssignView === 'matrix' ? (
+          <TeacherSubjectMatrix
+            subjects={subjects}
+            teachers={teachers.filter(t => t.role === 'teacher')}
+            teachersById={teachersById}
+            onToggle={toggleTeacherSubject}
+          />
+        ) : (
+          <div className="rounded-3xl border border-slate-200 bg-white p-4">
+            <p className="mb-2 text-sm font-semibold text-slate-700">Matrix format: first row = classes, first column = subjects, cells = teacher email</p>
+            <div className="mb-3 rounded-2xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-500">
+              <pre className="whitespace-pre-wrap">,Grade 1-A,Grade 2-A,Grade 3-A<br/>Mathematics,abdirahman@school.edu,,yusuf@school.edu<br/>English,,nasra@school.edu,</pre>
+            </div>
+            <textarea
+              value={teacherAssignCsv}
+              onChange={e => setTeacherAssignCsv(e.target.value)}
+              placeholder="Paste CSV here..."
+              rows={6}
+              className="mb-3 w-full rounded-xl border border-slate-300 p-3 text-sm"
+            />
+            <button
+              onClick={handleTeacherAssignCsv}
+              disabled={uploadingAssign || !teacherAssignCsv.trim()}
+              className="rounded-xl bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-700 disabled:opacity-50"
+            >
+              {uploadingAssign ? 'Uploading...' : 'Assign Subjects'}
+            </button>
+          </div>
+        )}
+      </section>
+
       {renderSlideOver()}
     </div>
   );
@@ -1485,6 +1725,55 @@ const MatrixView = memo(function MatrixView({ classes, subjects, mappingLookup, 
                       <button onClick={() => onCreateMapping(className, subject.id)} className="rounded-lg border border-dashed border-slate-300 px-2 py-1 text-xs font-semibold text-slate-400 hover:border-indigo-300 hover:text-indigo-600">+ Add</button>
                     )}
                     {row?.teacherId && <p className="mt-1 truncate text-[11px] text-slate-400">{teachersById.get(row.teacherId)?.name}</p>}
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+});
+
+const TeacherSubjectMatrix = memo(function TeacherSubjectMatrix({ subjects, teachers, teachersById, onToggle }: {
+  subjects: Subject[];
+  teachers: User[];
+  teachersById: Map<string, User>;
+  onToggle: (teacherId: string, subjectId: string) => void;
+}) {
+  return (
+    <div className="overflow-auto rounded-3xl border border-slate-200">
+      <table className="min-w-full text-sm">
+        <thead className="bg-slate-50">
+          <tr>
+            <th className="sticky left-0 z-10 bg-slate-50 px-4 py-3 text-left font-semibold text-slate-600">Subject</th>
+            {teachers.map(teacher => (
+              <th key={teacher.id} className="min-w-32 px-3 py-3 text-left font-semibold text-slate-600">
+                <span className="truncate">{teacher.name}</span>
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {subjects.map(subject => (
+            <tr key={subject.id} className="border-t border-slate-100">
+              <td className="sticky left-0 z-10 bg-white px-4 py-3 font-semibold text-slate-900">{subject.name}</td>
+              {teachers.map(teacher => {
+                const assigned = (teacher.assignedSubjects || []).includes(subject.id);
+                return (
+                  <td key={`${teacher.id}-${subject.id}`} className="px-3 py-2">
+                    <button
+                      onClick={() => onToggle(teacher.id, subject.id)}
+                      className={cn(
+                        'w-full rounded-xl border px-3 py-1.5 text-xs font-semibold transition-all',
+                        assigned
+                          ? 'border-emerald-200 bg-emerald-50 text-emerald-700 hover:border-red-200 hover:bg-red-50 hover:text-red-600'
+                          : 'border-slate-200 bg-white text-slate-400 hover:border-indigo-200 hover:bg-indigo-50 hover:text-indigo-600'
+                      )}
+                    >
+                      {assigned ? '✓ Assigned' : '+ Add'}
+                    </button>
                   </td>
                 );
               })}

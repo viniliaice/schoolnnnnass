@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { CLASSES, getNextClass } from '../../types';
 import { supabase } from '../../lib/supabase';
-import { promoteStudents, undoPromotion, usePromotionHistory } from '../../lib/db/promotions';
+import { promoteStudents, undoPromotion, usePromotionHistory, promoteAllClasses } from '../../lib/db/promotions';
+import type { PromoteAllOutcome } from '../../lib/db/promotions';
 import { getStudentsByClass } from '../../lib/db/students';
 import { getAcademicYears } from '../../lib/db/academic';
 import { useToast } from '../../context/ToastContext';
@@ -21,6 +22,8 @@ export function ClassPromotion() {
   const [undoing, setUndoing] = useState(false);
   const { history, loading: histLoading, refetch } = usePromotionHistory(selectedYear || undefined);
   const [undoSelection, setUndoSelection] = useState<Set<string>>(new Set());
+  const [promotingAll, setPromotingAll] = useState(false);
+  const [promoteAllResults, setPromoteAllResults] = useState<PromoteAllOutcome | null>(null);
 
   useEffect(() => {
     getAcademicYears()
@@ -185,6 +188,71 @@ export function ClassPromotion() {
           {promoting ? 'Promoting...' : `Promote ${students.length} student(s) to ${toClass}`}
         </button>
       )}
+
+      <div className="border-t border-slate-200 dark:border-slate-700 pt-6">
+        <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-1">Promote All Classes</h2>
+        <p className="text-sm text-slate-500 dark:text-slate-400 mb-3">
+          Promote every class to its next grade level. Grade 12 / Year 12 students are marked as Graduated.
+        </p>
+        <button
+          onClick={async () => {
+            if (!window.confirm('Promote ALL classes to their next grade level? Already-promoted classes are committed — undo individual classes from history below.')) return;
+            setPromotingAll(true);
+            setPromoteAllResults(null);
+            try {
+              const outcome = await promoteAllClasses(selectedYear || undefined);
+              setPromoteAllResults(outcome);
+              setFromClass('');
+              setToClass('');
+              setStudents([]);
+              await refetch();
+              if (outcome.promoted.length > 0) {
+                addToast({ type: 'success', title: 'Bulk Promotion Complete', description: `${outcome.promoted.reduce((s, r) => s + r.count, 0)} student(s) promoted` });
+              }
+            } catch (err: any) {
+              addToast({ type: 'error', title: 'Bulk Promotion Failed', description: err.message });
+            } finally {
+              setPromotingAll(false);
+            }
+          }}
+          disabled={promotingAll}
+          className="px-6 py-2.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 text-sm font-medium"
+        >
+          {promotingAll ? 'Promoting All...' : 'Promote All Classes'}
+        </button>
+
+        {promoteAllResults && promoteAllResults.promoted.length > 0 && (
+          <div className="mt-4 p-4 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-lg">
+            <h3 className="text-sm font-semibold text-emerald-800 dark:text-emerald-300 mb-2">
+              Promotion Complete — {promoteAllResults.promoted.reduce((sum, r) => sum + r.count, 0)} students promoted
+            </h3>
+            <div className="max-h-48 overflow-y-auto space-y-1">
+              {promoteAllResults.promoted.map(r => (
+                <div key={r.fromClass} className="text-sm text-emerald-700 dark:text-emerald-400">
+                  {r.fromClass} → {r.toClass}: {r.count} student{r.count !== 1 ? 's' : ''}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {promoteAllResults && promoteAllResults.failed.length > 0 && (
+          <div className="mt-2 p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
+            <h3 className="text-sm font-semibold text-red-800 dark:text-red-300 mb-2">
+              Failed — {promoteAllResults.failed.length} class(es) could not be promoted
+            </h3>
+            <div className="space-y-1">
+              {promoteAllResults.failed.map(f => (
+                <div key={f} className="text-sm text-red-700 dark:text-red-400">{f}</div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {promoteAllResults && promoteAllResults.promoted.length === 0 && promoteAllResults.failed.length === 0 && (
+          <p className="mt-2 text-sm text-slate-500">No classes found to promote.</p>
+        )}
+      </div>
 
       <div>
         <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-3">Promotion History</h2>

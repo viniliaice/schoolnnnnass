@@ -21,6 +21,14 @@ returns table(promoted_id text, student_name text, old_class text, new_class tex
 language plpgsql
 as $$
 begin
+  -- Prevent re-promoting a class that has already been promoted this academic year
+  if exists (
+    select 1 from student_promotions
+    where "fromClass" = from_class and "academicYearId" = academic_year_id
+  ) then
+    raise exception 'Class "%" has already been promoted this academic year', from_class;
+  end if;
+
   return query
   with updated as (
     update students

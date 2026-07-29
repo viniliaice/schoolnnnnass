@@ -52,6 +52,17 @@ export function useUnitPlan(id: string | null) {
   });
 }
 
+export function useUnitPlanByClassSubjectTerm(className: string | null, subjectId: string | null, termId: string | null) {
+  return useQuery({
+    queryKey: ['unitPlan', 'auto', className, subjectId, termId],
+    queryFn: () => {
+      if (!className || !subjectId || !termId) return null;
+      return unitPlansDb.fetchUnitPlanByClassSubjectTerm(className, subjectId, termId);
+    },
+    enabled: !!className && !!subjectId && !!termId,
+  });
+}
+
 export function useCreateUnitPlan() {
   const queryClient = useQueryClient();
   const { session } = useRole();

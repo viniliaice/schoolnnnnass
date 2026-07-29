@@ -94,19 +94,24 @@ export function UploadResults() {
 
   const loadStudents = useCallback(async () => {
     if (!selectedClass) return;
-    const students = await getStudentsByClasses([selectedClass]);
-    // Ensure students are in alphabetical order by name for easier entry
-    const sorted = (students || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-    setStudentScores(
-      sorted.map(s => ({
-        studentId: s.id,
-        studentName: s.name,
-        className: s.className,
-        parentId: s.parentId,
-        score: '',
-        included: true,
-      }))
-    );
+    try {
+      const students = await getStudentsByClasses([selectedClass]);
+      const sorted = (students || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+      setStudentScores(
+        sorted.map(s => ({
+          studentId: s.id,
+          studentName: s.name,
+          className: s.className,
+          parentId: s.parentId,
+          score: '',
+          included: true,
+        }))
+      );
+    } catch (err) {
+      console.error('Failed to load students:', err);
+      addToast({ type: 'error', title: 'Failed to load students' });
+      setStudentScores([]);
+    }
   }, [selectedClass]);
 
   // When selectedClass changes, update subjects to only those mapped for this teacher/class

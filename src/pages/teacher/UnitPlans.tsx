@@ -4,7 +4,7 @@ import { useToast } from '../../context/ToastContext';
 import { useQuery } from '@tanstack/react-query';
 import { useUnitPlans, useCreateUnitPlan, useUpdateUnitPlan, useDeleteUnitPlan } from '../../lib/hooks/useUnitPlans';
 import { getSubjects } from '../../lib/db/subjects';
-import { getClasses } from '../../lib/db/classes';
+import { getClasses, getClassSubjectsForTeacher } from '../../lib/db/classes';
 import { getUserById } from '../../lib/db/profiles';
 import { getTerms } from '../../lib/db/academic';
 import type { UnitPlan, UnitPlanInput, Term, Subject } from '../../types';
@@ -20,17 +20,6 @@ export function UnitPlans() {
   const updateMutation = useUpdateUnitPlan();
   const deleteMutation = useDeleteUnitPlan();
 
-  const [classes, setClasses] = useState<string[]>([]);
-  const [terms, setTerms] = useState<Term[]>([]);
-  const { data: subjects } = useQuery({
-    queryKey: ['subjects'],
-    queryFn: getSubjects,
-    staleTime: 1000 * 60 * 10,
-  });
-
-  const [editingUnit, setEditingUnit] = useState<UnitPlan | null>(null);
-  const [showForm, setShowForm] = useState(false);
-
   const [form, setForm] = useState<UnitPlanInput>({
     name: '',
     subject_id: '',
@@ -40,6 +29,23 @@ export function UnitPlans() {
     week_number_end: 1,
     objectives: '',
   });
+
+  const [classes, setClasses] = useState<string[]>([]);
+  const [terms, setTerms] = useState<Term[]>([]);
+  const { data: subjects } = useQuery({
+    queryKey: ['subjects'],
+    queryFn: getSubjects,
+    staleTime: 1000 * 60 * 10,
+  });
+  const { data: teacherSubjects } = useQuery({
+    queryKey: ['teacher-subjects', session?.userId, form.class_name],
+    queryFn: () => getClassSubjectsForTeacher(session!.userId, form.class_name || undefined),
+    enabled: !!session && (session.role === 'teacher' || session.role === 'supervisor'),
+    staleTime: 1000 * 60 * 10,
+  });
+
+  const [editingUnit, setEditingUnit] = useState<UnitPlan | null>(null);
+  const [showForm, setShowForm] = useState(false);
 
   useEffect(() => {
     if (!session) return;
@@ -155,7 +161,7 @@ export function UnitPlans() {
               <select value={form.subject_id} onChange={e => setForm({ ...form, subject_id: e.target.value })}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500">
                 <option value="">Select subject...</option>
-                {subjects?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                {(session?.role === 'teacher' || session?.role === 'supervisor' ? teacherSubjects : subjects)?.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
               </select>
             </div>
             <div>

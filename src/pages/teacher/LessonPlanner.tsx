@@ -2,13 +2,14 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
 import { useTeacherPlans, useCreatePlan, useSavePeriods, useSubmitForReview, usePlanWithPeriods, useReview } from '../../lib/hooks/useLessonPlans';
-import { useUnitPlan } from '../../lib/hooks/useUnitPlans';
 import { DayOfWeek, DAYS_OF_WEEK, LessonPlanPeriod, PeriodActivity, Subject, AcademicYear } from '../../types';
-import { Loader2, Send, Save, BookOpen, FileText, Clock, History } from 'lucide-react';
+import { Loader2, Send, Save, BookOpen, FileText, Clock, History, Upload, FileSpreadsheet } from 'lucide-react';
+import * as XLSX from 'xlsx';
 import { cn } from '../../utils/cn';
 import { getUserById } from '../../lib/db/profiles';
 import { getClassSubjectsForTeacher } from '../../lib/db/classes';
-import { getCurrentAcademicYear } from '../../lib/db/academic';
+import { getCurrentAcademicYear, getCurrentTerm } from '../../lib/db/academic';
+import { fetchUnitPlanByClassSubjectTerm } from '../../lib/db/unitPlans';
 import { PlanHistoryTable } from './PlanHistoryTable';
 import { PlanHeader } from '../../components/lesson-planner/PlanHeader';
 import { PlanConfigBar } from '../../components/lesson-planner/PlanConfigBar';
@@ -26,6 +27,31 @@ function getWeekLabel(date: Date, academicYearStart?: string): string {
   if (diffDays < 0) return `${start.getFullYear()}-W00`;
   const weekNum = Math.floor(diffDays / 7) + 1;
   return `${start.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+}
+
+function getWeekDateRange(academicYearStart: string, weekOffset: number): { dates: string[]; startDate: string; endDate: string } {
+  const baseDate = new Date(academicYearStart);
+  baseDate.setHours(0, 0, 0, 0);
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  const diffDays = Math.floor((now.getTime() - baseDate.getTime()) / 86400000);
+  const currentWeek = Math.floor(diffDays / 7);
+  const targetWeek = currentWeek + weekOffset;
+  const weekStart = new Date(baseDate);
+  weekStart.setDate(weekStart.getDate() + targetWeek * 7);
+  const dates: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    const d = new Date(weekStart);
+    d.setDate(d.getDate() + i);
+    dates.push(`${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`);
+  }
+  const formatShort = (d: Date) => {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return `${d.getDate()} ${months[d.getMonth()]}`;
+  };
+  const weekEnd = new Date(weekStart);
+  weekEnd.setDate(weekEnd.getDate() + 4);
+  return { dates, startDate: formatShort(weekStart), endDate: formatShort(weekEnd) };
 }
 
 interface PeriodCell {
@@ -92,6 +118,7 @@ function periodsFromDb(periods: LessonPlanPeriod[], periodCount: number): Period
 export function LessonPlanner() {
   const { session } = useRole();
   const { addToast } = useToast();
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isSubmittingRef = useRef(false);
 
@@ -104,12 +131,12 @@ export function LessonPlanner() {
   const [teacherClasses, setTeacherClasses] = useState<string[]>([]);
   const [subjects, setSubjects] = useState<Subject[]>([]);
   const [planId, setPlanId] = useState<string | null>(null);
-  const [selectedUnitId, setSelectedUnitId] = useState('');
   const [periods, setPeriods] = useState<PeriodCell[]>(() => createEmptyPeriods(5));
   const [isDirty, setIsDirty] = useState(false);
+  const [selectedWeekOffset, setSelectedWeekOffset] = useState(0);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
 
   const { data: existingPlans } = useTeacherPlans(session?.userId);
-  const { data: selectedUnit } = useUnitPlan(selectedUnitId || null);
   const { data: planWithPeriods } = usePlanWithPeriods(planId || undefined);
   const { data: review } = useReview(planId || undefined);
   const createPlanMut = useCreatePlan();
@@ -249,9 +276,23 @@ export function LessonPlanner() {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     try {
       await savePeriodsMut.mutateAsync({ plan_id: planId, periods: periodsForSave });
-      const unitContext = selectedUnit
-        ? { name: selectedUnit.name, objectives: selectedUnit.objectives }
-        : undefined;
+
+      // Auto-resolve unit plan at submit time (fresh — not cached from mount)
+      const subjectsSet = new Set(
+        periodsForSave.filter((p) => !p.is_free && p.subject).map((p) => p.subject)
+      );
+      const subjectId = subjectsSet.size === 1 ? [...subjectsSet][0] : null;
+      let unitContext: { name: string; objectives: string } | undefined;
+      if (subjectId) {
+        const currentTerm = await getCurrentTerm();
+        if (currentTerm) {
+          const matchedUnit = await fetchUnitPlanByClassSubjectTerm(className, subjectId, currentTerm.id);
+          if (matchedUnit) {
+            unitContext = { name: matchedUnit.name, objectives: matchedUnit.objectives };
+          }
+        }
+      }
+
       await submitMut.mutateAsync({ planId, periods: periodsForSave, unitContext });
       addToast({ type: 'success', title: 'Submitted for AI review' });
     } catch (err: any) {
@@ -259,7 +300,7 @@ export function LessonPlanner() {
     } finally {
       isSubmittingRef.current = false;
     }
-  }, [planId, periods, periodsForSave, savePeriodsMut, submitMut, addToast, selectedUnit]);
+  }, [planId, periods, periodsForSave, savePeriodsMut, submitMut, addToast, className]);
 
   const handleSelectFromHistory = useCallback((selectedPlanId: string) => {
     setPlanId(selectedPlanId);
@@ -268,8 +309,123 @@ export function LessonPlanner() {
 
   const handleNewPlan = useCallback(() => {
     setPlanId(null);
-    setSelectedUnitId('');
+    setUploadedFileName(null);
   }, []);
+
+  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadedFileName(file.name);
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target!.result as ArrayBuffer);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const rows: Record<string, string>[] = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+        const subjectMap = new Map(subjects.map((s) => [s.name.toLowerCase().trim(), s.id]));
+
+        const parseDay = (raw: unknown): DayOfWeek | null => {
+          if (!raw && raw !== 0) return null;
+          let d: Date;
+          if (raw instanceof Date) {
+            d = raw;
+          } else if (typeof raw === 'number') {
+            const dc = XLSX.SSF.parse_date_code(raw);
+            if (!dc) return null;
+            d = new Date(dc.y, dc.m - 1, dc.d);
+          } else if (typeof raw === 'string') {
+            const parts = raw.split('/');
+            if (parts.length === 3) {
+              d = new Date(Number(parts[2]), Number(parts[1]) - 1, Number(parts[0]));
+            } else {
+              d = new Date(raw);
+            }
+          } else {
+            return null;
+          }
+          if (isNaN(d.getTime())) return null;
+          const dayOfWeek = d.getDay();
+          return DAYS_OF_WEEK[dayOfWeek === 6 ? 0 : dayOfWeek + 1];
+        };
+
+        const parseActivities = (row: Record<string, string>): PeriodActivity[] => {
+          const activities: PeriodActivity[] = [];
+          for (let i = 1; i <= 5; i++) {
+            const activity = row[`Activity ${i}`] || row[`activity ${i}`] || '';
+            const time = row[`Time ${i}`] || row[`time ${i}`] || '';
+            const resource = row[`Resource ${i}`] || row[`resource ${i}`] || '';
+            const place = row[`Place/url ${i}`] || row[`place/url ${i}`] || '';
+            if (activity.trim()) {
+              activities.push({ activity: activity.trim(), time: String(time).trim(), resource: String(resource).trim(), place: String(place).trim() });
+            }
+          }
+          return activities;
+        };
+
+        const cells: PeriodCell[] = [];
+        const uniquePeriods = new Set<number>();
+
+        for (const row of rows) {
+          const periodNum = Number(row['Period'] ?? row['period'] ?? 0);
+          if (!periodNum || periodNum < 1) continue;
+          const day = parseDay(row['Date'] ?? row['date'] ?? '');
+          if (!day) continue;
+
+          const subjectRaw = (row['Subject'] ?? row['subject'] ?? '').trim();
+          const isFree = subjectRaw.toUpperCase() === 'FREE' || subjectRaw === '';
+
+          uniquePeriods.add(periodNum);
+
+          cells.push({
+            day,
+            period_number: periodNum,
+            subject: isFree ? '' : (subjectMap.get(subjectRaw.toLowerCase()) || subjectRaw),
+            className: className || '',
+            isFree,
+            topic: (row['Topic'] ?? row['topic'] ?? '').trim(),
+            objective: (row['Objective'] ?? row['objective'] ?? '').trim(),
+            slide_number: String(row['Weekly Slide Number'] ?? row['weekly slide number'] ?? '').trim(),
+            details: parseActivities(row),
+          });
+        }
+
+        if (cells.length === 0) {
+          addToast({ type: 'error', title: 'No valid rows found', description: 'Check that the file has Date, Period, and Subject columns.' });
+          return;
+        }
+
+        const cellMap = new Map<string, PeriodCell>();
+        for (const cell of cells) {
+          cellMap.set(`${cell.day}-${cell.period_number}`, cell);
+        }
+
+        const maxPeriods = Math.max(5, Math.max(...uniquePeriods));
+        const newPeriods: PeriodCell[] = [];
+        for (const day of DAYS_OF_WEEK) {
+          for (let p = 1; p <= maxPeriods; p++) {
+            const match = cellMap.get(`${day}-${p}`);
+            newPeriods.push(match || { day, period_number: p, subject: '', className: '', isFree: false, topic: '', objective: '', slide_number: '', details: [] });
+          }
+        }
+
+        setPeriodCount(maxPeriods);
+        setPeriods(newPeriods);
+        setIsDirty(true);
+        addToast({ type: 'success', title: `${cells.length} periods imported from Excel` });
+      } catch (err: any) {
+        addToast({ type: 'error', title: 'Failed to parse Excel', description: err.message });
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = '';
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }, [subjects, className, addToast]);
+
+  const { dates: weekDates, startDate: weekStartDate, endDate: weekEndDate } =
+    academicYear ? getWeekDateRange(academicYear.startDate, selectedWeekOffset)
+                : { dates: [] as string[], startDate: '', endDate: '' };
 
   const loading = createPlanMut.isPending || savePeriodsMut.isPending || submitMut.isPending;
 
@@ -318,8 +474,10 @@ export function LessonPlanner() {
           teacherClasses={teacherClasses}
           onCreate={handleCreateOrSelectPlan}
           loading={loading}
-          unitId={selectedUnitId}
-          setUnitId={setSelectedUnitId}
+          weekStartDate={weekStartDate}
+          weekEndDate={weekEndDate}
+          onPrevWeek={() => setSelectedWeekOffset((o) => o - 1)}
+          onNextWeek={() => setSelectedWeekOffset((o) => o + 1)}
         />
       )}
 
@@ -332,18 +490,75 @@ export function LessonPlanner() {
             periodCount={periodCount}
             setPeriodCount={setPeriodCount}
             weekLabel={weekLabel}
+            weekStartDate={weekStartDate}
+            weekEndDate={weekEndDate}
+            onPrevWeek={() => setSelectedWeekOffset((o) => o - 1)}
+            onNextWeek={() => setSelectedWeekOffset((o) => o + 1)}
           />
+          {/* Excel/CSV upload */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv"
+            onChange={handleFileUpload}
+            className="hidden"
+          />
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-300 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+            >
+              <Upload className="w-4 h-4" />
+              Upload from Excel
+            </button>
+            <span className="text-xs text-slate-400">Supports .xlsx, .xls, .csv</span>
+            {uploadedFileName && (
+              <span className="flex items-center gap-1 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-2 py-1">
+                <FileSpreadsheet className="w-3.5 h-3.5" />
+                {uploadedFileName}
+              </span>
+            )}
+            <button
+              onClick={() => {
+                setPeriods(createEmptyPeriods(periodCount));
+                setUploadedFileName(null);
+                setIsDirty(true);
+              }}
+              className="ml-auto flex items-center gap-1.5 px-3 py-2 rounded-xl text-sm font-medium text-rose-600 hover:bg-rose-50 transition-colors"
+            >
+              Clear All
+            </button>
+          </div>
           <PlanGrid
             periods={periods}
             periodCount={periodCount}
             teacherClasses={teacherClasses}
             subjects={subjects}
             planClassName={className}
+            weekDates={weekDates}
             onUpdateCell={updateCell}
             onUpdateActivity={updateActivity}
             onAddActivity={addActivity}
             onRemoveActivity={removeActivity}
           />
+
+          {/* Bottom navigation */}
+          <div className="flex items-center justify-between pt-4 border-t border-slate-200">
+            <button
+              onClick={() => setTab('history')}
+              className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium text-slate-600 hover:bg-slate-100 transition-colors"
+            >
+              <span>&larr;</span>
+              Back to History
+            </button>
+            <button
+              onClick={() => setTab('review')}
+              className="flex items-center gap-2 px-5 py-2 rounded-xl text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 transition-colors"
+            >
+              Proceed to Review
+              <span>&rarr;</span>
+            </button>
+          </div>
         </>
       )}
 

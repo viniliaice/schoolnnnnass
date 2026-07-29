@@ -12,7 +12,7 @@ export const MONTHS = [
 
 export const CLASSES = [
   // Kindergarten
-  'Foundation A','Foundation c','Foundation D', 'Foundation B',
+  'Foundation A','Foundation C','Foundation D', 'Foundation B',
   'KG-A', 'KG-B', 'KG-C','KG-D','KG-E',
 
   // Primary School (Grades 1-6)
@@ -477,16 +477,16 @@ const YEAR12_PATTERN = /^Year\s+12-([A-Z])$/i;
 export function getNextClass(currentClass: string): string | null {
   const trimmed = currentClass.trim();
 
-  // Foundation -> KG (same section)
-  const foundationMatch = trimmed.match(FOUNDATION_PATTERN);
-  if (foundationMatch) {
-    return `KG-${foundationMatch[1].toUpperCase()}`;
-  }
-
-  // KG -> Grade 1 (same section)
+  // KG -> Foundation (same section)
   const kgMatch = trimmed.match(KG_PATTERN);
   if (kgMatch) {
-    return `Grade 1-${kgMatch[1].toUpperCase()}`;
+    return `Foundation ${kgMatch[1].toUpperCase()}`;
+  }
+
+  // Foundation -> Grade 1 (same section)
+  const foundationMatch = trimmed.match(FOUNDATION_PATTERN);
+  if (foundationMatch) {
+    return `Grade 1-${foundationMatch[1].toUpperCase()}`;
   }
 
   // Grade N -> Grade N+1 (same section)

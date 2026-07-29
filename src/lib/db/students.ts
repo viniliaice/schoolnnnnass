@@ -85,8 +85,22 @@ export async function getStudentsByClasses(classnames: string[], search?: string
     query = query.ilike('name', `%${search}%`);
   }
 
-  const { data, error } = await query.limit(limit);
+  const { data, error, count } = await query.limit(limit);
+  console.debug('[getStudentsByClasses] classnames:', classnames, 'rows:', data?.length ?? 0, 'error:', error);
   if (error) throw error;
+
+  // DEBUG: also fetch all students (no filter) to see what's in the table
+  const { data: allStudents } = await supabase.from('students').select('className', { count: 'exact' }).limit(5);
+  console.debug('[getStudentsByClasses] sample of 5 students in DB:', allStudents);
+
+  // DEBUG: check teacher's role and assignedClasses from profile
+  const { data: profile } = await supabase.from('profiles').select('role,assignedClasses').limit(1);
+  console.debug('[getStudentsByClasses] current user profile:', profile);
+
+  // DEBUG: check if the RLS role-check function returns teacher
+  const { data: roleCheck } = await supabase.rpc('current_profile_role');
+  console.debug('[getStudentsByClasses] current_profile_role():', roleCheck);
+
   return (data || []) as Student[];
 }
 

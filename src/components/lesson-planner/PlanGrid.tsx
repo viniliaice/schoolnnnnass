@@ -22,6 +22,7 @@ interface PlanGridProps {
   teacherClasses: string[];
   subjects: Subject[];
   planClassName: string;
+  weekDates: string[];
   onUpdateCell: (day: DayOfWeek, periodNumber: number, field: string, value: any) => void;
   onUpdateActivity: (day: DayOfWeek, periodNumber: number, activityIndex: number, field: 'activity' | 'time' | 'resource' | 'place', value: string) => void;
   onAddActivity: (day: DayOfWeek, periodNumber: number) => void;
@@ -34,6 +35,7 @@ export function PlanGrid({
   teacherClasses,
   subjects,
   planClassName,
+  weekDates,
   onUpdateCell,
   onUpdateActivity,
   onAddActivity,
@@ -46,8 +48,11 @@ export function PlanGrid({
           <thead>
             <tr className="bg-slate-50 border-b border-slate-200">
               <th className="p-2.5 text-left font-semibold text-slate-700 w-12">#</th>
-              {DAYS_OF_WEEK.map((day) => (
-                <th key={day} className="p-2.5 text-left font-semibold text-slate-700 min-w-[300px] border-l border-slate-200">{day}</th>
+              {DAYS_OF_WEEK.map((day, i) => (
+                <th key={day} className="p-2.5 text-left font-semibold text-slate-700 min-w-[300px] border-l border-slate-200">
+                  <div>{day}</div>
+                  <div className="text-xs font-normal text-slate-400 mt-0.5">{weekDates[i] || ''}</div>
+                </th>
               ))}
             </tr>
           </thead>

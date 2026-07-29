@@ -1,6 +1,4 @@
-import { Loader2, BookOpen } from 'lucide-react';
-import { cn } from '../../utils/cn';
-import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
+import { Loader2, BookOpen, ChevronLeft, ChevronRight } from 'lucide-react';
 
 interface CreatePlanFormProps {
   className: string;
@@ -12,8 +10,10 @@ interface CreatePlanFormProps {
   teacherClasses: string[];
   onCreate: () => void;
   loading: boolean;
-  unitId: string;
-  setUnitId: (value: string) => void;
+  weekStartDate: string;
+  weekEndDate: string;
+  onPrevWeek: () => void;
+  onNextWeek: () => void;
 }
 
 export function CreatePlanForm({
@@ -26,11 +26,11 @@ export function CreatePlanForm({
   teacherClasses,
   onCreate,
   loading,
-  unitId,
-  setUnitId,
+  weekStartDate,
+  weekEndDate,
+  onPrevWeek,
+  onNextWeek,
 }: CreatePlanFormProps) {
-  const { data: unitPlans = [] } = useUnitPlansByClass(className || null);
-
   return (
     <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
       <div className="flex items-center gap-3 mb-6">
@@ -68,6 +68,25 @@ export function CreatePlanForm({
           </select>
         </div>
       </div>
+
+      <div className="flex items-center justify-center gap-3">
+        <button
+          onClick={onPrevWeek}
+          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors"
+        >
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <span className="text-sm font-semibold text-slate-700 min-w-[140px] text-center">
+          {weekStartDate} — {weekEndDate}
+        </span>
+        <button
+          onClick={onNextWeek}
+          className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500 hover:text-slate-700 transition-colors"
+        >
+          <ChevronRight className="w-5 h-5" />
+        </button>
+      </div>
+
       <div>
         <label className="block text-sm font-medium text-slate-700 mb-1">Title (optional)</label>
         <input
@@ -76,20 +95,6 @@ export function CreatePlanForm({
           placeholder="e.g. Week 31 - Math - Fractions"
           className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
         />
-      </div>
-      <div>
-        <label className="block text-sm font-medium text-slate-700 mb-1">Unit (optional)</label>
-        <select
-          value={unitId}
-          onChange={(e) => setUnitId(e.target.value)}
-          className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
-          disabled={!className}
-        >
-          <option value="">No unit</option>
-          {unitPlans.map((u) => (
-            <option key={u.id} value={u.id}>{u.name}</option>
-          ))}
-        </select>
       </div>
       <button
         onClick={onCreate}
