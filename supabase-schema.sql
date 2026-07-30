@@ -34,7 +34,7 @@ CREATE TABLE exams (
   subject TEXT NOT NULL,
   score INTEGER NOT NULL,
   total INTEGER NOT NULL,
-  "examType" TEXT NOT NULL CHECK ("examType" IN ('CA', 'Homework', 'Classwork', 'Quiz', 'Midterm', 'Final')),
+  "examType" TEXT NOT NULL CHECK ("examType" IN ('CA', 'Homework', 'Classwork', 'Quiz', 'Midterm', 'Final', 'Attendance', 'Discipline')),
   month TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
   "parentId" TEXT REFERENCES profiles(id) ON DELETE SET NULL,

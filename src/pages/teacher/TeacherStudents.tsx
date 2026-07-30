@@ -21,22 +21,24 @@ export function TeacherStudents() {
     if (!session) return;
 
     const loadData = async () => {
-      const teacher = await getUserById(session.userId);
-      const cls = teacher?.assignedClasses || [];
-      setClasses(cls);
+      try {
+        const teacher = await getUserById(session.userId);
+        const cls = teacher?.assignedClasses || [];
+        console.debug('[TeacherStudents] teacherId:', session.userId, 'assignedClasses:', cls);
+        setClasses(cls);
 
-      // Fetch students and a base parents list, then ensure any parentIds
-      // referenced by students are included even if missing from the paged
-      // users query (helps when some parent profiles exist only in auth
-      // or the users table is out-of-sync).
         const studentsData = await getStudentsByClasses(cls);
-      const parentIdsFromStudents = Array.from(
-        new Set((studentsData || []).map((s: Student) => s.parentId).filter((x): x is string => !!x))
-      );
+        const parentIdsFromStudents = Array.from(
+          new Set((studentsData || []).map((s: Student) => s.parentId).filter((x): x is string => !!x))
+        );
 
-      const parentsList = parentIdsFromStudents.length > 0 ? await getUsersByIds(parentIdsFromStudents) : [];
-      setStudents(studentsData);
-      setParents(parentsList);
+        const parentsList = parentIdsFromStudents.length > 0 ? await getUsersByIds(parentIdsFromStudents) : [];
+        setStudents(studentsData);
+        setParents(parentsList);
+      } catch (err) {
+        console.error('Failed to load students:', err);
+        addToast({ type: 'error', title: 'Failed to load students' });
+      }
     };
 
     loadData();

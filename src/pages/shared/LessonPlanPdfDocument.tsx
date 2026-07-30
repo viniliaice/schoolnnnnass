@@ -26,7 +26,7 @@ const styles = StyleSheet.create({
   cellActivities: { fontSize: 8, color: '#64748b', marginTop: 1 },
   cellSlide: { fontSize: 7, color: '#94a3b8', marginTop: 1 },
   scoreGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 4 },
-  scoreItem: { width: '19%', backgroundColor: '#f8fafc', padding: 6, marginBottom: 4 },
+  scoreItem: { width: '20%', backgroundColor: '#f8fafc', padding: 6, marginBottom: 4 },
   scoreLabel: { fontSize: 8, color: '#64748b', marginBottom: 2, textTransform: 'capitalize' },
   scoreValue: { fontSize: 14, fontWeight: 'bold' },
   scoreExplanation: { fontSize: 7, color: '#94a3b8', marginTop: 2 },

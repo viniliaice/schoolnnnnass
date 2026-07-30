@@ -20,6 +20,7 @@ import { MonitorTeachers } from './pages/admin/MonitorTeachers';
 import { ClassProgress } from './pages/admin/ClassProgress';
 import { ClassAnnouncements } from './pages/admin/ClassAnnouncements';
 import { ClassPromotion } from './pages/admin/ClassPromotion';
+import { AiReviewLogs } from './pages/admin/AiReviewLogs';
 
 // Supervisor Pages
 import { SupervisorDashboard } from './pages/supervisor/SupervisorDashboard';
@@ -28,6 +29,7 @@ import { SupervisorDashboard } from './pages/supervisor/SupervisorDashboard';
 import { TeacherDashboard } from './pages/teacher/TeacherDashboard';
 import { TeacherStudents } from './pages/teacher/TeacherStudents';
 import { UploadResults } from './pages/teacher/UploadResults';
+import { BulkUploadGrades } from './pages/teacher/BulkUploadGrades';
 import { AllResults } from './pages/teacher/AllResults';
 import { RecordAttendance } from './pages/teacher/RecordAttendance';
 import { AssignHomework } from './pages/teacher/AssignHomework';
@@ -85,8 +87,10 @@ function AppContent() {
             case '/admin/students': return <ManageStudents />;
             case '/admin/academic': return <ManageAcademic />;
             case '/admin/bulk': return <BulkUpload />;
+            case '/admin/bulk-grades': return <BulkUploadGrades />;
             case '/admin/exams': return <ExamVerification />;
             case '/admin/monitor': return <MonitorTeachers />;
+            case '/admin/ai-logs': return <AiReviewLogs />;
             case '/admin/class-progress': return <ClassProgress />;
             case '/admin/exam-reports': return <ExamReport />;
             case '/admin/announcements': return <ClassAnnouncements />;
@@ -126,7 +130,8 @@ function AppContent() {
           switch (currentPath) {
             case '/dashboard': return <TeacherDashboard navigate={navigate} />;
             case '/teacher/students': return <TeacherStudents />;
-            case '/teacher/results': return <UploadResults />;
+            case '/teacher/results': return <UploadResults navigate={navigate} />;
+            case '/teacher/bulk-grades': return <BulkUploadGrades />;
             case '/teacher/all-results': return <AllResults />;
             case '/teacher/exam-reports': return <ExamReport />;
             case '/teacher/announcements': return <ClassAnnouncements />;

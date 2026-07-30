@@ -15,6 +15,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   const addToast = useCallback((toast: Omit<ToastMessage, 'id'>) => {
     const id = Date.now().toString(36) + Math.random().toString(36).substring(2);
     const newToast: ToastMessage = { ...toast, id };
+    console.log('[Toast]', toast.type, toast.title, toast.description);
     setToasts(prev => [...prev, newToast]);
     if (toast.type !== 'loading') {
       setTimeout(() => {

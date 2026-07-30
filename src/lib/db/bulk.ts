@@ -2,16 +2,37 @@ import { supabase } from '../supabase';
 import { ClassSubject, Exam, Student, User } from '../../types';
 
 export async function bulkCreateUsers(dataList: Omit<User, 'id' | 'createdAt'>[]): Promise<User[]> {
-  const users = dataList.map(data => {
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 8);
-    const id = `${data.role}-${timestamp}-${random}`;
-    return { id, ...data, createdAt: new Date().toISOString() };
-  });
+  const created: User[] = [];
+  const errors: string[] = [];
 
-  const { data, error } = await supabase.from('profiles').insert(users).select();
-  if (error) throw error;
-  return data || [];
+  for (const data of dataList) {
+    try {
+      const { password, ...rest } = data;
+      if (!password) throw new Error('Password is required');
+
+      const { data: authData, error: authError } = await supabase.auth.signUp({
+        email: data.email,
+        password,
+      });
+      if (authError) throw authError;
+      if (!authData.user) throw new Error('Failed to create auth user');
+
+      const id = `${data.role}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
+      const { data: profile, error: profileError } = await supabase
+        .from('profiles')
+        .insert({ id, ...rest, auth_id: authData.user.id, createdAt: new Date().toISOString() })
+        .select()
+        .single();
+      if (profileError) throw profileError;
+      created.push(profile as User);
+    } catch (err) {
+      errors.push(`${data.email}: ${String(err)}`);
+    }
+  }
+
+  if (errors.length > 0) throw new Error(`Bulk user creation errors:\n${errors.join('\n')}`);
+  return created;
 }
 
 export async function bulkCreateStudents(dataList: Omit<Student, 'id' | 'createdAt'>[]): Promise<Student[]> {
@@ -71,6 +92,7 @@ export async function bulkCreateTeachersWithAssignments(
 
   for (const entry of entries) {
     try {
+      console.log('[bulkCreateTeachersWithAssignments] Processing entry:', entry.name, entry.email);
       // Check if teacher with this email already exists
       const { data: existing } = await supabase
         .from('profiles')
@@ -78,9 +100,13 @@ export async function bulkCreateTeachersWithAssignments(
         .ilike('email', entry.email)
         .maybeSingle();
 
+      console.log('[bulkCreateTeachersWithAssignments] Existing check for', entry.email, ':', existing);
+
       if (existing) {
+        console.log('[bulkCreateTeachersWithAssignments] Teacher already exists, skipping:', entry.email);
         skippedTeachers.push(`${entry.name} (${entry.email}) — already exists`);
         // Still try to create assignments with the existing teacher
+        console.log('[bulkCreateTeachersWithAssignments] Creating assignments for existing teacher:', existing.id);
         for (const className of entry.assignedClasses) {
           for (const subjectId of entry.assignedSubjects) {
             const { data: existingMapping } = await supabase
@@ -91,6 +117,7 @@ export async function bulkCreateTeachersWithAssignments(
               .maybeSingle();
 
             if (existingMapping) {
+              console.log('[bulkCreateTeachersWithAssignments] Updating existing class_subject:', existingMapping.id, 'with teacherId:', existing.id);
               await supabase
                 .from('class_subjects')
                 .update({ teacherId: existing.id })
@@ -109,8 +136,10 @@ export async function bulkCreateTeachersWithAssignments(
                 .select()
                 .single();
               if (csErr) {
+                console.warn('[bulkCreateTeachersWithAssignments] Assignment insert failed for existing teacher:', className, subjectId, csErr);
                 skippedAssignments.push(`${className} / ${subjectId}`);
               } else if (csRow) {
+                console.log('[bulkCreateTeachersWithAssignments] Assignment created for existing teacher:', csRow);
                 assignments.push(csRow);
               }
             }
@@ -123,12 +152,15 @@ export async function bulkCreateTeachersWithAssignments(
       const teacherId = `teacher-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
       // Create auth user
+      console.log('[bulkCreateTeachersWithAssignments] Creating auth user for:', entry.email);
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email: entry.email,
         password: entry.password,
       });
+      console.log('[bulkCreateTeachersWithAssignments] Auth signup result:', { authData, authError });
       if (authError) throw authError;
 
+      console.log('[bulkCreateTeachersWithAssignments] Creating profile for:', entry.name);
       const { data: profileData, error: profileError } = await supabase
         .from('profiles')
         .insert({
@@ -143,10 +175,15 @@ export async function bulkCreateTeachersWithAssignments(
         })
         .select()
         .single();
-      if (profileError) throw profileError;
+      if (profileError) {
+        console.error('[bulkCreateTeachersWithAssignments] Profile insert error:', profileError);
+        throw profileError;
+      }
+      console.log('[bulkCreateTeachersWithAssignments] Profile created:', profileData);
       teachers.push(profileData as User);
 
       // Create class-subject mappings
+      console.log('[bulkCreateTeachersWithAssignments] Creating assignments for:', entry.name, 'classes:', entry.assignedClasses, 'subjects:', entry.assignedSubjects);
       for (const className of entry.assignedClasses) {
         for (const subjectId of entry.assignedSubjects) {
           const { data: existingMapping } = await supabase
@@ -157,6 +194,7 @@ export async function bulkCreateTeachersWithAssignments(
             .maybeSingle();
 
           if (existingMapping) {
+            console.log('[bulkCreateTeachersWithAssignments] Updating existing class_subject:', existingMapping.id, 'with teacherId:', teacherId);
             await supabase
               .from('class_subjects')
               .update({ teacherId: teacherId })
@@ -175,17 +213,21 @@ export async function bulkCreateTeachersWithAssignments(
               .select()
               .single();
             if (csErr) {
+              console.warn('[bulkCreateTeachersWithAssignments] Assignment insert failed:', className, subjectId, csErr);
               skippedAssignments.push(`${className} / ${subjectId}`);
             } else if (csRow) {
+              console.log('[bulkCreateTeachersWithAssignments] Assignment created:', csRow);
               assignments.push(csRow);
             }
           }
         }
       }
     } catch (err) {
+      console.warn('[bulkCreateTeachersWithAssignments] Error processing', entry.name, entry.email, ':', err);
       skippedTeachers.push(`${entry.name} (${entry.email}) — ${String(err)}`);
     }
   }
 
+  console.log('[bulkCreateTeachersWithAssignments] Final result:', { teachers: teachers.length, assignments: assignments.length, skippedTeachers, skippedAssignments });
   return { teachers, assignments, skippedTeachers, skippedAssignments };
 }

@@ -1,8 +1,8 @@
 export type Role = 'admin' | 'teacher' | 'parent' | 'supervisor';
 export type ExamStatus = 'pending' | 'approved' | 'rejected';
-export type ExamType = 'CA' | 'Homework' | 'Classwork' | 'Quiz' | 'Midterm' | 'Final'| 'Attendance';
+export type ExamType = 'CA' | 'Homework' | 'Classwork' | 'Quiz' | 'Midterm' | 'Final'| 'Attendance' | 'Discipline';
 
-export const EXAM_TYPES: ExamType[] = ['CA', 'Homework', 'Classwork', 'Quiz', 'Midterm', 'Final', 'Attendance'];
+export const EXAM_TYPES: ExamType[] = ['CA', 'Homework', 'Classwork', 'Quiz', 'Midterm', 'Final', 'Attendance', 'Discipline'];
 export const CA_TYPES: ExamType[] = ['CA', 'Homework', 'Classwork', 'Quiz', 'Attendance'];
 
 export const MONTHS = [
@@ -12,7 +12,7 @@ export const MONTHS = [
 
 export const CLASSES = [
   // Kindergarten
-  'Foundation A','Foundation c','Foundation D', 'Foundation B',
+  'Foundation A','Foundation C','Foundation D', 'Foundation B',
   'KG-A', 'KG-B', 'KG-C','KG-D','KG-E',
 
   // Primary School (Grades 1-6)
@@ -171,7 +171,7 @@ export interface RoleSession {
 
 export interface ToastMessage {
   id: string;
-  type: 'success' | 'error' | 'info' | 'loading';
+  type: 'success' | 'error' | 'warning' | 'info' | 'loading';
   title: string;
   description?: string;
 }
@@ -477,16 +477,16 @@ const YEAR12_PATTERN = /^Year\s+12-([A-Z])$/i;
 export function getNextClass(currentClass: string): string | null {
   const trimmed = currentClass.trim();
 
-  // Foundation -> KG (same section)
-  const foundationMatch = trimmed.match(FOUNDATION_PATTERN);
-  if (foundationMatch) {
-    return `KG-${foundationMatch[1].toUpperCase()}`;
-  }
-
-  // KG -> Grade 1 (same section)
+  // KG -> Foundation (same section)
   const kgMatch = trimmed.match(KG_PATTERN);
   if (kgMatch) {
-    return `Grade 1-${kgMatch[1].toUpperCase()}`;
+    return `Foundation ${kgMatch[1].toUpperCase()}`;
+  }
+
+  // Foundation -> Grade 1 (same section)
+  const foundationMatch = trimmed.match(FOUNDATION_PATTERN);
+  if (foundationMatch) {
+    return `Grade 1-${foundationMatch[1].toUpperCase()}`;
   }
 
   // Grade N -> Grade N+1 (same section)
@@ -510,7 +510,24 @@ export function getNextClass(currentClass: string): string | null {
 export type DayOfWeek = 'Saturday' | 'Sunday' | 'Monday' | 'Tuesday' | 'Wednesday';
 export const DAYS_OF_WEEK: DayOfWeek[] = ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday'];
 
-export type PlanStatus = 'draft' | 'submitted' | 'in_review' | 'approved' | 'rejected' | 'ai_failed';
+export type PlanStatus =
+  | 'draft'
+  | 'submitted'
+  | 'in_review'
+  | 'approved'
+  | 'rejected'
+  | 'ai_failed'
+  | 'revision_requested';
+
+/**
+ * A plan's content may only be edited while it is a draft or has been
+ * explicitly reopened by a supervisor. Mirrors lesson_plan_is_editable() in SQL.
+ */
+export const EDITABLE_PLAN_STATUSES: PlanStatus[] = ['draft', 'revision_requested'];
+
+export function isPlanEditable(status: PlanStatus | null | undefined): boolean {
+  return !!status && EDITABLE_PLAN_STATUSES.includes(status);
+}
 
 export type ReviewStatus = 'pending' | 'reviewed';
 
@@ -525,8 +542,38 @@ export interface LessonPlan {
   period_count: number;
   previous_score: number | null;
   previous_reviewed_at: string | null;
+  /** When the AI review call started — used to time out stuck plans. */
+  ai_started_at?: string | null;
+  /** Human-readable reason the last AI review failed. */
+  ai_failure_reason?: string | null;
+  /** Supervisor's note when reopening the plan for edits. */
+  revision_note?: string | null;
+  revision_requested_at?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type AiReviewOutcome =
+  | 'success'
+  | 'timeout'
+  | 'api_error'
+  | 'unit_match_error'
+  | 'malformed_json'
+  | 'rate_limit'
+  | 'save_error'
+  | 'unknown';
+
+/** One row per AI review attempt, for admin-facing failure monitoring. */
+export interface AiReviewLog {
+  id: string;
+  plan_id: string | null;
+  teacher_id: string | null;
+  outcome: AiReviewOutcome;
+  error_code: string | null;
+  message: string | null;
+  latency_ms: number | null;
+  attempt: number;
+  created_at: string;
 }
 
 export interface PeriodActivity {
