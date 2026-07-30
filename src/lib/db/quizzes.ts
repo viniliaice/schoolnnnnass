@@ -272,11 +272,12 @@ async function syncAttemptToExam(attempt: QuizAttempt): Promise<void> {
 
 // ─── Grading (teacher grades direct answers) ───
 
-export async function getQuizzesWithPendingGrading(teacherId: string): Promise<{ quizId: string; title: string; subject: string; className: string; pendingCount: number }[]> {
-  const { data: quizzes, error: qErr } = await supabase
+export async function getQuizzesWithPendingGrading(teacherId: string, role?: string): Promise<{ quizId: string; title: string; subject: string; className: string; pendingCount: number }[]> {
+  let query = supabase
     .from('quizzes')
-    .select('id, title, subject, className')
-    .eq('teacherId', teacherId);
+    .select('id, title, subject, className');
+  if (role !== 'admin') query = query.eq('teacherId', teacherId);
+  const { data: quizzes, error: qErr } = await query;
   if (qErr) throw qErr;
   if (!quizzes || quizzes.length === 0) return [];
 
@@ -293,7 +294,7 @@ export async function getQuizzesWithPendingGrading(teacherId: string): Promise<{
   }
 
   return quizzes
-    .filter(q => (pendingCounts.get(q.id) || 0) > 0)
+    .filter(q => role === 'admin' || (pendingCounts.get(q.id) || 0) > 0)
     .map(q => ({
       quizId: q.id,
       title: q.title,

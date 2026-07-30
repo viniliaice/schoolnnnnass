@@ -24,11 +24,11 @@ export function GradeQuizzes() {
 
   useEffect(() => {
     if (!session) return;
-    getQuizzesWithPendingGrading(session.userId).then(setQuizzes);
+    getQuizzesWithPendingGrading(session.userId, session.role).then(setQuizzes).catch(err => addToast({ type: 'error', title: 'Failed to load quizzes', description: String(err) }));
     const channel = supabase
       .channel('grade-quizzes')
       .on('postgres_changes', { event: '*', schema: 'public', table: 'quiz_attempts' }, () =>
-        getQuizzesWithPendingGrading(session.userId).then(setQuizzes)
+        getQuizzesWithPendingGrading(session.userId, session.role).then(setQuizzes).catch(err => addToast({ type: 'error', title: 'Failed to load quizzes', description: String(err) }))
       )
       .subscribe();
     return () => { supabase.removeChannel(channel); };

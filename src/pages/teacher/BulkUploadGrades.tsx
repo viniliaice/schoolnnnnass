@@ -269,7 +269,7 @@ export function BulkUploadGrades() {
                 <label className="text-sm font-semibold text-slate-700 mb-1.5 block">Month</label>
                 <select value={month} onChange={e => setMonth(e.target.value)}
                   className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-teal-200 focus:border-teal-400 outline-none bg-white">
-                  {MONTHS.map(m => <option key={m} value={m}>{m}</option>)}
+                  {(currentTerm?.months?.length ? currentTerm.months : MONTHS).map(m => <option key={m} value={m}>{m}</option>)}
                 </select>
               </div>
               <div>
