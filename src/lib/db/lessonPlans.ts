@@ -278,6 +278,8 @@ export async function submitForReview(
   // Call the edge function to generate AI review first
   // The edge function will set status to 'in_review' on success
   // or 'ai_failed' on failure
+  const { data: sessionData } = await supabase.auth.getSession();
+  console.log('[submitForReview] plan.teacher_id:', plan.teacher_id, 'session.user.id:', sessionData?.session?.user?.id);
   const callStart = Date.now();
   const { data, error } = await supabase.functions.invoke('generate-lesson-review', {
     body: { plan_id: planId, periods: periodInputs, unit_context: unitContext },

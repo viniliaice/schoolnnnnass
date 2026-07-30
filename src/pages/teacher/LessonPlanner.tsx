@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { useTeacherPlans, useCreatePlan, useSavePeriods, useSubmitForReview, usePlanWithPeriods, useReview, useRetryAIReview, useAiReviewTimeout } from '../../lib/hooks/useLessonPlans';
+import { useTeacherPlans, useCreatePlan, useSavePeriods, useSubmitForReview, usePlanWithPeriods, useReview, useAiReviewTimeout } from '../../lib/hooks/useLessonPlans';
 import { DayOfWeek, DAYS_OF_WEEK, LessonPlanPeriod, PeriodActivity, Subject, AcademicYear, isPlanEditable } from '../../types';
 import { Loader2, Upload, FileSpreadsheet, Lock, Unlock } from 'lucide-react';
 import * as XLSX from 'xlsx';
@@ -10,13 +10,12 @@ import { getUserById } from '../../lib/db/profiles';
 import { getClassSubjectsForTeacher } from '../../lib/db/classes';
 import { getCurrentAcademicYear, getCurrentTerm } from '../../lib/db/academic';
 import { fetchUnitPlanByClassSubjectTerm } from '../../lib/db/unitPlans';
-import { weekRangeForNumber, weekNumberForDate, makeWeekLabel, describePlanWeek } from '../../utils/weekDates';
+import { weekRangeForNumber, weekNumberForDate, weekNumberFromLabel, makeWeekLabel, describePlanWeek } from '../../utils/weekDates';
 import { PlanConfigBar } from '../../components/lesson-planner/PlanConfigBar';
 import { PlanGrid } from '../../components/lesson-planner/PlanGrid';
 import { CreatePlanForm } from '../../components/lesson-planner/CreatePlanForm';
 import { ReviewStep } from '../../components/lesson-planner/ReviewStep';
 import { PlanStepper, StepNav, PlanTab } from '../../components/lesson-planner/PlanStepper';
-import { AiReviewPanel } from '../../components/lesson-planner/AiReviewPanel';
 import { PlanReadView } from '../../components/lesson-planner/PlanReadView';
 import { SubmittedPlansView } from './SubmittedPlansView';
 
@@ -116,7 +115,6 @@ export function LessonPlanner() {
   // Guarantees a plan never sits on "waiting" forever (#4).
   useAiReviewTimeout(planWithPeriods?.plan);
   const createPlanMut = useCreatePlan();
-  const retryMut = useRetryAIReview();
   const savePeriodsMut = useSavePeriods();
   const submitMut = useSubmitForReview();
 
@@ -148,15 +146,19 @@ export function LessonPlanner() {
   }, [session, className]);
 
   useEffect(() => {
-    // Only hydrate from a plan that actually belongs to the selected week.
-    // Guards against a stale fetch writing another week's content into the grid.
-    if (planWithPeriods && (!weekLabel || planWithPeriods.plan.week_label === weekLabel)) {
-      setPeriodCount(planWithPeriods.plan.period_count);
-      setPeriods(periodsFromDb(planWithPeriods.periods, planWithPeriods.plan.period_count));
-      setTitle(planWithPeriods.plan.title);
-      setClassName(planWithPeriods.plan.class_name);
+    if (!planWithPeriods) return;
+    // If the loaded plan belongs to a different week, update the week selector
+    // so the grid header matches, then let the next render hydrate.
+    const planWeekNum = weekNumberFromLabel(planWithPeriods.plan.week_label);
+    if (planWeekNum && planWeekNum !== selectedWeekNumber) {
+      setSelectedWeekNumber(planWeekNum);
+      return;
     }
-  }, [planWithPeriods, weekLabel]);
+    setPeriodCount(planWithPeriods.plan.period_count);
+    setPeriods(periodsFromDb(planWithPeriods.periods, planWithPeriods.plan.period_count));
+    setTitle(planWithPeriods.plan.title);
+    setClassName(planWithPeriods.plan.class_name);
+  }, [planWithPeriods, weekLabel, selectedWeekNumber]);
 
   /**
    * Switch to a different week.
@@ -339,7 +341,7 @@ export function LessonPlanner() {
       addToast({
         type: 'success',
         title: 'Submitted to supervisor',
-        description: 'The AI review is being generated — its status is shown on this plan.',
+        description: 'Your plan has been sent to your supervisor for review.',
       });
       setTab('mine');
     } catch (err: any) {
@@ -379,17 +381,6 @@ export function LessonPlanner() {
     }
     setTab(next);
   }, [planId, addToast]);
-
-  /** Re-run the AI review after a failure, straight from the teacher view. */
-  const handleRetryReview = useCallback(async () => {
-    if (!planId) return;
-    try {
-      await retryMut.mutateAsync({ planId, periods: periodsForSave });
-      addToast({ type: 'success', title: 'AI review restarted' });
-    } catch (err: any) {
-      addToast({ type: 'error', title: 'Retry failed', description: err?.message });
-    }
-  }, [planId, periodsForSave, retryMut, addToast]);
 
   const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -726,28 +717,15 @@ export function LessonPlanner() {
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-8 shadow-xl flex flex-col items-center gap-4 max-w-sm text-center">
             <Loader2 className="w-10 h-10 animate-spin text-indigo-600" />
-            <p className="text-lg font-semibold text-slate-900">Submitting &amp; analyzing&hellip;</p>
+            <p className="text-lg font-semibold text-slate-900">Submitting&hellip;</p>
             <p className="text-sm text-slate-500">
-              Saving plan &rarr; sending to supervisor &rarr; generating AI review. If the AI fails, your plan is still
-              submitted and you will see an &ldquo;AI failed&rdquo; status you can retry.
+              Saving plan &rarr; sending to supervisor. You will be redirected to your plans once it is done.
             </p>
           </div>
         </div>
       )}
 
-      {/* Live AI review status for the plan being edited */}
-      {planId && tab !== 'mine' && isSubmittedPlan && (
-        <AiReviewPanel
-          review={review}
-          status={planStatus!}
-          updatedAt={planWithPeriods?.plan.updated_at}
-          failureReason={planWithPeriods?.plan.ai_failure_reason}
-          retrying={retryMut.isPending}
-          onRetry={handleRetryReview}
-          retryError={retryMut.isError ? (retryMut.error as Error)?.message : null}
-          audience="teacher"
-        />
-      )}
+      {/* AI review is handled entirely in the background — teacher never sees it */}
     </div>
   );
 }

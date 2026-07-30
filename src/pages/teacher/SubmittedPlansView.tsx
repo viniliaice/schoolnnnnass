@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { PDFDownloadLink } from '@react-pdf/renderer';
 import { useRole } from '../../context/RoleContext';
-import { useTeacherPlans, usePlanWithPeriods, useReview } from '../../lib/hooks/useLessonPlans';
+import { useTeacherPlans, usePlanWithPeriods } from '../../lib/hooks/useLessonPlans';
 import { LessonPlanPeriod, PlanStatus, Subject, DAYS_OF_WEEK, isPlanEditable } from '../../types';
 import {
   FileText, CheckCircle, Clock, AlertTriangle, XCircle, Download,
@@ -8,18 +9,17 @@ import {
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
-import { AiReviewPanel } from '../../components/lesson-planner/AiReviewPanel';
-import { printElementAsPdf } from '../../utils/printToPdf';
+import { LessonPlanPdfDocument } from '../shared/LessonPlanPdfDocument';
 import { describePlanWeek } from '../../utils/weekDates';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
 
 const STATUS_META: Record<PlanStatus, { label: string; icon: typeof FileText; chip: string; help: string }> = {
   draft:      { label: 'Draft',      icon: Pencil,        chip: 'bg-slate-100 text-slate-600',     help: 'Not submitted yet — only you can see this.' },
-  submitted:  { label: 'Submitted',  icon: Clock,         chip: 'bg-blue-100 text-blue-700',       help: 'Sent to your supervisor. The AI review is being generated.' },
-  in_review:  { label: 'In review',  icon: Clock,         chip: 'bg-amber-100 text-amber-700',     help: 'AI review is done — waiting on your supervisor’s decision.' },
+  submitted:  { label: 'Submitted',  icon: Clock,         chip: 'bg-blue-100 text-blue-700',       help: 'Sent to your supervisor for review.' },
+  in_review:  { label: 'In review',  icon: Clock,         chip: 'bg-amber-100 text-amber-700',     help: 'Waiting on your supervisor\'s decision.' },
   approved:   { label: 'Approved',   icon: CheckCircle,   chip: 'bg-emerald-100 text-emerald-700', help: 'Your supervisor approved this plan.' },
   rejected:   { label: 'Revisions',  icon: XCircle,       chip: 'bg-rose-100 text-rose-700',       help: 'Your supervisor asked for revisions — see their comment.' },
-  ai_failed:  { label: 'AI failed',  icon: AlertTriangle, chip: 'bg-orange-100 text-orange-700',   help: 'The AI review did not run. It can be retried, or your supervisor can decide without it.' },
+  ai_failed:  { label: 'Needs review', icon: AlertTriangle, chip: 'bg-orange-100 text-orange-700', help: 'The review could not be completed. Your supervisor can still decide on this plan.' },
   revision_requested: { label: 'Revisions requested', icon: Unlock, chip: 'bg-amber-100 text-amber-700', help: 'Your supervisor reopened this plan — you can edit and resubmit it.' },
 };
 
@@ -112,7 +112,7 @@ export function SubmittedPlansView({ subjects, onEditPlan, onBack }: SubmittedPl
 
       {/* Status filter chips */}
       <div className="flex flex-wrap gap-2">
-        {(['all', 'draft', 'submitted', 'in_review', 'approved', 'rejected', 'ai_failed'] as const).map((key) => {
+        {(['all', 'draft', 'submitted', 'in_review', 'revision_requested', 'approved', 'rejected', 'ai_failed'] as const).map((key) => {
           const label = key === 'all' ? 'All' : STATUS_META[key as PlanStatus].label;
           const n = counts[key] || 0;
           return (
@@ -214,8 +214,6 @@ function PlanDetail({
   onEditPlan?: (planId: string) => void;
 }) {
   const { data, isLoading } = usePlanWithPeriods(planId);
-  const { data: review } = useReview(planId);
-  const printRef = useRef<HTMLDivElement>(null);
 
   if (isLoading || !data) {
     return (
@@ -250,16 +248,25 @@ function PlanDetail({
               <Pencil className="w-4 h-4" /> Edit plan
             </button>
           )}
-          <button
-            onClick={() => printElementAsPdf(printRef.current, `${plan.title} — ${plan.class_name} — ${plan.week_label}`)}
+          <PDFDownloadLink
+            document={<LessonPlanPdfDocument plan={plan} periods={periods} />}
+            fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
           >
-            <Download className="w-4 h-4" /> Export PDF
-          </button>
+            {({ loading, error }) => {
+              if (error) console.error('[PDF] generation error:', error);
+              return (
+                <>
+                  <Download className="w-4 h-4" />
+                  {loading ? 'Preparing PDF…' : 'Export PDF'}
+                </>
+              );
+            }}
+          </PDFDownloadLink>
         </div>
       </div>
 
-      <div ref={printRef} className="space-y-6">
+      <div className="space-y-6">
         <div className="bg-white rounded-2xl border border-slate-200 p-6">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
@@ -295,13 +302,6 @@ function PlanDetail({
           planClassName={plan.class_name}
         />
 
-        <AiReviewPanel
-          review={review}
-          status={plan.status}
-          updatedAt={plan.updated_at}
-          failureReason={plan.ai_failure_reason}
-          audience="teacher"
-        />
       </div>
     </div>
   );

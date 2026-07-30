@@ -28,7 +28,11 @@ interface StudentScore {
 
 type Step = 'config' | 'scores' | 'review';
 
-export function UploadResults() {
+interface UploadResultsProps {
+  navigate?: (path: string) => void;
+}
+
+export function UploadResults({ navigate }: UploadResultsProps) {
     // DEBUG: Log all class_subjects rows
     const handleDebugClassSubjects = async () => {
       await logAllClassSubjects();
@@ -280,6 +284,16 @@ export function UploadResults() {
       >
         Debug: Log class_subjects
       </button>
+      <div className="bg-teal-50 border border-teal-200 rounded-xl p-4 flex items-center justify-between">
+        <div>
+          <p className="text-sm font-medium text-teal-800">Need to upload all subjects at once?</p>
+          <p className="text-xs text-teal-600">Try the Excel Bulk Upload — import Homeworks, CPWs, Attendance, Quiz, and Discipline scores for all subjects in one file.</p>
+        </div>
+        <button onClick={() => navigate?.('/teacher/bulk-grades')}
+          className="shrink-0 px-4 py-2 bg-teal-600 text-white rounded-xl text-sm font-medium hover:bg-teal-700 transition-colors">
+          Go to Bulk Upload
+        </button>
+      </div>
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Upload Exam Results</h1>
         <p className="text-slate-500 mt-1">

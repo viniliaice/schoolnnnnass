@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
+import { PDFDownloadLink } from '@react-pdf/renderer';
 import {
   useSupervisorPlans, usePlanWithPeriods, useReview,
   useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout,
@@ -8,7 +9,7 @@ import { ClipboardCheck, ChevronRight, Filter, Download, AlertTriangle, Loader2,
 import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
 import { AiReviewPanel, minutesSince } from '../../components/lesson-planner/AiReviewPanel';
-import { printElementAsPdf } from '../../utils/printToPdf';
+import { LessonPlanPdfDocument } from '../shared/LessonPlanPdfDocument';
 import { describePlanWeek } from '../../utils/weekDates';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
 
@@ -40,7 +41,6 @@ export function LessonPlanReview() {
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | PlanStatus>('all');
-  const printRef = useRef<HTMLDivElement>(null);
 
   const { data: plans } = useSupervisorPlans();
   const { data: planWithPeriods } = usePlanWithPeriods(selectedPlanId || undefined);
@@ -142,11 +142,11 @@ export function LessonPlanReview() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-slate-900 truncate">{p.title}</p>
                   <p className="text-xs text-slate-500">{p.teacher_name || 'Unknown'} · {p.class_name}</p>
-                  <p className="text-xs text-slate-500 inline-flex items-center gap-1 mt-0.5">
+                  <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
                     <CalendarRange className="w-3 h-3" />
                     {describePlanWeek(p.week_label, yearStart)}
                   </p>
-                  <span className={cn('inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-medium', STATUS_CHIP[p.status])}>
+                  <span className={cn('flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full text-xs font-medium w-fit', STATUS_CHIP[p.status])}>
                     {p.status === 'ai_failed' && <AlertTriangle className="w-3 h-3" />}
                     {p.status === 'ai_failed' ? 'AI failed' : p.status.replace('_', ' ')}
                   </span>
@@ -184,7 +184,7 @@ export function LessonPlanReview() {
             )}
 
             {/* Printable region */}
-            <div ref={printRef} className="space-y-6">
+            <div className="space-y-6">
               <div className="bg-white rounded-2xl border border-slate-200 p-6">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
@@ -199,12 +199,18 @@ export function LessonPlanReview() {
                     <span className={cn('px-3 py-1.5 rounded-full text-xs font-semibold', STATUS_CHIP[plan.status])}>
                       {plan.status === 'ai_failed' ? 'AI failed' : plan.status.replace('_', ' ')}
                     </span>
-                    <button
-                      onClick={() => printElementAsPdf(printRef.current, `${plan.title} — ${plan.class_name} — ${plan.week_label}`)}
+                    <PDFDownloadLink
+                      document={<LessonPlanPdfDocument plan={plan} periods={planWithPeriods.periods} review={review} />}
+                      fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
                       className="no-print flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
                     >
-                      <Download className="w-4 h-4" /> Export PDF
-                    </button>
+                      {({ loading }) => (
+                        <>
+                          <Download className="w-4 h-4" />
+                          {loading ? 'Preparing PDF…' : 'Export PDF'}
+                        </>
+                      )}
+                    </PDFDownloadLink>
                   </div>
                 </div>
               </div>
@@ -213,6 +219,8 @@ export function LessonPlanReview() {
                 periods={toReadPeriods(planWithPeriods.periods)}
                 periodCount={plan.period_count}
                 planClassName={plan.class_name}
+                collapsible
+                defaultCollapsed
               />
 
               <AiReviewPanel
@@ -228,7 +236,7 @@ export function LessonPlanReview() {
             </div>
 
             {/* Decision panel — always usable */}
-            <div className="no-print bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
+            <div className="no-print sticky bottom-0 bg-white border border-slate-200 rounded-t-2xl shadow-[0_-4px_12px_rgba(0,0,0,0.05)] p-6 space-y-4 z-10">
               <div className="flex flex-wrap items-center gap-3">
                 <h2 className="text-lg font-bold text-slate-900">Supervisor Decision</h2>
                 {waitingOnAi && !aiLikelyStuck && (

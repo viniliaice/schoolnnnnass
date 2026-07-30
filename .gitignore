@@ -4,6 +4,7 @@ node_modules
 dist
 .agents/
 .env
+.env.local
 github_pat_*
 .gstack/
 *.png

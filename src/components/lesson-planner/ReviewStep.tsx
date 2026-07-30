@@ -4,7 +4,6 @@ import { Loader2, Send, FileCheck2, Download, AlertTriangle, CheckCircle2 } from
 import { cn } from '../../utils/cn';
 import { PlanReadView } from './PlanReadView';
 import { StepNav } from './PlanStepper';
-import { printElementAsPdf } from '../../utils/printToPdf';
 
 interface ReviewStepProps {
   periods: {
@@ -60,7 +59,7 @@ export function ReviewStep({
   const completion = Math.round(((filledCount + freeCount) / totalSlots) * 100);
 
   const handleExportPdf = () => {
-    printElementAsPdf(printRef.current, `${title || 'Lesson Plan'} — ${planClassName} — ${weekLabel}`);
+    window.print();
   };
 
   return (

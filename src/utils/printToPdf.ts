@@ -34,21 +34,21 @@ export function printElementAsPdf(element: HTMLElement | null, documentTitle: st
 
   doc.open();
   doc.write(`<!doctype html>
-<html>
+<html data-mode="light" style="color-scheme: light !important;">
   <head>
     <meta charset="utf-8" />
     <title>${escapeHtml(documentTitle)}</title>
     ${headStyles}
     <style>
       @page { size: A4 landscape; margin: 12mm; }
+      html { color-scheme: light !important; }
       html, body {
         background: #ffffff !important;
         -webkit-print-color-adjust: exact;
         print-color-adjust: exact;
       }
-      body { padding: 0; margin: 0; }
+      body { padding: 0; margin: 0; color: #0f172a !important; }
       .print-root { padding: 0; }
-      /* Keep tables and cards from splitting awkwardly across pages */
       table { page-break-inside: auto; }
       tr, .avoid-break { page-break-inside: avoid; break-inside: avoid; }
       thead { display: table-header-group; }

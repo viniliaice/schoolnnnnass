@@ -3,7 +3,7 @@ import { useRole } from '../../context/RoleContext';
 import { Role } from '../../types';
 import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
-  Upload, LogOut, Menu, X, BookOpen, ChevronRight,
+  FileSpreadsheet, Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
   CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers
 } from 'lucide-react';
@@ -25,6 +25,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
     { label: 'Unit Plans', icon: Layers, path: '/admin/unit-plans' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
+    { label: 'Bulk Upload Grades', icon: FileSpreadsheet, path: '/admin/bulk-grades' },
     { label: 'Announcements', icon: BellRing, path: '/admin/announcements' },
     { label: 'Messages', icon: Mail, path: '/messages' },
     { label: 'Streams', icon: Activity, path: '/streams' },
@@ -44,7 +45,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'My Classes', icon: GraduationCap, path: '/teacher/students' },
     { label: 'Lesson Plans', icon: NotepadText, path: '/teacher/lesson-plans' },
     { label: 'Unit Plans', icon: Layers, path: '/teacher/unit-plans' },
-    { label: 'Upload Results', icon: Upload, path: '/teacher/results' },
+    { label: 'Bulk Upload', icon: FileSpreadsheet, path: '/teacher/bulk-grades' },
     { label: 'My Submissions', icon: FileText, path: '/teacher/all-results' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/teacher/exam-reports' },
     { label: 'Announcements', icon: BellRing, path: '/teacher/announcements' },
