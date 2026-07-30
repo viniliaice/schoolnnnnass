@@ -1,9 +1,10 @@
 import { useToast } from '../../context/ToastContext';
-import { X, CheckCircle, AlertCircle, Info, Loader2 } from 'lucide-react';
+import { X, CheckCircle, AlertCircle, AlertTriangle, Info, Loader2 } from 'lucide-react';
 
 const icons = {
   success: CheckCircle,
   error: AlertCircle,
+  warning: AlertTriangle,
   info: Info,
   loading: Loader2,
 };
@@ -11,6 +12,7 @@ const icons = {
 const colors = {
   success: 'bg-emerald-50 border-emerald-200 text-emerald-800',
   error: 'bg-red-50 border-red-200 text-red-800',
+  warning: 'bg-amber-50 border-amber-200 text-amber-800',
   info: 'bg-blue-50 border-blue-200 text-blue-800',
   loading: 'bg-indigo-50 border-indigo-200 text-indigo-800',
 };
@@ -18,6 +20,7 @@ const colors = {
 const iconColors = {
   success: 'text-emerald-500',
   error: 'text-red-500',
+  warning: 'text-amber-500',
   info: 'text-blue-500',
   loading: 'text-indigo-500',
 };

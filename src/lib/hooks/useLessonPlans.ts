@@ -44,6 +44,12 @@ export function usePlanWithPeriods(planId: string | undefined) {
     enabled: !!planId,
     staleTime: 1000 * 30,
     gcTime: 1000 * 60 * 5,
+    // While a plan is waiting on the AI, keep polling so a flip to 'ai_failed'
+    // (or 'in_review') surfaces on screen without a manual refresh.
+    refetchInterval: (query) => {
+      const status = query.state.data?.plan.status;
+      return status === 'submitted' ? 5000 : false;
+    },
   });
 }
 
@@ -55,10 +61,14 @@ export function useReview(planId: string | undefined) {
     enabled: !!planId,
     staleTime: 1000 * 30,
     gcTime: 1000 * 60 * 5,
+    // Poll until a review exists and is no longer pending. Give up after ~4
+    // minutes so a permanently failed AI call doesn't poll forever.
     refetchInterval: (query) => {
       const data = query.state.data;
-      if (!data || data.status === 'pending') return 5000;
-      return false;
+      if (data && data.status !== 'pending') return false;
+      const started = query.state.dataUpdatedAt || Date.now();
+      if (Date.now() - started > 1000 * 60 * 4) return false;
+      return 5000;
     },
   });
 }
@@ -124,11 +134,12 @@ export function useApprovePlan() {
       comment,
     }: {
       planId: string;
-      reviewId: string;
+      // May be absent when the AI review failed — the supervisor decides manually.
+      reviewId?: string;
       comment: string;
     }) => {
-      await updateReviewStatus(reviewId, 'reviewed', comment);
-      await approvePlan(planId);
+      if (reviewId) await updateReviewStatus(reviewId, 'reviewed', comment);
+      await approvePlan(planId, reviewId ? undefined : comment);
     },
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', variables.planId] });
@@ -147,11 +158,12 @@ export function useRejectPlan() {
       comment,
     }: {
       planId: string;
-      reviewId: string;
+      // May be absent when the AI review failed — the supervisor decides manually.
+      reviewId?: string;
       comment: string;
     }) => {
-      await updateReviewStatus(reviewId, 'reviewed', comment);
-      await rejectPlan(planId);
+      if (reviewId) await updateReviewStatus(reviewId, 'reviewed', comment);
+      await rejectPlan(planId, reviewId ? undefined : comment);
     },
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', variables.planId] });

@@ -171,7 +171,7 @@ export interface RoleSession {
 
 export interface ToastMessage {
   id: string;
-  type: 'success' | 'error' | 'info' | 'loading';
+  type: 'success' | 'error' | 'warning' | 'info' | 'loading';
   title: string;
   description?: string;
 }

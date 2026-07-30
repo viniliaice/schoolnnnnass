@@ -5,6 +5,18 @@ function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 }
 
+/**
+ * Thrown when the plan reached the supervisor but the AI review could not be
+ * generated. The submission itself succeeded — only the scoring is missing.
+ */
+export class SubmissionAiError extends Error {
+  readonly aiFailedOnly = true;
+  constructor(message: string) {
+    super(message);
+    this.name = 'SubmissionAiError';
+  }
+}
+
 export async function fetchPlansByTeacher(teacherId: string): Promise<LessonPlan[]> {
   const { data, error } = await supabase
     .from('lesson_plans')
@@ -96,32 +108,48 @@ export async function submitForReview(
   });
 
   if (error) {
-    // If edge function failed, the status should already be set to 'ai_failed' by the edge function
-    // But if not (e.g., network error before edge function could update), roll back to draft
+    // The edge function normally flips the plan to 'ai_failed' itself. Re-read the
+    // status so we can tell "the AI failed but the plan IS with the supervisor"
+    // apart from "nothing was submitted at all".
     const { data: currentPlan } = await supabase
       .from('lesson_plans')
       .select('status')
       .eq('id', planId)
       .single();
-    
-    if (currentPlan?.status !== 'ai_failed' && currentPlan?.status !== 'in_review') {
-      // Edge function didn't update status, roll back to draft
-      await supabase
-        .from('lesson_plans')
-        .update({ status: 'draft', updated_at: new Date().toISOString() })
-        .eq('id', planId);
-    }
-    
+
     const msg = error.context?.message || error.message || 'Review request failed';
+
+    if (currentPlan?.status === 'ai_failed' || currentPlan?.status === 'in_review') {
+      // Plan is visible to the supervisor; only the AI scoring failed.
+      throw new SubmissionAiError(msg);
+    }
+
+    // The submission itself never landed — return the plan to draft so the
+    // teacher can retry without ending up in a stuck state.
+    await supabase
+      .from('lesson_plans')
+      .update({ status: 'draft', updated_at: new Date().toISOString() })
+      .eq('id', planId);
+
     throw new Error(msg);
   }
 
-  // Update status to 'submitted' so supervisor can see the plan
-  // The edge function already set it to 'in_review', so we just ensure it's visible
-  await supabase
+  // The edge function already moved the plan to 'in_review' on success, which the
+  // supervisor query also picks up. Only nudge the status when it is still sitting
+  // in a pre-submission state, so we never overwrite 'in_review' with 'submitted'
+  // (that made finished plans look like they were still waiting on the AI).
+  const { data: afterPlan } = await supabase
     .from('lesson_plans')
-    .update({ status: 'submitted', updated_at: new Date().toISOString() })
-    .eq('id', planId);
+    .select('status')
+    .eq('id', planId)
+    .single();
+
+  if (afterPlan?.status !== 'in_review' && afterPlan?.status !== 'ai_failed') {
+    await supabase
+      .from('lesson_plans')
+      .update({ status: 'submitted', updated_at: new Date().toISOString() })
+      .eq('id', planId);
+  }
 
   return data as ReviewResponse;
 }
@@ -195,7 +223,51 @@ export async function retryAIReview(
   return data as ReviewResponse;
 }
 
-export async function approvePlan(id: string): Promise<void> {
+/**
+ * When the AI review never landed (ai_failed / still pending) the supervisor can
+ * still decide. We persist their comment as a manual review row so the teacher
+ * sees the feedback in exactly the same place as an AI review.
+ */
+async function saveManualDecisionComment(planId: string, comment: string): Promise<void> {
+  const trimmed = comment.trim();
+  if (!trimmed) return;
+
+  const emptyScore = { score: 0, explanation: 'Not scored — reviewed manually by the supervisor.' };
+  const { error } = await supabase.from('ai_reviews').upsert(
+    {
+      id: newId('review'),
+      plan_id: planId,
+      scores: {
+        learning_objectives: emptyScore,
+        lesson_structure: emptyScore,
+        student_engagement: emptyScore,
+        teaching_strategies: emptyScore,
+        differentiation: emptyScore,
+        assessment_methods: emptyScore,
+        curriculum_alignment: emptyScore,
+        classroom_management: emptyScore,
+        resources_materials: emptyScore,
+        overall_quality: emptyScore,
+      },
+      executive_summary: 'The AI review was unavailable for this plan. The supervisor reviewed it manually.',
+      total_score: 0,
+      percentage: 0,
+      performance_level: 'Manual review',
+      strengths: [],
+      improvements: [],
+      ai_summary_notes: { status_recommendation: 'Manual review', reasoning: trimmed },
+      additional_data: { manual: true },
+      status: 'reviewed',
+      supervisor_comment: trimmed,
+    },
+    { onConflict: 'plan_id' }
+  );
+  // A failed comment write must not block the approval itself.
+  if (error) console.error('Failed to save manual supervisor comment:', error);
+}
+
+export async function approvePlan(id: string, manualComment?: string): Promise<void> {
+  if (manualComment) await saveManualDecisionComment(id, manualComment);
   const { error } = await supabase
     .from('lesson_plans')
     .update({ status: 'approved' })
@@ -203,7 +275,8 @@ export async function approvePlan(id: string): Promise<void> {
   if (error) throw error;
 }
 
-export async function rejectPlan(id: string): Promise<void> {
+export async function rejectPlan(id: string, manualComment?: string): Promise<void> {
+  if (manualComment) await saveManualDecisionComment(id, manualComment);
   const { error } = await supabase
     .from('lesson_plans')
     .update({ status: 'rejected' })
