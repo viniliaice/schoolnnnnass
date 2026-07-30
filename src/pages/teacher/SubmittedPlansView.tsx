@@ -1,15 +1,17 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useTeacherPlans, usePlanWithPeriods, useReview } from '../../lib/hooks/useLessonPlans';
-import { LessonPlanPeriod, PlanStatus, Subject, DAYS_OF_WEEK } from '../../types';
+import { LessonPlanPeriod, PlanStatus, Subject, DAYS_OF_WEEK, isPlanEditable } from '../../types';
 import {
   FileText, CheckCircle, Clock, AlertTriangle, XCircle, Download,
-  ChevronLeft, Pencil, Search, FolderOpen, Loader2,
+  ChevronLeft, Pencil, Search, FolderOpen, Loader2, Unlock, CalendarRange,
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
 import { AiReviewPanel } from '../../components/lesson-planner/AiReviewPanel';
 import { printElementAsPdf } from '../../utils/printToPdf';
+import { describePlanWeek } from '../../utils/weekDates';
+import { getCurrentAcademicYear } from '../../lib/db/academic';
 
 const STATUS_META: Record<PlanStatus, { label: string; icon: typeof FileText; chip: string; help: string }> = {
   draft:      { label: 'Draft',      icon: Pencil,        chip: 'bg-slate-100 text-slate-600',     help: 'Not submitted yet — only you can see this.' },
@@ -18,6 +20,7 @@ const STATUS_META: Record<PlanStatus, { label: string; icon: typeof FileText; ch
   approved:   { label: 'Approved',   icon: CheckCircle,   chip: 'bg-emerald-100 text-emerald-700', help: 'Your supervisor approved this plan.' },
   rejected:   { label: 'Revisions',  icon: XCircle,       chip: 'bg-rose-100 text-rose-700',       help: 'Your supervisor asked for revisions — see their comment.' },
   ai_failed:  { label: 'AI failed',  icon: AlertTriangle, chip: 'bg-orange-100 text-orange-700',   help: 'The AI review did not run. It can be retried, or your supervisor can decide without it.' },
+  revision_requested: { label: 'Revisions requested', icon: Unlock, chip: 'bg-amber-100 text-amber-700', help: 'Your supervisor reopened this plan — you can edit and resubmit it.' },
 };
 
 function toReadPeriods(periods: LessonPlanPeriod[]): ReadPeriod[] {
@@ -51,6 +54,11 @@ export function SubmittedPlansView({ subjects, onEditPlan, onBack }: SubmittedPl
   const [statusFilter, setStatusFilter] = useState<PlanStatus | 'all'>('all');
   const [query, setQuery] = useState('');
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [yearStart, setYearStart] = useState<string | null>(null);
+
+  useEffect(() => {
+    getCurrentAcademicYear().then((ay) => setYearStart(ay?.startDate ?? null));
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -72,6 +80,7 @@ export function SubmittedPlansView({ subjects, onEditPlan, onBack }: SubmittedPl
       <PlanDetail
         planId={selectedId}
         subjects={subjects}
+        yearStart={yearStart}
         onBack={() => setSelectedId(null)}
         onEditPlan={onEditPlan}
       />
@@ -154,8 +163,15 @@ export function SubmittedPlansView({ subjects, onEditPlan, onBack }: SubmittedPl
                 </div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-slate-900 truncate">{plan.title}</p>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {plan.class_name} · Week {plan.week_label} · {plan.period_count} periods/day
+                  <p className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-x-1.5">
+                    <span>{plan.class_name}</span>
+                    <span>·</span>
+                    <span className="inline-flex items-center gap-1 font-medium text-slate-600">
+                      <CalendarRange className="w-3 h-3" />
+                      {describePlanWeek(plan.week_label, yearStart)}
+                    </span>
+                    <span>·</span>
+                    <span>{plan.period_count} periods/day</span>
                   </p>
                   <p className="text-xs text-slate-400 mt-1">{meta.help}</p>
                 </div>
@@ -187,11 +203,13 @@ export function SubmittedPlansView({ subjects, onEditPlan, onBack }: SubmittedPl
 function PlanDetail({
   planId,
   subjects,
+  yearStart,
   onBack,
   onEditPlan,
 }: {
   planId: string;
   subjects?: Subject[];
+  yearStart: string | null;
   onBack: () => void;
   onEditPlan?: (planId: string) => void;
 }) {
@@ -211,7 +229,8 @@ function PlanDetail({
   const meta = STATUS_META[plan.status];
   const Icon = meta.icon;
   const read = toReadPeriods(periods);
-  const canEdit = plan.status === 'draft' || plan.status === 'rejected' || plan.status === 'ai_failed';
+  // Locking (#1): only a draft or an explicitly reopened plan may be edited.
+  const canEdit = isPlanEditable(plan.status);
 
   return (
     <div className="space-y-6">
@@ -245,8 +264,15 @@ function PlanDetail({
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="text-xl font-bold text-slate-900">{plan.title}</h2>
-              <p className="text-sm text-slate-500 mt-1">
-                {plan.class_name} · Week {plan.week_label} · {plan.period_count} periods/day
+              <p className="text-sm text-slate-500 mt-1 flex flex-wrap items-center gap-x-2">
+                <span>{plan.class_name}</span>
+                <span>·</span>
+                <span className="inline-flex items-center gap-1 font-medium text-slate-600">
+                  <CalendarRange className="w-3.5 h-3.5" />
+                  {describePlanWeek(plan.week_label, yearStart)}
+                </span>
+                <span>·</span>
+                <span>{plan.period_count} periods/day</span>
               </p>
             </div>
             <span className={cn('flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold', meta.chip)}>
@@ -269,7 +295,13 @@ function PlanDetail({
           planClassName={plan.class_name}
         />
 
-        <AiReviewPanel review={review} status={plan.status} updatedAt={plan.updated_at} audience="teacher" />
+        <AiReviewPanel
+          review={review}
+          status={plan.status}
+          updatedAt={plan.updated_at}
+          failureReason={plan.ai_failure_reason}
+          audience="teacher"
+        />
       </div>
     </div>
   );

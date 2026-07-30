@@ -22,6 +22,8 @@ interface AiReviewPanelProps {
   review?: AIReview | null;
   status: PlanStatus;
   updatedAt?: string | null;
+  /** Recorded reason the last AI attempt failed, shown verbatim. */
+  failureReason?: string | null;
   /** Shown while a retry is running */
   retrying?: boolean;
   onRetry?: () => void;
@@ -38,6 +40,7 @@ export function AiReviewPanel({
   review,
   status,
   updatedAt,
+  failureReason,
   retrying,
   onRetry,
   retryError,
@@ -65,6 +68,12 @@ export function AiReviewPanel({
             ? 'The AI could not produce a review for this plan. You can retry the review, or approve/reject it manually based on the plan content above.'
             : 'The AI could not generate a review for this plan. Nothing was lost — your plan is saved. Retry the review below; if it keeps failing, tell your supervisor, they can approve the plan without an AI score.'}
         </p>
+        {failureReason && (
+          <div className="rounded-xl bg-rose-50 border border-rose-100 p-3">
+            <p className="text-xs font-semibold text-rose-800 mb-1">Failure reason</p>
+            <p className="text-xs text-rose-700 font-mono break-words">{failureReason}</p>
+          </div>
+        )}
         {onRetry && (
           <button
             type="button"
@@ -116,6 +125,17 @@ export function AiReviewPanel({
           <p className="text-xs text-slate-500">
             You can still read the full plan above and make a decision without waiting for the AI.
           </p>
+        )}
+        {stale && onRetry && (
+          <button
+            type="button"
+            onClick={onRetry}
+            disabled={retrying}
+            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+          >
+            {retrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
+            {retrying ? 'Retrying…' : 'Retry AI review now'}
+          </button>
         )}
       </div>
     );

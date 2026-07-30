@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
 import {
   fetchPlansByTeacher,
@@ -12,6 +13,11 @@ import {
   approvePlan,
   rejectPlan,
   retryAIReview,
+  requestPlanRevision,
+  findPlanForWeek,
+  expireStuckAiReviews,
+  fetchAiReviewLogs,
+  AI_REVIEW_TIMEOUT_MINUTES,
 } from '../db/lessonPlans';
 import type { LessonPlan, LessonPlanPeriod, PeriodActivity, AIReview, DayOfWeek, ReviewResponse, SavePeriodsPayload } from '../../types';
 
@@ -49,6 +55,70 @@ export function usePlanWithPeriods(planId: string | undefined) {
     refetchInterval: (query) => {
       const status = query.state.data?.plan.status;
       return status === 'submitted' ? 5000 : false;
+    },
+  });
+}
+
+/**
+ * Watchdog: while the selected plan is waiting on the AI, check whether it has
+ * exceeded the timeout and, if so, flip it to `ai_failed` so it can be retried.
+ * This is what guarantees no plan sits on "waiting" forever.
+ */
+export function useAiReviewTimeout(plan: LessonPlan | null | undefined) {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    if (!plan || plan.status !== 'submitted') return;
+
+    let cancelled = false;
+    const check = async () => {
+      const started = new Date(plan.ai_started_at || plan.updated_at).getTime();
+      if (!Number.isFinite(started)) return;
+      if (Date.now() - started < AI_REVIEW_TIMEOUT_MINUTES * 60_000) return;
+
+      const expired = await expireStuckAiReviews([plan]);
+      if (!cancelled && expired.length) {
+        qc.invalidateQueries({ queryKey: ['lessonPlan', plan.id] });
+        qc.invalidateQueries({ queryKey: ['lessonPlans'] });
+      }
+    };
+
+    check();
+    const timer = setInterval(check, 15_000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [plan, qc]);
+}
+
+/** Look up the plan belonging to one exact week + class (never another week's). */
+export function usePlanForWeek(teacherId: string | undefined, weekLabel: string, className: string) {
+  return useQuery({
+    queryKey: ['lessonPlanForWeek', teacherId, weekLabel, className],
+    queryFn: () => findPlanForWeek(teacherId!, weekLabel, className),
+    enabled: !!teacherId && !!weekLabel && !!className,
+    staleTime: 1000 * 15,
+  });
+}
+
+/** Admin-facing AI failure log. */
+export function useAiReviewLogs(limit = 100) {
+  return useQuery({
+    queryKey: ['aiReviewLogs', limit],
+    queryFn: () => fetchAiReviewLogs(limit),
+    staleTime: 1000 * 30,
+  });
+}
+
+/** Supervisor action: reopen a locked plan for teacher edits. */
+export function useRequestRevision() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ planId, note }: { planId: string; note?: string }) => requestPlanRevision(planId, note),
+    onSuccess: (_d, variables) => {
+      qc.invalidateQueries({ queryKey: ['lessonPlan', variables.planId] });
+      qc.invalidateQueries({ queryKey: ['lessonPlans'] });
     },
   });
 }

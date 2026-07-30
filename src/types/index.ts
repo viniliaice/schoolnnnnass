@@ -510,7 +510,24 @@ export function getNextClass(currentClass: string): string | null {
 export type DayOfWeek = 'Saturday' | 'Sunday' | 'Monday' | 'Tuesday' | 'Wednesday';
 export const DAYS_OF_WEEK: DayOfWeek[] = ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday'];
 
-export type PlanStatus = 'draft' | 'submitted' | 'in_review' | 'approved' | 'rejected' | 'ai_failed';
+export type PlanStatus =
+  | 'draft'
+  | 'submitted'
+  | 'in_review'
+  | 'approved'
+  | 'rejected'
+  | 'ai_failed'
+  | 'revision_requested';
+
+/**
+ * A plan's content may only be edited while it is a draft or has been
+ * explicitly reopened by a supervisor. Mirrors lesson_plan_is_editable() in SQL.
+ */
+export const EDITABLE_PLAN_STATUSES: PlanStatus[] = ['draft', 'revision_requested'];
+
+export function isPlanEditable(status: PlanStatus | null | undefined): boolean {
+  return !!status && EDITABLE_PLAN_STATUSES.includes(status);
+}
 
 export type ReviewStatus = 'pending' | 'reviewed';
 
@@ -525,8 +542,38 @@ export interface LessonPlan {
   period_count: number;
   previous_score: number | null;
   previous_reviewed_at: string | null;
+  /** When the AI review call started — used to time out stuck plans. */
+  ai_started_at?: string | null;
+  /** Human-readable reason the last AI review failed. */
+  ai_failure_reason?: string | null;
+  /** Supervisor's note when reopening the plan for edits. */
+  revision_note?: string | null;
+  revision_requested_at?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export type AiReviewOutcome =
+  | 'success'
+  | 'timeout'
+  | 'api_error'
+  | 'unit_match_error'
+  | 'malformed_json'
+  | 'rate_limit'
+  | 'save_error'
+  | 'unknown';
+
+/** One row per AI review attempt, for admin-facing failure monitoring. */
+export interface AiReviewLog {
+  id: string;
+  plan_id: string | null;
+  teacher_id: string | null;
+  outcome: AiReviewOutcome;
+  error_code: string | null;
+  message: string | null;
+  latency_ms: number | null;
+  attempt: number;
+  created_at: string;
 }
 
 export interface PeriodActivity {

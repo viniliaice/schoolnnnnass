@@ -96,6 +96,8 @@ describe('submitForReview failure signalling', () => {
           return Promise.resolve({ error: null });
         },
       }),
+      // submitForReview now also writes an ai_review_logs row.
+      insert: () => Promise.resolve({ error: null }),
     }));
     return updates;
   }

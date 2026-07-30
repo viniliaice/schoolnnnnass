@@ -20,6 +20,7 @@ import { MonitorTeachers } from './pages/admin/MonitorTeachers';
 import { ClassProgress } from './pages/admin/ClassProgress';
 import { ClassAnnouncements } from './pages/admin/ClassAnnouncements';
 import { ClassPromotion } from './pages/admin/ClassPromotion';
+import { AiReviewLogs } from './pages/admin/AiReviewLogs';
 
 // Supervisor Pages
 import { SupervisorDashboard } from './pages/supervisor/SupervisorDashboard';
@@ -87,6 +88,7 @@ function AppContent() {
             case '/admin/bulk': return <BulkUpload />;
             case '/admin/exams': return <ExamVerification />;
             case '/admin/monitor': return <MonitorTeachers />;
+            case '/admin/ai-logs': return <AiReviewLogs />;
             case '/admin/class-progress': return <ClassProgress />;
             case '/admin/exam-reports': return <ExamReport />;
             case '/admin/announcements': return <ClassAnnouncements />;

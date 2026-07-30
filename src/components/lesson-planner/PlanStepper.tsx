@@ -17,6 +17,8 @@ interface PlanStepperProps {
   canGoToPlan: boolean;
   canGoToReview: boolean;
   weekLabel: string;
+  /** Full "1 Aug – 5 Aug 2026" range shown next to the title. */
+  weekRangeLabel?: string;
   className: string;
   isDirty: boolean;
   saving: boolean;
@@ -28,6 +30,7 @@ export function PlanStepper({
   canGoToPlan,
   canGoToReview,
   weekLabel,
+  weekRangeLabel,
   className,
   isDirty,
   saving,
@@ -50,7 +53,9 @@ export function PlanStepper({
           <div>
             <h1 className="text-2xl font-bold text-slate-900">Lesson Plans</h1>
             <p className="text-sm text-slate-500">
-              {className ? `${className} · ` : ''}{weekLabel}
+              {className ? `${className} · ` : ''}
+              {weekRangeLabel || weekLabel}
+              {weekRangeLabel && weekLabel ? ` · ${weekLabel}` : ''}
             </p>
           </div>
         </div>

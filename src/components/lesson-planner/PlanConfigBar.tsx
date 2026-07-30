@@ -9,6 +9,8 @@ interface PlanConfigBarProps {
   weekLabel: string;
   weekStartDate: string;
   weekEndDate: string;
+  /** Full "1 Aug – 5 Aug 2026" label. */
+  weekRangeLabel?: string;
   onPrevWeek: () => void;
   onNextWeek: () => void;
 }
@@ -22,6 +24,7 @@ export function PlanConfigBar({
   weekLabel,
   weekStartDate,
   weekEndDate,
+  weekRangeLabel,
   onPrevWeek,
   onNextWeek,
 }: PlanConfigBarProps) {
@@ -55,8 +58,8 @@ export function PlanConfigBar({
         >
           <ChevronLeft className="w-4 h-4" />
         </button>
-        <span className="text-xs text-slate-500">
-          {weekStartDate} — {weekEndDate}
+        <span className="text-xs font-medium text-slate-600 min-w-[150px] text-center">
+          {weekRangeLabel || `${weekStartDate} — ${weekEndDate}`}
         </span>
         <button
           onClick={onNextWeek}

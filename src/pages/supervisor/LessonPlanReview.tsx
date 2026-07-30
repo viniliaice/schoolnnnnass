@@ -1,14 +1,16 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   useSupervisorPlans, usePlanWithPeriods, useReview,
-  useApprovePlan, useRejectPlan, useRetryAIReview,
+  useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout,
 } from '../../lib/hooks/useLessonPlans';
 import { LessonPlanPeriod, PlanStatus } from '../../types';
-import { ClipboardCheck, ChevronRight, Filter, Download, AlertTriangle, Loader2 } from 'lucide-react';
+import { ClipboardCheck, ChevronRight, Filter, Download, AlertTriangle, Loader2, Unlock, CalendarRange } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
 import { AiReviewPanel, minutesSince } from '../../components/lesson-planner/AiReviewPanel';
 import { printElementAsPdf } from '../../utils/printToPdf';
+import { describePlanWeek } from '../../utils/weekDates';
+import { getCurrentAcademicYear } from '../../lib/db/academic';
 
 function toReadPeriods(periods: LessonPlanPeriod[]): ReadPeriod[] {
   return periods.map((p) => ({
@@ -31,6 +33,7 @@ const STATUS_CHIP: Record<PlanStatus, string> = {
   approved: 'bg-emerald-100 text-emerald-700',
   rejected: 'bg-rose-100 text-rose-700',
   ai_failed: 'bg-orange-100 text-orange-700',
+  revision_requested: 'bg-amber-100 text-amber-700',
 };
 
 export function LessonPlanReview() {
@@ -42,9 +45,23 @@ export function LessonPlanReview() {
   const { data: plans } = useSupervisorPlans();
   const { data: planWithPeriods } = usePlanWithPeriods(selectedPlanId || undefined);
   const { data: review } = useReview(selectedPlanId || undefined);
+  // Guarantees a stuck plan flips to ai_failed instead of waiting forever (#4).
+  useAiReviewTimeout(planWithPeriods?.plan);
   const approveMut = useApprovePlan();
   const rejectMut = useRejectPlan();
   const retryMut = useRetryAIReview();
+  const revisionMut = useRequestRevision();
+  const [yearStart, setYearStart] = useState<string | null>(null);
+
+  useEffect(() => {
+    getCurrentAcademicYear().then((ay) => setYearStart(ay?.startDate ?? null));
+  }, []);
+
+  const handleRequestRevision = async () => {
+    if (!selectedPlanId) return;
+    await revisionMut.mutateAsync({ planId: selectedPlanId, note: comment || undefined });
+    setComment('');
+  };
 
   const handleApprove = async () => {
     if (!selectedPlanId) return;
@@ -72,7 +89,7 @@ export function LessonPlanReview() {
     await retryMut.mutateAsync({ planId: selectedPlanId, periods });
   };
 
-  const pending = approveMut.isPending || rejectMut.isPending;
+  const pending = approveMut.isPending || rejectMut.isPending || revisionMut.isPending;
   const plan = planWithPeriods?.plan;
   const aiFailed = plan?.status === 'ai_failed';
   const waitingOnAi = !!plan && plan.status === 'submitted' && !review;
@@ -125,6 +142,10 @@ export function LessonPlanReview() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-slate-900 truncate">{p.title}</p>
                   <p className="text-xs text-slate-500">{p.teacher_name || 'Unknown'} · {p.class_name}</p>
+                  <p className="text-xs text-slate-500 inline-flex items-center gap-1 mt-0.5">
+                    <CalendarRange className="w-3 h-3" />
+                    {describePlanWeek(p.week_label, yearStart)}
+                  </p>
                   <span className={cn('inline-flex items-center gap-1 mt-1 px-2 py-0.5 rounded-full text-xs font-medium', STATUS_CHIP[p.status])}>
                     {p.status === 'ai_failed' && <AlertTriangle className="w-3 h-3" />}
                     {p.status === 'ai_failed' ? 'AI failed' : p.status.replace('_', ' ')}
@@ -153,6 +174,11 @@ export function LessonPlanReview() {
                     You are not blocked. Read the plan below and approve or request revisions manually, or retry the AI
                     review first. Your decision is recorded either way.
                   </p>
+                  {plan.ai_failure_reason && (
+                    <p className="text-xs text-orange-900 mt-2 font-mono bg-orange-100 rounded-lg p-2 break-words">
+                      Reason: {plan.ai_failure_reason}
+                    </p>
+                  )}
                 </div>
               </div>
             )}
@@ -164,8 +190,9 @@ export function LessonPlanReview() {
                   <div>
                     <h2 className="text-xl font-bold text-slate-900">{plan.title}</h2>
                     <p className="text-sm text-slate-500 mt-1">
-                      {(plans?.find((p) => p.id === plan.id)?.teacher_name) || 'Unknown teacher'} · {plan.class_name} ·
-                      Week {plan.week_label} · {plan.period_count} periods/day
+                      {(plans?.find((p) => p.id === plan.id)?.teacher_name) || 'Unknown teacher'} · {plan.class_name} ·{' '}
+                      <span className="font-medium text-slate-600">{describePlanWeek(plan.week_label, yearStart)}</span> ·{' '}
+                      {plan.period_count} periods/day
                     </p>
                   </div>
                   <div className="flex items-center gap-2">
@@ -192,6 +219,7 @@ export function LessonPlanReview() {
                 review={review}
                 status={plan.status}
                 updatedAt={plan.updated_at}
+                failureReason={plan.ai_failure_reason}
                 retrying={retryMut.isPending}
                 onRetry={handleRetryReview}
                 retryError={retryMut.isError ? (retryMut.error as Error)?.message : null}
@@ -242,8 +270,28 @@ export function LessonPlanReview() {
                   disabled={pending}
                   className="flex-1 min-w-[160px] py-2.5 rounded-xl bg-rose-600 text-white font-medium text-sm hover:bg-rose-700 disabled:opacity-50 transition-colors"
                 >
-                  {rejectMut.isPending ? 'Sending…' : 'Request Revisions'}
+                  {rejectMut.isPending ? 'Sending…' : 'Reject'}
                 </button>
+              </div>
+
+              {/* Unlocking (#1): the only way a submitted plan becomes editable */}
+              <div className="pt-3 border-t border-slate-100">
+                <button
+                  onClick={handleRequestRevision}
+                  disabled={pending || plan.status === 'revision_requested'}
+                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-amber-500 text-white font-medium text-sm hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                >
+                  <Unlock className="w-4 h-4" />
+                  {plan.status === 'revision_requested'
+                    ? 'Already unlocked for editing'
+                    : revisionMut.isPending
+                      ? 'Unlocking…'
+                      : 'Request Revisions (unlock for editing)'}
+                </button>
+                <p className="text-xs text-slate-500 mt-2">
+                  Sends the plan back to the teacher and re-enables their edit controls. Any comment above is
+                  passed along as your revision note.
+                </p>
               </div>
 
               {(approveMut.isError || rejectMut.isError) && (

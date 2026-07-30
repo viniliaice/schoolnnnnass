@@ -1,59 +1,24 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { useTeacherPlans, useCreatePlan, useSavePeriods, useSubmitForReview, usePlanWithPeriods, useReview, useRetryAIReview } from '../../lib/hooks/useLessonPlans';
-import { DayOfWeek, DAYS_OF_WEEK, LessonPlanPeriod, PeriodActivity, Subject, AcademicYear } from '../../types';
-import { Loader2, Upload, FileSpreadsheet } from 'lucide-react';
+import { useTeacherPlans, useCreatePlan, useSavePeriods, useSubmitForReview, usePlanWithPeriods, useReview, useRetryAIReview, useAiReviewTimeout } from '../../lib/hooks/useLessonPlans';
+import { DayOfWeek, DAYS_OF_WEEK, LessonPlanPeriod, PeriodActivity, Subject, AcademicYear, isPlanEditable } from '../../types';
+import { Loader2, Upload, FileSpreadsheet, Lock, Unlock } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { cn } from '../../utils/cn';
 import { getUserById } from '../../lib/db/profiles';
 import { getClassSubjectsForTeacher } from '../../lib/db/classes';
 import { getCurrentAcademicYear, getCurrentTerm } from '../../lib/db/academic';
 import { fetchUnitPlanByClassSubjectTerm } from '../../lib/db/unitPlans';
+import { weekRangeForNumber, weekNumberForDate, makeWeekLabel, describePlanWeek } from '../../utils/weekDates';
 import { PlanConfigBar } from '../../components/lesson-planner/PlanConfigBar';
 import { PlanGrid } from '../../components/lesson-planner/PlanGrid';
 import { CreatePlanForm } from '../../components/lesson-planner/CreatePlanForm';
 import { ReviewStep } from '../../components/lesson-planner/ReviewStep';
 import { PlanStepper, StepNav, PlanTab } from '../../components/lesson-planner/PlanStepper';
 import { AiReviewPanel } from '../../components/lesson-planner/AiReviewPanel';
+import { PlanReadView } from '../../components/lesson-planner/PlanReadView';
 import { SubmittedPlansView } from './SubmittedPlansView';
-
-function getWeekLabel(date: Date, academicYearStart?: string): string {
-  const baseDate = academicYearStart ? new Date(academicYearStart) : new Date();
-  const start = new Date(baseDate);
-  start.setHours(0, 0, 0, 0);
-  const target = new Date(date);
-  target.setHours(0, 0, 0, 0);
-  const diffDays = Math.floor((target.getTime() - start.getTime()) / 86400000);
-  if (diffDays < 0) return `${start.getFullYear()}-W00`;
-  const weekNum = Math.floor(diffDays / 7) + 1;
-  return `${start.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
-}
-
-function getWeekDateRange(academicYearStart: string, weekOffset: number): { dates: string[]; startDate: string; endDate: string } {
-  const baseDate = new Date(academicYearStart);
-  baseDate.setHours(0, 0, 0, 0);
-  const now = new Date();
-  now.setHours(0, 0, 0, 0);
-  const diffDays = Math.floor((now.getTime() - baseDate.getTime()) / 86400000);
-  const currentWeek = Math.floor(diffDays / 7);
-  const targetWeek = currentWeek + weekOffset;
-  const weekStart = new Date(baseDate);
-  weekStart.setDate(weekStart.getDate() + targetWeek * 7);
-  const dates: string[] = [];
-  for (let i = 0; i < 5; i++) {
-    const d = new Date(weekStart);
-    d.setDate(d.getDate() + i);
-    dates.push(`${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`);
-  }
-  const formatShort = (d: Date) => {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${d.getDate()} ${months[d.getMonth()]}`;
-  };
-  const weekEnd = new Date(weekStart);
-  weekEnd.setDate(weekEnd.getDate() + 4);
-  return { dates, startDate: formatShort(weekStart), endDate: formatShort(weekEnd) };
-}
 
 interface PeriodCell {
   day: DayOfWeek;
@@ -123,7 +88,9 @@ export function LessonPlanner() {
 
   const [tab, setTab] = useState<PlanTab>('setup');
   const [academicYear, setAcademicYear] = useState<AcademicYear | null>(null);
-  const [weekLabel, setWeekLabel] = useState(() => getWeekLabel(new Date()));
+  // Absolute 1-based week number. The week LABEL is always derived from this,
+  // so changing week can never leave the label pointing at another week's plan.
+  const [selectedWeekNumber, setSelectedWeekNumber] = useState<number | null>(null);
   const [periodCount, setPeriodCount] = useState(5);
   const [className, setClassName] = useState('');
   const [title, setTitle] = useState('');
@@ -132,12 +99,22 @@ export function LessonPlanner() {
   const [planId, setPlanId] = useState<string | null>(null);
   const [periods, setPeriods] = useState<PeriodCell[]>(() => createEmptyPeriods(5));
   const [isDirty, setIsDirty] = useState(false);
-  const [selectedWeekOffset, setSelectedWeekOffset] = useState(0);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+
+  const academicYearStart = academicYear?.startDate;
+  const weekRangeInfo = academicYearStart && selectedWeekNumber
+    ? weekRangeForNumber(academicYearStart, selectedWeekNumber)
+    : null;
+  // Single source of truth: label ALWAYS follows the selected week.
+  const weekLabel = academicYearStart && selectedWeekNumber
+    ? makeWeekLabel(academicYearStart, selectedWeekNumber)
+    : '';
 
   const { data: existingPlans } = useTeacherPlans(session?.userId);
   const { data: planWithPeriods } = usePlanWithPeriods(planId || undefined);
   const { data: review } = useReview(planId || undefined);
+  // Guarantees a plan never sits on "waiting" forever (#4).
+  useAiReviewTimeout(planWithPeriods?.plan);
   const createPlanMut = useCreatePlan();
   const retryMut = useRetryAIReview();
   const savePeriodsMut = useSavePeriods();
@@ -158,10 +135,10 @@ export function LessonPlanner() {
   }, []);
 
   useEffect(() => {
-    if (academicYear) {
-      setWeekLabel(getWeekLabel(new Date(), academicYear.startDate));
+    if (academicYear && selectedWeekNumber === null) {
+      setSelectedWeekNumber(weekNumberForDate(academicYear.startDate, new Date()));
     }
-  }, [academicYear]);
+  }, [academicYear, selectedWeekNumber]);
 
   useEffect(() => {
     if (!session || !className) { setSubjects([]); return; }
@@ -171,13 +148,38 @@ export function LessonPlanner() {
   }, [session, className]);
 
   useEffect(() => {
-    if (planWithPeriods) {
+    // Only hydrate from a plan that actually belongs to the selected week.
+    // Guards against a stale fetch writing another week's content into the grid.
+    if (planWithPeriods && (!weekLabel || planWithPeriods.plan.week_label === weekLabel)) {
       setPeriodCount(planWithPeriods.plan.period_count);
       setPeriods(periodsFromDb(planWithPeriods.periods, planWithPeriods.plan.period_count));
       setTitle(planWithPeriods.plan.title);
       setClassName(planWithPeriods.plan.class_name);
     }
-  }, [planWithPeriods]);
+  }, [planWithPeriods, weekLabel]);
+
+  /**
+   * Switch to a different week.
+   *
+   * Critically this DISCARDS the currently loaded plan. Without this the
+   * previously selected plan stayed loaded and only the displayed date changed,
+   * so the old week's content got saved under the new week's label.
+   */
+  const handleSelectWeek = useCallback((nextWeekNumber: number) => {
+    const safe = Math.max(1, nextWeekNumber);
+    setSelectedWeekNumber((current) => {
+      if (current === safe) return current;
+      // Cancel any pending autosave aimed at the plan we are leaving.
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      setPlanId(null);
+      setPeriods(createEmptyPeriods(periodCount));
+      setTitle('');
+      setUploadedFileName(null);
+      setIsDirty(false);
+      setTab('setup');
+      return safe;
+    });
+  }, [periodCount]);
 
   const updateCell = useCallback((day: DayOfWeek, periodNumber: number, field: string, value: any) => {
     setPeriods((prev) => prev.map((c) => {
@@ -235,15 +237,21 @@ export function LessonPlanner() {
 
   const doSave = useCallback(async () => {
     if (!session || !planId || isSubmittingRef.current) return;
+    // Never autosave a submitted/locked plan.
+    if (planWithPeriods && !isPlanEditable(planWithPeriods.plan.status)) return;
     const nonEmpty = periodsForSave.filter((p) => p.topic.trim());
     if (nonEmpty.length === 0) return;
     setIsDirty(false);
     try {
       await savePeriodsMut.mutateAsync({ plan_id: planId, periods: periodsForSave });
-    } catch {
+    } catch (err: any) {
+      if (err?.isLocked) {
+        addToast({ type: 'error', title: 'This plan is locked', description: err.message });
+        return;
+      }
       addToast({ type: 'error', title: 'Failed to save', description: 'Please try again.' });
     }
-  }, [session, planId, periodsForSave, savePeriodsMut, addToast]);
+  }, [session, planId, periodsForSave, savePeriodsMut, addToast, planWithPeriods]);
 
   useEffect(() => {
     if (!isDirty || isSubmittingRef.current) return;
@@ -256,14 +264,24 @@ export function LessonPlanner() {
 
   const handleCreateOrSelectPlan = useCallback(async () => {
     if (!session) return;
-    // Look for an existing plan matching the current week
-    const matchingPlan = existingPlans?.find((p) => p.week_label === weekLabel);
+    if (!weekLabel) {
+      addToast({ type: 'error', title: 'Select a week first' });
+      return;
+    }
+
+    // Match on week AND class so one week's record is never reused for another.
+    const matchingPlan = existingPlans?.find(
+      (p) => p.week_label === weekLabel && p.class_name === className
+    );
     if (matchingPlan) {
       setPlanId(matchingPlan.id);
       setTab('plan');
       return;
     }
-    // No match — create a new plan for the current week
+
+    // No plan for this exact week — start a blank one carrying only the new
+    // week_label. Content from any other week is intentionally not copied.
+    setPeriods(createEmptyPeriods(periodCount));
     try {
       const plan = await createPlanMut.mutateAsync({
         teacher_id: session.userId,
@@ -283,6 +301,14 @@ export function LessonPlanner() {
 
   const handleSubmit = useCallback(async () => {
     if (!planId || isSubmittingRef.current) return;
+    if (planWithPeriods && !isPlanEditable(planWithPeriods.plan.status)) {
+      addToast({
+        type: 'error',
+        title: 'This plan is locked',
+        description: 'It has already been submitted. Ask your supervisor to request revisions.',
+      });
+      return;
+    }
     const emptyCells = periods.filter((p) => !p.isFree && p.subject !== '__FREE__' && !p.topic.trim());
     if (emptyCells.length > 0) {
       addToast({ type: 'error', title: 'All periods must have a topic' });
@@ -325,6 +351,8 @@ export function LessonPlanner() {
           description: 'Your supervisor can still see and approve the plan. You can retry the AI review below.',
         });
         setTab('mine');
+      } else if (err?.isLocked) {
+        addToast({ type: 'error', title: 'This plan is locked', description: err.message });
       } else {
         addToast({
           type: 'error',
@@ -335,7 +363,7 @@ export function LessonPlanner() {
     } finally {
       isSubmittingRef.current = false;
     }
-  }, [planId, periods, periodsForSave, savePeriodsMut, submitMut, addToast, className]);
+  }, [planId, periods, periodsForSave, savePeriodsMut, submitMut, addToast, className, planWithPeriods]);
 
   const handleSelectFromHistory = useCallback((selectedPlanId: string) => {
     setPlanId(selectedPlanId);
@@ -474,10 +502,20 @@ export function LessonPlanner() {
     reader.readAsArrayBuffer(file);
   }, [subjects, className, addToast]);
 
-  const { dates: weekDates, startDate: weekStartDate, endDate: weekEndDate } =
-    academicYear ? getWeekDateRange(academicYear.startDate, selectedWeekOffset)
-                : { dates: [] as string[], startDate: '', endDate: '' };
-  const weekRange = weekStartDate && weekEndDate ? `${weekStartDate} — ${weekEndDate}` : '';
+  const weekDates = weekRangeInfo?.dates ?? [];
+  const weekStartDate = weekRangeInfo?.startShort ?? '';
+  const weekEndDate = weekRangeInfo?.endShort ?? '';
+  // Full, unambiguous range shown next to the title everywhere.
+  const weekRange = weekRangeInfo?.label ?? '';
+
+  const goPrevWeek = () => handleSelectWeek((selectedWeekNumber ?? 1) - 1);
+  const goNextWeek = () => handleSelectWeek((selectedWeekNumber ?? 1) + 1);
+
+  // ── Locking (#1) ──
+  const currentStatus = planWithPeriods?.plan.status;
+  // A plan with no row yet is a brand-new draft, hence editable.
+  const editable = !planId || isPlanEditable(currentStatus);
+  const lockedForEditing = !!planId && !editable;
 
   const loading = createPlanMut.isPending || savePeriodsMut.isPending || submitMut.isPending;
   const emptyPeriodCount = periods.filter((p) => !p.isFree && p.subject !== '__FREE__' && !p.topic.trim()).length;
@@ -493,6 +531,7 @@ export function LessonPlanner() {
         canGoToPlan={!!planId}
         canGoToReview={!!planId && hasAnyTopic}
         weekLabel={weekLabel}
+        weekRangeLabel={weekRange}
         className={className}
         isDirty={isDirty}
         saving={savePeriodsMut.isPending}
@@ -513,8 +552,9 @@ export function LessonPlanner() {
             loading={loading}
             weekStartDate={weekStartDate}
             weekEndDate={weekEndDate}
-            onPrevWeek={() => setSelectedWeekOffset((o) => o - 1)}
-            onNextWeek={() => setSelectedWeekOffset((o) => o + 1)}
+            weekRangeLabel={weekRange}
+            onPrevWeek={goPrevWeek}
+            onNextWeek={goNextWeek}
           />
           <StepNav
             onNext={handleCreateOrSelectPlan}
@@ -528,6 +568,36 @@ export function LessonPlanner() {
       {/* STEP 2: WEEKLY GRID */}
       {tab === 'plan' && planId && (
         <>
+          {lockedForEditing && (
+            <div className="rounded-2xl border-2 border-slate-300 bg-slate-50 p-4 flex items-start gap-3">
+              <Lock className="w-5 h-5 text-slate-500 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-slate-800">
+                  This plan is {currentStatus?.replace('_', ' ')} and is read-only
+                </p>
+                <p className="text-sm text-slate-600 mt-0.5">
+                  Submitted plans cannot be edited. Ask your supervisor to request revisions if you
+                  need to change it — the edit controls come back automatically once they do.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {currentStatus === 'revision_requested' && (
+            <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-4 flex items-start gap-3">
+              <Unlock className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+              <div className="min-w-0">
+                <p className="text-sm font-bold text-amber-900">Revisions requested — this plan is editable again</p>
+                {planWithPeriods?.plan.revision_note && (
+                  <p className="text-sm text-amber-800 mt-0.5">
+                    Supervisor note: {planWithPeriods.plan.revision_note}
+                  </p>
+                )}
+                <p className="text-sm text-amber-700 mt-0.5">Make your changes, then resubmit for review.</p>
+              </div>
+            </div>
+          )}
+
           <PlanConfigBar
             className={className}
             setClassName={setClassName}
@@ -537,9 +607,13 @@ export function LessonPlanner() {
             weekLabel={weekLabel}
             weekStartDate={weekStartDate}
             weekEndDate={weekEndDate}
-            onPrevWeek={() => setSelectedWeekOffset((o) => o - 1)}
-            onNextWeek={() => setSelectedWeekOffset((o) => o + 1)}
+            weekRangeLabel={weekRange}
+            onPrevWeek={goPrevWeek}
+            onNextWeek={goNextWeek}
           />
+          {/* Editing controls are hidden entirely on a locked plan */}
+          {!lockedForEditing && (
+          <>
           <input
             ref={fileInputRef}
             type="file"
@@ -573,31 +647,46 @@ export function LessonPlanner() {
               Clear All
             </button>
           </div>
-          <PlanGrid
-            periods={periods}
-            periodCount={periodCount}
-            teacherClasses={teacherClasses}
-            subjects={subjects}
-            planClassName={className}
-            weekDates={weekDates}
-            onUpdateCell={updateCell}
-            onUpdateActivity={updateActivity}
-            onAddActivity={addActivity}
-            onRemoveActivity={removeActivity}
-          />
+          </>
+          )}
+
+          {lockedForEditing ? (
+            <PlanReadView
+              periods={periods}
+              periodCount={periodCount}
+              subjects={subjects}
+              planClassName={className}
+              weekDates={weekDates}
+            />
+          ) : (
+            <PlanGrid
+              periods={periods}
+              periodCount={periodCount}
+              teacherClasses={teacherClasses}
+              subjects={subjects}
+              planClassName={className}
+              weekDates={weekDates}
+              onUpdateCell={updateCell}
+              onUpdateActivity={updateActivity}
+              onAddActivity={addActivity}
+              onRemoveActivity={removeActivity}
+            />
+          )}
 
           <StepNav
             onBack={() => setTab('setup')}
             backLabel="Back to setup"
-            onNext={() => setTab('review')}
-            nextLabel="Next: Review & Submit"
-            nextDisabled={!hasAnyTopic}
+            onNext={() => setTab(lockedForEditing ? 'mine' : 'review')}
+            nextLabel={lockedForEditing ? 'View submitted plans' : 'Next: Review & Submit'}
+            nextDisabled={!lockedForEditing && !hasAnyTopic}
             nextHint={
-              !hasAnyTopic
-                ? 'Add at least one topic to continue'
-                : emptyPeriodCount > 0
-                  ? `${emptyPeriodCount} period(s) still empty`
-                  : undefined
+              lockedForEditing
+                ? 'This plan is read-only'
+                : !hasAnyTopic
+                  ? 'Add at least one topic to continue'
+                  : emptyPeriodCount > 0
+                    ? `${emptyPeriodCount} period(s) still empty`
+                    : undefined
             }
           />
         </>
@@ -652,6 +741,7 @@ export function LessonPlanner() {
           review={review}
           status={planStatus!}
           updatedAt={planWithPeriods?.plan.updated_at}
+          failureReason={planWithPeriods?.plan.ai_failure_reason}
           retrying={retryMut.isPending}
           onRetry={handleRetryReview}
           retryError={retryMut.isError ? (retryMut.error as Error)?.message : null}

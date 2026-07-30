@@ -36,6 +36,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Class Progress', icon: Calendar, path: '/admin/class-progress' },
     { label: 'Promote Classes', icon: ArrowUpDown, path: '/admin/promotion' },
     { label: 'Monitor Teacher', icon: ClipboardCheck, path: '/admin/monitor' },
+    { label: 'AI Review Logs', icon: Activity, path: '/admin/ai-logs' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/admin/exam-reports' },
   ],
   teacher: [

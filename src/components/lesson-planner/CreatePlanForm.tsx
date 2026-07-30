@@ -12,6 +12,8 @@ interface CreatePlanFormProps {
   loading: boolean;
   weekStartDate: string;
   weekEndDate: string;
+  /** Full "1 Aug – 5 Aug 2026" label. */
+  weekRangeLabel?: string;
   onPrevWeek: () => void;
   onNextWeek: () => void;
 }
@@ -28,6 +30,7 @@ export function CreatePlanForm({
   loading,
   weekStartDate,
   weekEndDate,
+  weekRangeLabel,
   onPrevWeek,
   onNextWeek,
 }: CreatePlanFormProps) {
@@ -76,8 +79,8 @@ export function CreatePlanForm({
         >
           <ChevronLeft className="w-5 h-5" />
         </button>
-        <span className="text-sm font-semibold text-slate-700 min-w-[140px] text-center">
-          {weekStartDate} — {weekEndDate}
+        <span className="text-sm font-semibold text-slate-700 min-w-[200px] text-center">
+          {weekRangeLabel || `${weekStartDate} — ${weekEndDate}`}
         </span>
         <button
           onClick={onNextWeek}
