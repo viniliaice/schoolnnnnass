@@ -15,6 +15,7 @@ import { ManageClassSubjects } from './pages/admin/ManageClassSubjects';
 import { ManageStudents } from './pages/admin/ManageStudents';
 import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
+import { FamilyIds } from './pages/admin/FamilyIds';
 import { ExamVerification } from './pages/admin/ExamVerification';
 import { MonitorTeachers } from './pages/admin/MonitorTeachers';
 import { ClassProgress } from './pages/admin/ClassProgress';
@@ -87,6 +88,7 @@ function AppContent() {
             case '/admin/students': return <ManageStudents />;
             case '/admin/academic': return <ManageAcademic />;
             case '/admin/bulk': return <BulkUpload />;
+            case '/admin/family-ids': return <FamilyIds />;
             case '/admin/bulk-grades': return <BulkUploadGrades />;
             case '/admin/exams': return <ExamVerification />;
             case '/admin/monitor': return <MonitorTeachers />;

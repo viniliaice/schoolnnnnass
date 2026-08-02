@@ -69,6 +69,14 @@ export interface Student {
   className: string;
   parentId: string | null;
   createdAt: string;
+  /** Government/admission ID from the transport sheet (Gov-id column). */
+  govId?: string | null;
+  /** Bus number, 'WALKER', or 'CAR' (family-ID feature). */
+  transport?: string | null;
+  /** Parent phone imported from the sheet's SECOND NUMBER column. */
+  parentPhone?: string | null;
+  /** Family ID: zero-padded 4-digit string ('0421'); MBK- prefix is display-only. */
+  familyId?: string | null;
 }
 
 export interface Subject {
