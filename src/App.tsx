@@ -16,6 +16,7 @@ import { ManageStudents } from './pages/admin/ManageStudents';
 import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
 import { FamilyIds } from './pages/admin/FamilyIds';
+import { GateScreen } from './pages/admin/gate/GateScreen';
 import { ExamVerification } from './pages/admin/ExamVerification';
 import { MonitorTeachers } from './pages/admin/MonitorTeachers';
 import { ClassProgress } from './pages/admin/ClassProgress';
@@ -77,11 +78,12 @@ function AppContent() {
   }
 
   return (
-    <DashboardLayout>
+    <DashboardLayout fullscreenPaths={['/gate']}>
       {(currentPath, navigate) => {
         // Admin routes
         if (session.role === 'admin') {
           switch (currentPath) {
+            case '/gate': return <GateScreen navigate={navigate} />;
             case '/dashboard': return <AdminDashboard navigate={navigate} />;
             case '/admin/users': return <ManageUsers />;
             case '/admin/class-subjects': return <ManageClassSubjects />;
@@ -111,6 +113,7 @@ function AppContent() {
           // Supervisor routes
           if (session.role === 'supervisor') {
             switch (currentPath) {
+              case '/gate': return <GateScreen navigate={navigate} />;
               case '/dashboard': return <SupervisorDashboard />;
               case '/supervisor/students': return <TeacherStudents />;
               case '/supervisor/verifications': return <ExamVerification />;

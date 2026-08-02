@@ -261,3 +261,28 @@ Implemented and verified (typecheck clean, 111/111 tests pass, `vite build` succ
 **Pre-existing failure (not introduced):** `src/lib/__tests__/lesson-plan-decisions.test.ts` mocks supabase without `auth` while `lessonPlans.ts` calls `supabase.auth.getSession()` — 3 tests fail on the unmodified repo too. Out of scope; flagged for a follow-up fix.
 
 **Remaining (not in this turn):** M2 gate screen (T5/T12), M3 parent portal (T9), E2E harness (T10), Umal's team access (T11).
+
+---
+
+# M2 Implementation Status (2026-08-02) — /gate
+
+Implemented and verified (typecheck clean, 120/120 tests pass, `vite build` succeeds):
+
+| Task | Status | Notes |
+|---|---|---|
+| T5/T12 gate screen | ✅ | `src/pages/admin/gate/GateScreen.tsx` — mobile-first fullscreen route (no sidebar/footer via new `fullscreenPaths` prop on DashboardLayout) |
+| Route gating | ✅ | `/gate` added to BOTH admin and supervisor switches in `App.tsx` (eng-review decision 7); RPC enforces admin/supervisor in SQL |
+| Keypad + display | ✅ | Big display input (5xl, tracking-widest, ≥32px), 3×4 keypad with 64px keys, clear/backspace, `inputMode="numeric"`, autoFocus (hardware scanners type into it + Enter = same path as keypad) |
+| Camera scan | ✅ | `html5-qrcode` 2.3.8, environment-facing camera, 220px qrbox, decode → auto-check; permission denied → keypad fallback; scanner div always mounted (no render race) |
+| States (full table) | ✅ | idle (prompt) / partial (<4 digits hint, Check disabled) / checking (spinner text) / found (green panel + ✓ + double beep) / **NOT FOUND (full red screen + ✕ + buzz + audit)** / error (retry panel) |
+| Soomaali-first + EN toggle | ✅ | `src/lib/i18n/gateStrings.ts` — full so/en string map (drafted from school's bilingual docs; native pass was skipped by decision, TODOS.md notes it) |
+| NOT-FOUND audit | ✅ | `src/lib/db/gate.ts` — `lookupGateFamily()` wraps `lookup_family`, audit-logs `family_ids.gate_not_found` (best-effort, non-blocking); `AuditAction` union extended |
+| Audio | ✅ | `src/lib/gate/beep.ts` — Web Audio success double-beep + error buzz, no-op when unavailable |
+| Tests | ✅ | +9 (gate-utils ×6: input normalization/cap/format; gate wrapper ×3: found / NOT-FOUND audits / RPC error) — 120/120 total |
+
+**Implementation notes**
+- Scanner element is always in the DOM (hidden when off) so `Html5Qrcode.start()` never races React's render — a classic camera-mount bug avoided.
+- Keypad buttons use `onPointerDown` + `preventDefault()` so taps don't steal focus from the display input (keeps hardware-scanner input alive).
+- NOT FOUND is a full-screen red overlay with ✕ glyph + diagonal-stripe pattern + text — not color-only (design decision 4); a `✓ Logged` line confirms the audit.
+
+**Remaining:** M3 parent portal (T9), E2E harness (T10), Umal's team access (T11), release log + offline gate (deferred).

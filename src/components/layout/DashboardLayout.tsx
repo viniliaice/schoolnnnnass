@@ -4,14 +4,21 @@ import { Sidebar } from './Sidebar';
 interface DashboardLayoutProps {
   children: (currentPath: string, navigate: (path: string) => void) => ReactNode;
   initialPath?: string;
+  /** Paths rendered without sidebar/footer chrome (e.g. the mobile gate). */
+  fullscreenPaths?: string[];
 }
 
-export function DashboardLayout({ children, initialPath = '/dashboard' }: DashboardLayoutProps) {
+export function DashboardLayout({ children, initialPath = '/dashboard', fullscreenPaths = [] }: DashboardLayoutProps) {
   const [currentPath, setCurrentPath] = useState(initialPath);
 
   const navigate = useCallback((path: string) => {
     setCurrentPath(path);
   }, []);
+
+  // Mobile-first full-screen routes (no sidebar, no footer, edge-to-edge).
+  if (fullscreenPaths.includes(currentPath)) {
+    return <main className="min-h-screen bg-slate-100">{children(currentPath, navigate)}</main>;
+  }
 
   return (
     <div className="flex min-h-screen bg-slate-50">
