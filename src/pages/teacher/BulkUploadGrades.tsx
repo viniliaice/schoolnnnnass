@@ -27,6 +27,13 @@ type SubjectBinding = {
   reason?: string;
 };
 
+type RecordOrigin = {
+  record: BulkGradeRecord;
+  rowNumber: number;
+  studentName: string;
+  subjectName: string;
+};
+
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const TEMPLATE_SUBJECTS = ['English', 'Math', 'Science', 'Social', 'Somali', 'Arabic', 'Tarabiya'];
 const TEMPLATE_LABELS = ['HW1 5', 'HW2 5', 'HW3 5', 'HW4 5', 'CPW1 15', 'CPW2 15', 'CPW3 15', 'CPW4 15', 'Att 20', 'MT 20', 'Akhlaaq 10'];
@@ -233,43 +240,82 @@ export function BulkUploadGrades() {
     return issues;
   }, [currentTerm, parsed, resolvedStudents, selectedClass, subjectBindings]);
 
-  const records = useMemo<BulkGradeRecord[]>(() => {
+  // Keep workbook row metadata alongside records until preflight is complete.
+  // This lets us report a duplicate source row once, rather than emitting one
+  // noisy error for each of its 11 assessment cells.
+  const recordOrigins = useMemo<RecordOrigin[]>(() => {
     if (!parsed || !currentTerm) return [];
-    const output: BulkGradeRecord[] = [];
+    const output: RecordOrigin[] = [];
     for (const result of resolvedStudents) {
       if (!result.student) continue;
       for (const score of result.row.scores) {
         const binding = bindingBySubject.get(normalized(score.subjectName));
         if (!binding?.subject) continue;
         output.push({
-          studentId: result.student.id,
-          subjectId: binding.subject.id,
-          assessmentLabel: score.assessmentLabel,
-          examType: score.examType,
-          score: score.score,
-          total: score.total,
-          entryState: score.entryState,
-          month,
-          date,
-          termId: currentTerm.id,
+          rowNumber: result.row.rowNumber,
+          studentName: result.student.name,
+          subjectName: binding.subject.name,
+          record: {
+            studentId: result.student.id,
+            subjectId: binding.subject.id,
+            assessmentLabel: score.assessmentLabel,
+            examType: score.examType,
+            score: score.score,
+            total: score.total,
+            entryState: score.entryState,
+            month,
+            date,
+            termId: currentTerm.id,
+          },
         });
       }
     }
     return output;
   }, [bindingBySubject, currentTerm, date, month, parsed, resolvedStudents]);
 
+  const records = useMemo(() => recordOrigins.map(origin => origin.record), [recordOrigins]);
+
   const duplicateRecordIssues = useMemo<ParseIssue[]>(() => {
-    const seen = new Set<string>();
-    const issues: ParseIssue[] = [];
-    for (const record of records) {
-      const key = [record.studentId, record.subjectId, record.examType, record.assessmentLabel, record.termId].join('|');
-      if (seen.has(key)) {
-        issues.push({ severity: 'error', code: 'INVALID_TEMPLATE', message: `This workbook contains duplicate ${record.assessmentLabel} records for the same student, subject, and term.` });
-      }
-      seen.add(key);
+    type DuplicateGroup = {
+      studentName: string;
+      subjectName: string;
+      rows: Set<number>;
+      labels: Set<string>;
+    };
+    const byAssessmentKey = new Map<string, RecordOrigin[]>();
+    for (const origin of recordOrigins) {
+      const { record } = origin;
+      const assessmentKey = [record.studentId, record.subjectId, record.examType, record.assessmentLabel, record.termId].join('|');
+      byAssessmentKey.set(assessmentKey, [...(byAssessmentKey.get(assessmentKey) || []), origin]);
     }
-    return issues;
-  }, [records]);
+
+    const grouped = new Map<string, DuplicateGroup>();
+    for (const origins of byAssessmentKey.values()) {
+      if (origins.length < 2) continue;
+      const first = origins[0];
+      const baseKey = [first.record.studentId, first.record.subjectId, first.record.termId].join('|');
+      const group = grouped.get(baseKey) || {
+        studentName: first.studentName,
+        subjectName: first.subjectName,
+        rows: new Set<number>(),
+        labels: new Set<string>(),
+      };
+      origins.forEach(origin => group.rows.add(origin.rowNumber));
+      group.labels.add(first.record.assessmentLabel);
+      grouped.set(baseKey, group);
+    }
+
+    return Array.from(grouped.values()).map(group => {
+      const rows = Array.from(group.rows).sort((a, b) => a - b);
+      const labels = Array.from(group.labels).sort().join(', ');
+      return {
+        severity: 'error' as const,
+        code: 'INVALID_TEMPLATE' as const,
+        row: rows[rows.length - 1],
+        message: `Workbook rows ${rows.join(' and ')} resolve to ${group.studentName} for ${group.subjectName} and repeat ${labels}. Keep one row or correct the Student ID; duplicate rows are not automatically chosen.`,
+      };
+    });
+  }, [recordOrigins]);
 
   const allIssues = [...clientIssues, ...duplicateRecordIssues];
   const blockingIssues = allIssues.filter(issue => issue.severity === 'error');
