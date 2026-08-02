@@ -213,11 +213,11 @@ export function ManageUsers() {
       await createUser(data);
       addToast({ type: 'success', title: `${createRole} created successfully` });
       resetForm(); setShowCreate(false); await refresh();
-    } catch (error) {
+    } catch (error: any) {
       addToast({
         type: 'error',
         title: 'Failed to create user',
-        description: error instanceof Error ? error.message : undefined,
+        description: error instanceof Error ? error.message : (error?.message || String(error || '')),
       });
     }
   };

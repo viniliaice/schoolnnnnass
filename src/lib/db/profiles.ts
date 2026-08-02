@@ -81,10 +81,10 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
   // brand-new user. Capture the admin session first and restore it after
   // signUp, before the profile write.
   const { data: sessionData } = await supabase.auth.getSession();
-  const adminSession = sessionData.session;
+  const adminSession = sessionData?.session;
 
   const { data: authData, error: authError } = await supabase.auth.signUp({ email: data.email, password });
-  if (authError) throw authError;
+  if (authError) throw new Error(authError.message || 'Failed to create auth user');
   if (!authData.user) throw new Error('Failed to create auth user');
 
   const id = `${data.role}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -93,14 +93,17 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
   // admin privileges (and the stored session stays the admin's).
   if (adminSession) {
     const { error: restoreError } = await supabase.auth.setSession(adminSession);
-    if (restoreError) console.warn('[createUser] could not restore admin session:', restoreError.message);
+    if (restoreError) {
+      console.warn('[createUser] could not restore admin session:', restoreError.message);
+      throw new Error(`Failed to restore admin session: ${restoreError.message}`);
+    }
   }
 
   // profiles is SELECT-only under RLS (20260708_profiles_auth_session_rls) —
   // a direct supabase.from('profiles').insert() is denied for every role
   // (this is the office-role save bug). Profile creation goes through the
   // admin-only SECURITY DEFINER RPC instead.
-  const { error } = await supabase.rpc('create_user_profile', {
+  const { error: rpcError } = await supabase.rpc('create_user_profile', {
     p_id: id,
     p_name: rest.name,
     p_email: rest.email,
@@ -114,7 +117,7 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
     p_assigned_classes: rest.assignedClasses ?? [],
     p_assigned_subjects: rest.assignedSubjects ?? [],
   });
-  if (error) throw error;
+  if (rpcError) throw new Error(rpcError.message || 'Failed to create user profile');
 
   return { id, ...rest, createdAt: new Date().toISOString() } as User;
 }
@@ -126,7 +129,7 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
  */
 export async function setUserRole(userId: string, role: Role): Promise<void> {
   const { error } = await supabase.rpc('set_user_role', { p_user_id: userId, p_role: role });
-  if (error) throw error;
+  if (error) throw new Error(error.message || 'Failed to set user role');
 }
 
 export async function updateUser(id: string, data: Partial<User>): Promise<User> {
