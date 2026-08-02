@@ -73,11 +73,28 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
 
   if (!password) throw new Error('Password is required');
 
+  // signUp() (with email auto-confirm enabled) replaces the client session
+  // with the NEW user's session and fires an auth event before the profile
+  // row exists. If we then called the RPC, it would run as the new user —
+  // denied, because their profile doesn't exist yet (current_profile_role()
+  // is NULL). It would also leave the admin's stored session pointing at the
+  // brand-new user. Capture the admin session first and restore it after
+  // signUp, before the profile write.
+  const { data: sessionData } = await supabase.auth.getSession();
+  const adminSession = sessionData.session;
+
   const { data: authData, error: authError } = await supabase.auth.signUp({ email: data.email, password });
   if (authError) throw authError;
   if (!authData.user) throw new Error('Failed to create auth user');
 
   const id = `${data.role}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+
+  // Restore the admin identity BEFORE the profile write so the RPC runs with
+  // admin privileges (and the stored session stays the admin's).
+  if (adminSession) {
+    const { error: restoreError } = await supabase.auth.setSession(adminSession);
+    if (restoreError) console.warn('[createUser] could not restore admin session:', restoreError.message);
+  }
 
   // profiles is SELECT-only under RLS (20260708_profiles_auth_session_rls) —
   // a direct supabase.from('profiles').insert() is denied for every role

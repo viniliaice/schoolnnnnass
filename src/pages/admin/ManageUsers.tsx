@@ -214,7 +214,11 @@ export function ManageUsers() {
       addToast({ type: 'success', title: `${createRole} created successfully` });
       resetForm(); setShowCreate(false); await refresh();
     } catch (error) {
-      addToast({ type: 'error', title: 'Failed to create user' });
+      addToast({
+        type: 'error',
+        title: 'Failed to create user',
+        description: error instanceof Error ? error.message : undefined,
+      });
     }
   };
 

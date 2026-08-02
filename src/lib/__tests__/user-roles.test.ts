@@ -15,7 +15,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../supabase', () => ({
-  supabase: { rpc: vi.fn(), auth: { signUp: vi.fn() } },
+  supabase: {
+    rpc: vi.fn(),
+    auth: { signUp: vi.fn(), getSession: vi.fn(), setSession: vi.fn() },
+  },
 }));
 
 import { supabase } from '../supabase';
@@ -23,11 +26,24 @@ import { createUser, setUserRole } from '../db/profiles';
 
 const rpc = supabase.rpc as unknown as ReturnType<typeof vi.fn>;
 const signUp = supabase.auth.signUp as unknown as ReturnType<typeof vi.fn>;
+const getSession = supabase.auth.getSession as unknown as ReturnType<typeof vi.fn>;
+const setSession = supabase.auth.setSession as unknown as ReturnType<typeof vi.fn>;
+
+const ADMIN_SESSION = {
+  access_token: 'admin-at',
+  refresh_token: 'admin-rt',
+  user: { id: 'auth-admin' },
+};
 
 beforeEach(() => {
   rpc.mockReset();
   signUp.mockReset();
+  getSession.mockReset();
+  setSession.mockReset();
   signUp.mockResolvedValue({ data: { user: { id: 'auth-1' } }, error: null });
+  // The admin is signed in when creating a user.
+  getSession.mockResolvedValue({ data: { session: ADMIN_SESSION }, error: null });
+  setSession.mockResolvedValue({ data: { session: ADMIN_SESSION }, error: null });
 });
 
 describe('createUser (office-role assignment path)', () => {
@@ -52,6 +68,38 @@ describe('createUser (office-role assignment path)', () => {
     expect(created.role).toBe('office');
     expect(created.name).toBe('Umal Kharye Xuseen');
     expect(created.id).toMatch(/^office-/);
+  });
+
+  it('restores the admin session BEFORE the profile write (signUp hijacks the session)', async () => {
+    rpc.mockResolvedValue({ data: null, error: null });
+
+    await createUser({
+      name: 'Umal Kharye Xuseen',
+      email: 'umal@mbk.edu',
+      role: 'office',
+      password: 'secret123',
+    });
+
+    // signUp() replaces the client session with the new user's; if we didn't
+    // restore the admin session, the RPC would run as the new user (no
+    // profile yet → current_profile_role() = NULL → denied).
+    expect(setSession).toHaveBeenCalledWith(ADMIN_SESSION);
+    expect(setSession.mock.invocationCallOrder[0]).toBeLessThan(rpc.mock.invocationCallOrder[0]);
+  });
+
+  it('still writes the profile when there is no admin session to restore', async () => {
+    getSession.mockResolvedValue({ data: { session: null }, error: null });
+    rpc.mockResolvedValue({ data: null, error: null });
+
+    await createUser({
+      name: 'Umal Kharye Xuseen',
+      email: 'umal@mbk.edu',
+      role: 'office',
+      password: 'secret123',
+    });
+
+    expect(setSession).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledWith('create_user_profile', expect.objectContaining({ p_role: 'office' }));
   });
 
   it('passes through optional parent/teacher fields for the matching roles', async () => {

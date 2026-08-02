@@ -24,7 +24,7 @@ function mockProfileQuery(profile: unknown) {
   const query: any = {
     select: vi.fn(() => query),
     eq: vi.fn(() => query),
-    single: vi.fn(() => Promise.resolve({ data: profile, error: null })),
+    maybeSingle: vi.fn(() => Promise.resolve({ data: profile, error: null })),
   };
   mockFrom.mockReturnValue(query);
   return query;
@@ -82,5 +82,28 @@ describe('profile auth session bridge', () => {
     await expect(restoreProfileSession()).resolves.toMatchObject({
       roleSession: { role: 'teacher', userId: 'profile-teacher-1', userName: 'Teacher User' },
     });
+  });
+
+  it('returns null instead of crashing when the auth user has no profile row yet', async () => {
+    // No profile → maybeSingle resolves data: null (this used to throw
+    // "Cannot coerce the result to a single JSON object" via .single()).
+    mockAuth.getSession.mockResolvedValue({
+      data: { session: { user: { id: 'auth-new' } } },
+      error: null,
+    });
+    mockProfileQuery(null);
+
+    await expect(restoreProfileSession()).resolves.toBeNull();
+    expect(mockAuth.getSession).toHaveBeenCalled();
+  });
+
+  it('sign-in throws a clear message when the profile row is missing', async () => {
+    mockAuth.signInWithPassword.mockResolvedValue({
+      data: { user: { id: 'auth-new' } },
+      error: null,
+    });
+    mockProfileQuery(null);
+
+    await expect(signInProfileSession('new@example.com', 'secret')).rejects.toThrow(/No app profile found/);
   });
 });

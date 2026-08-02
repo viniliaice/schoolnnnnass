@@ -49,9 +49,17 @@ export function RoleProvider({ children }: { children: ReactNode }) {
   const appliedAuthIdRef = useRef<string | null>(null);
   const applyInFlightRef = useRef<Promise<void> | null>(null);
 
+  // Marker for the expected race where an auth event arrives for a user whose
+  // profile row does not exist yet (admin creates a user → signUp fires an
+  // event before create_user_profile runs). Not an application error.
+  const PROFILE_NOT_FOUND_PREFIX = 'No app profile found for auth user';
+
   const fetchProfileAndApply = useCallback(
     async (authUserId: string, authEmail?: string): Promise<boolean> => {
       const profile = await getProfileByAuthId(authUserId);
+      if (!profile) {
+        throw new Error(`${PROFILE_NOT_FOUND_PREFIX} ${authUserId}`);
+      }
       const roleSession = buildRoleSession(profile);
       setSession(roleSession);
       setUser({ id: profile.id, authId: authUserId, email: profile.email ?? authEmail });
@@ -163,7 +171,15 @@ export function RoleProvider({ children }: { children: ReactNode }) {
       try {
         await applyAuthUser(authUserId, authEmail);
       } catch (e) {
-        console.error('[RoleContext] auth event apply failed:', e);
+        const message = e instanceof Error ? e.message : String(e);
+        if (message.startsWith(PROFILE_NOT_FOUND_PREFIX)) {
+          // Expected during admin user creation (signUp fires an event for
+          // the new user before their profile row exists). Informational —
+          // not an error the admin needs to see.
+          console.warn('[RoleContext] auth event for a user without a profile yet (likely mid sign-up):', message);
+        } else {
+          console.error('[RoleContext] auth event apply failed:', e);
+        }
         // Only wipe state if this was the initial bootstrap failing.
         // For mid-session events, leave state alone — minor flicker is
         // preferable to logging the user out on a transient failure.
