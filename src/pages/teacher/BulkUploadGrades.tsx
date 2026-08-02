@@ -35,7 +35,6 @@ type RecordOrigin = {
 };
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
-const TEMPLATE_SUBJECTS = ['English', 'Math', 'Science', 'Social', 'Somali', 'Arabic', 'Tarabiya'];
 const TEMPLATE_LABELS = ['HW1 5', 'HW2 5', 'HW3 5', 'HW4 5', 'CPW1 15', 'CPW2 15', 'CPW3 15', 'CPW4 15', 'Att 20', 'MT 20', 'Akhlaaq 10'];
 
 function normalized(value: string): string {
@@ -72,17 +71,21 @@ function candidateStudents(name: string, students: Student[]): Student[] {
   }).slice(0, 5);
 }
 
-function downloadTemplate() {
-  const topRow = ['', '', ...TEMPLATE_SUBJECTS.flatMap(subject => [subject, ...Array(8).fill(''), 'MT', 'Akhlaaq'])];
-  const headerRow = ['Student ID', 'Student Name', ...TEMPLATE_SUBJECTS.flatMap(() => TEMPLATE_LABELS)];
+function downloadTemplate(subjectNames: string[], className: string) {
+  const subjects = Array.from(new Set(subjectNames.map(subject => subject.trim()).filter(Boolean)));
+  if (!subjects.length) return;
+
+  const topRow = ['', '', ...subjects.flatMap(subject => [subject, ...Array(8).fill(''), 'MT', 'Akhlaaq'])];
+  const headerRow = ['Student ID', 'Student Name', ...subjects.flatMap(() => TEMPLATE_LABELS)];
   const worksheet = XLSX.utils.aoa_to_sheet([topRow, headerRow]);
-  worksheet['!merges'] = TEMPLATE_SUBJECTS.map((_, index) => {
+  worksheet['!merges'] = subjects.map((_, index) => {
     const start = 2 + index * TEMPLATE_LABELS.length;
     return { s: { r: 0, c: start }, e: { r: 0, c: start + 8 } };
   });
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Grades');
-  XLSX.writeFile(workbook, 'BulkUploadGradesTemplate.xlsx');
+  const safeClassName = className.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '') || 'class';
+  XLSX.writeFile(workbook, `BulkUploadGrades-${safeClassName}.xlsx`);
 }
 
 export function BulkUploadGrades() {
@@ -107,6 +110,14 @@ export function BulkUploadGrades() {
   const [uploadKey, setUploadKey] = useState(createUploadKey);
 
   const isAdmin = session?.role === 'admin';
+  // This is deliberately derived from the selected class context. For a
+  // teacher, classSubjects is already filtered to that teacher's assignments;
+  // for an admin, it contains only subjects mapped to the selected class.
+  const templateSubjects = useMemo(
+    () => Array.from(new Map(classSubjects.map(subject => [normalized(subject.name), subject.name])).values()),
+    [classSubjects],
+  );
+  const canDownloadTemplate = Boolean(selectedClass && templateSubjects.length > 0);
 
   useEffect(() => {
     if (!session) return;
@@ -366,9 +377,24 @@ export function BulkUploadGrades() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Bulk Upload Grades</h1>
           <p className="mt-1 text-slate-500">Validated subject blocks: HW1–HW4, CPW1–CPW4, Attendance, MT, and per-subject Akhlaaq.</p>
+          <p className="mt-1 text-xs text-teal-700">
+            {canDownloadTemplate
+              ? `The example for ${selectedClass} will contain only these mapped subjects: ${templateSubjects.join(', ')}.`
+              : 'Choose a class with mapped subjects to download its example.'}
+          </p>
         </div>
-        <button onClick={downloadTemplate} className="flex items-center gap-2 rounded-xl border border-teal-200 bg-teal-50 px-3 py-2 text-sm font-medium text-teal-700 hover:bg-teal-100">
-          <Download className="h-4 w-4" /> Download ID template
+        <button
+          disabled={!canDownloadTemplate}
+          onClick={() => downloadTemplate(templateSubjects, selectedClass)}
+          title={canDownloadTemplate ? `Download the ${selectedClass} subject template` : 'Select a class with mapped subjects first'}
+          className={cn(
+            'flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium',
+            canDownloadTemplate
+              ? 'border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100'
+              : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400',
+          )}
+        >
+          <Download className="h-4 w-4" /> Download class example
         </button>
       </div>
 
@@ -385,7 +411,7 @@ export function BulkUploadGrades() {
         <div className="max-w-4xl space-y-5 rounded-2xl border border-slate-200 bg-white p-6">
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="sm:col-span-3"><p className="mb-2 text-sm font-semibold text-slate-700">Class</p><div className="flex flex-wrap gap-2">
-              {classes.map(className => <button key={className} onClick={() => { setSelectedClass(className); setServerPreview(null); }} className={cn('rounded-xl border px-3 py-2 text-sm font-medium', selectedClass === className ? 'border-teal-300 bg-teal-100 text-teal-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50')}>{className}</button>)}
+              {classes.map(className => <button key={className} onClick={() => { setSelectedClass(className); setClassSubjects([]); setRoster([]); setServerPreview(null); }} className={cn('rounded-xl border px-3 py-2 text-sm font-medium', selectedClass === className ? 'border-teal-300 bg-teal-100 text-teal-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50')}>{className}</button>)}
               {!classes.length && <span className="text-sm text-slate-500">No uploadable classes are available for this account.</span>}
             </div></div>
             <label className="text-sm font-semibold text-slate-700">Term<input disabled value={currentTerm?.name || 'No current term'} className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600" /></label>
