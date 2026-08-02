@@ -5,6 +5,8 @@ import { getParentPortalSnapshot } from '../../lib/db/parent-portal';
 import { Announcement, AttendanceRecord, Exam, HomeworkRecord, Student, CA_TYPES, getGrade, isScoredExam } from '../../types';
 import { GraduationCap, BookOpen, TrendingUp, Award, CalendarCheck2, ClipboardList } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
+import { getParentFamilyCard } from '../../lib/db/familyPortal';
+import { FamilyIdCard, classifyFamilyCard, type FamilyCardState } from './components/FamilyIdCard';
 
 export function ParentDashboard() {
   const { session } = useRole();
@@ -13,6 +15,7 @@ export function ParentDashboard() {
   const [attendance, setAttendance] = useState<AttendanceRecord[]>([]);
   const [homework, setHomework] = useState<HomeworkRecord[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
+  const [familyCard, setFamilyCard] = useState<FamilyCardState>({ status: 'loading' });
 
   useEffect(() => {
     if (!session) return;
@@ -28,6 +31,11 @@ export function ParentDashboard() {
     };
 
     loadData();
+
+    // M3 — own family ID card (parentId-scoped; RLS enforces own-family-only)
+    getParentFamilyCard(session.userId)
+      .then(card => setFamilyCard(classifyFamilyCard(false, card.familyId, card.students)))
+      .catch(() => setFamilyCard({ status: 'pending', students: [] }));
   }, [session]);
 
   useEffect(() => {
@@ -106,6 +114,9 @@ export function ParentDashboard() {
         <h1 className="text-2xl font-bold text-slate-900">Parent Dashboard</h1>
         <p className="text-slate-500 mt-1">Welcome, {session?.userName}</p>
       </div>
+
+      {/* M3 — own family ID + printable card (parentId-scoped) */}
+      <FamilyIdCard state={familyCard} />
 
       <div className="bg-white rounded-2xl border border-slate-200 p-5">
         <h2 className="text-lg font-semibold text-slate-900 mb-3">Announcements</h2>

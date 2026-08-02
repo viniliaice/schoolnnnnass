@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   FileSpreadsheet, Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers
+  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -80,6 +80,17 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Assign Homework', icon: BookOpenCheck, path: '/supervisor/homework' },
     { label: 'Create Quiz', icon: HelpCircle, path: '/supervisor/quizzes' },
     { label: 'Grade Quizzes', icon: ClipboardCheck, path: '/supervisor/grade-quizzes' },
+    { label: 'Dismissal Gate', icon: ShieldCheck, path: '/gate' },
+    { label: 'Family IDs', icon: CreditCard, path: '/admin/family-ids' },
+    { label: 'Student Directory', icon: Users, path: '/directory' },
+  ],
+  office: [
+    { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
+    { label: 'Dismissal Gate', icon: ShieldCheck, path: '/gate' },
+    { label: 'Family IDs', icon: CreditCard, path: '/admin/family-ids' },
+    { label: 'Student Directory', icon: Users, path: '/directory' },
+    { label: 'Messages', icon: Mail, path: '/messages' },
+    { label: 'Streams', icon: Activity, path: '/streams' },
   ],
 };
 
@@ -87,6 +98,7 @@ const roleColors: Record<Role, string> = {
   admin: 'from-indigo-600 to-indigo-800',
   teacher: 'from-teal-600 to-teal-800',
   parent: 'from-violet-600 to-violet-800',
+  office: 'from-sky-600 to-sky-800',
   supervisor: 'from-amber-600 to-amber-800',
 };
 
@@ -95,6 +107,7 @@ const roleBadgeColors: Record<Role, string> = {
   teacher: 'bg-teal-500/20 text-teal-100',
   parent: 'bg-violet-500/20 text-violet-100',
   supervisor: 'bg-amber-500/20 text-amber-100',
+  office: 'bg-sky-500/20 text-sky-100',
 };
 
 interface SidebarProps {

@@ -84,7 +84,7 @@ export function ManageUsers() {
         return (
           <div className="flex items-center gap-3">
             <div className={cn("w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm text-white",
-              user.role === 'admin' ? 'bg-indigo-500' : user.role === 'teacher' ? 'bg-teal-500' : user.role === 'supervisor' ? 'bg-amber-500' : 'bg-violet-500'
+              user.role === 'admin' ? 'bg-indigo-500' : user.role === 'teacher' ? 'bg-teal-500' : user.role === 'supervisor' ? 'bg-amber-500' : user.role === 'office' ? 'bg-sky-500' : 'bg-violet-500'
             )}>
               {user.name.split(' ').map(n => n[0]).join('').substring(0, 2)}
             </div>
@@ -107,6 +107,7 @@ export function ManageUsers() {
             role === 'admin' ? 'bg-indigo-100 text-indigo-800' :
             role === 'teacher' ? 'bg-teal-100 text-teal-800' :
             role === 'supervisor' ? 'bg-amber-100 text-amber-800' :
+            role === 'office' ? 'bg-sky-100 text-sky-800' :
             'bg-violet-100 text-violet-800'
           )}>
             {role}
@@ -358,10 +359,10 @@ export function ManageUsers() {
       <Dialog open={showCreate} onClose={() => setShowCreate(false)} title="Add New User" description="Create a teacher, parent, supervisor, or admin account">
           <div className="space-y-4">
           <div className="flex gap-2">
-            {(['teacher', 'parent', 'admin', 'supervisor'] as Role[]).map(r => (
+            {(['teacher', 'parent', 'admin', 'supervisor', 'office'] as Role[]).map(r => (
               <button key={r} onClick={() => setCreateRole(r)}
                 className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
-                  createRole === r ? (r === 'teacher' ? 'bg-teal-100 text-teal-700' : r === 'parent' ? 'bg-violet-100 text-violet-700' : r === 'supervisor' ? 'bg-amber-100 text-amber-700' : 'bg-indigo-100 text-indigo-700') : 'bg-slate-100 text-slate-500'
+                  createRole === r ? (r === 'teacher' ? 'bg-teal-100 text-teal-700' : r === 'parent' ? 'bg-violet-100 text-violet-700' : r === 'supervisor' ? 'bg-amber-100 text-amber-700' : r === 'office' ? 'bg-sky-100 text-sky-700' : 'bg-indigo-100 text-indigo-700') : 'bg-slate-100 text-slate-500'
                 )}
               >
                 {r.charAt(0).toUpperCase() + r.slice(1)}

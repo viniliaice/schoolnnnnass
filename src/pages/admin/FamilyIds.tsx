@@ -7,7 +7,9 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PDFDownloadLink } from '@react-pdf/renderer';
+import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
+import { canGenerateFamilyIds } from '../../lib/routing';
 import { getStudents } from '../../lib/db/students';
 import {
   applyTransportImport, assignFamilyOverride, findUnattached,
@@ -23,6 +25,8 @@ const TRANSPORT_OPTIONS = ['WALKER', 'CAR'] as const;
 
 export function FamilyIds() {
   const { addToast } = useToast();
+  const { session } = useRole();
+  const canWrite = !!session && canGenerateFamilyIds(session.role);
   const [students, setStudents] = useState<Student[]>([]);
   const [loading, setLoading] = useState(true);
   const [importText, setImportText] = useState('');
@@ -151,11 +155,15 @@ export function FamilyIds() {
         </p>
         <button
           onClick={handleGenerate}
-          disabled={generating}
-          className="rounded-xl bg-emerald-800 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-900 disabled:opacity-50"
+          disabled={!canWrite || generating}
+          title={canWrite ? undefined : 'Generate is admin-only'}
+          className="rounded-xl bg-emerald-800 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {generating ? 'Generating… / Dhali…' : '⚙ Generate / Dhali lambarrada'}
         </button>
+        {!canWrite && (
+          <p className="mt-2 text-xs font-medium text-slate-500">Office/supervisor view is read-only — Generate is admin-only.</p>
+        )}
         {generateResult && (
           <p className="mt-3 text-sm text-slate-600">
             Last run: {generateResult.familiesCreated} families created · {generateResult.studentsAssigned} students assigned ·{' '}
@@ -181,7 +189,7 @@ export function FamilyIds() {
           <button onClick={handleParse} className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900">
             Parse & match
           </button>
-          {importedRows.length > 0 && (
+          {importedRows.length > 0 && canWrite && (
             <button
               onClick={handleApply}
               disabled={applying}
@@ -266,7 +274,7 @@ export function FamilyIds() {
                       ))}
                     </td>
                     <td className="px-3 py-2">
-                      {kids.map(k => (
+                      {kids.map(k => canWrite ? (
                         <select
                           key={k.id}
                           value={k.transport ?? ''}
@@ -276,6 +284,10 @@ export function FamilyIds() {
                           <option value="">—</option>
                           {TRANSPORT_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
                         </select>
+                      ) : (
+                        <span key={k.id} className="mb-1 block text-xs font-medium text-slate-600">
+                          {transportLabel(k.transport)}
+                        </span>
                       ))}
                     </td>
                     <td className="px-3 py-2 text-slate-500">{kids.find(k => k.parentPhone)?.parentPhone ?? '—'}</td>
@@ -298,9 +310,11 @@ export function FamilyIds() {
             {unattached.map(s => (
               <li key={s.id} className="flex items-center justify-between py-2 text-sm">
                 <span>{s.name} <span className="text-amber-700/70">· {s.className}</span></span>
-                <button onClick={() => handleOverride(s.id)} className="rounded-lg border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100">
-                  Assign →
-                </button>
+                {canWrite && (
+                  <button onClick={() => handleOverride(s.id)} className="rounded-lg border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100">
+                    Assign →
+                  </button>
+                )}
               </li>
             ))}
           </ul>

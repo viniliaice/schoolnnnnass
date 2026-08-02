@@ -17,6 +17,8 @@ import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
 import { FamilyIds } from './pages/admin/FamilyIds';
 import { GateScreen } from './pages/admin/gate/GateScreen';
+import { OfficeDashboard } from './pages/office/OfficeDashboard';
+import { StudentDirectory } from './pages/office/StudentDirectory';
 import { ExamVerification } from './pages/admin/ExamVerification';
 import { MonitorTeachers } from './pages/admin/MonitorTeachers';
 import { ClassProgress } from './pages/admin/ClassProgress';
@@ -91,6 +93,7 @@ function AppContent() {
             case '/admin/academic': return <ManageAcademic />;
             case '/admin/bulk': return <BulkUpload />;
             case '/admin/family-ids': return <FamilyIds />;
+            case '/directory': return <StudentDirectory />;
             case '/admin/bulk-grades': return <BulkUploadGrades />;
             case '/admin/exams': return <ExamVerification />;
             case '/admin/monitor': return <MonitorTeachers />;
@@ -114,6 +117,8 @@ function AppContent() {
           if (session.role === 'supervisor') {
             switch (currentPath) {
               case '/gate': return <GateScreen navigate={navigate} />;
+              case '/admin/family-ids': return <FamilyIds />;
+              case '/directory': return <StudentDirectory />;
               case '/dashboard': return <SupervisorDashboard />;
               case '/supervisor/students': return <TeacherStudents />;
               case '/supervisor/verifications': return <ExamVerification />;
@@ -149,6 +154,18 @@ function AppContent() {
             case '/messages': return <MessagesPage />;
             case '/streams': return <StreamsPage />;
             default: return <TeacherDashboard navigate={navigate} />;
+          }
+        }
+
+        // Office routes (gate staff — read/lookup only)
+        if (session.role === 'office') {
+          switch (currentPath) {
+            case '/gate': return <GateScreen navigate={navigate} />;
+            case '/admin/family-ids': return <FamilyIds />;
+            case '/directory': return <StudentDirectory />;
+            case '/messages': return <MessagesPage />;
+            case '/streams': return <StreamsPage />;
+            default: return <OfficeDashboard navigate={navigate} />;
           }
         }
 

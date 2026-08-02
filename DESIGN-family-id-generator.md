@@ -286,3 +286,26 @@ Implemented and verified (typecheck clean, 120/120 tests pass, `vite build` succ
 - NOT FOUND is a full-screen red overlay with ✕ glyph + diagonal-stripe pattern + text — not color-only (design decision 4); a `✓ Logged` line confirms the audit.
 
 **Remaining:** M3 parent portal (T9), E2E harness (T10), Umal's team access (T11), release log + offline gate (deferred).
+
+---
+
+# Office Role + M3 Addendum (2026-08-02)
+
+## Office role (gate staff: Umal, Maxamed, Abdurahman)
+- **Migration** `supabase/migrations/20260802_office_role.sql`:
+  - `profiles_role_check` widened to include `'office'`
+  - New `Office can read all students` SELECT policy (read family IDs; no write policies — office is blocked from grades/exams/promotions by construction, verified in `supabase/tests/rls-office-role.sql`)
+  - `lookup_family()` widened to admin/supervisor/**office**; generate/transport/override stay admin-only
+  - audit_logs already readable by all authenticated → office reads the gate audit trail; asserted in the RLS test
+- **Route guards** `src/lib/routing.ts` (single source of truth): `/gate`, `/admin/family-ids`, `/directory` → admin/supervisor/office; `canGenerateFamilyIds` = admin-only. Office switch added to App.tsx (dashboard → OfficeDashboard with 3 tool cards). Sidebar nav + colors for office.
+- **Student directory** `src/pages/office/StudentDirectory.tsx` — new read-only route `/directory` (name, grade, transport, family ID; search + filter; no edit actions). Also added to admin/supervisor nav.
+- **FamilyIds page**: office/supervisor see it read-only (Generate/Apply/transport-edit/override disabled in UI; SQL enforces anyway).
+- **Accounts** `scripts/create-office-accounts.mjs` — Supabase Admin API (service role): upserts the 3 profiles with role='office', idempotent; documented manual steps in the header. ManageUsers UI also supports creating office accounts.
+- **Session (task 4)**: verified — `persistSession: true`, `autoRefreshToken: true`, `detectSessionInUrl: true` in `src/lib/supabase.ts`; RoleContext restores via `onAuthStateChange` + `getSession` fallback and never wipes on transient errors. **Already sufficient — no session-handling rebuild.**
+- **RLS test** `supabase/tests/rls-office-role.sql` (psql-run): office can SELECT students, has no write policies on students/exams/grade_uploads/student_promotions, gate audit readable, lookup_family allows office; parent isolation asserted (own-parentId only, no unrestricted SELECT).
+
+## M3 — Parent portal family ID
+- **Data** `src/lib/db/familyPortal.ts` — `getParentFamilyCard(parentId)`: parentId-scoped students query; RLS (own children only) enforces the same boundary. Returns familyId + kids, `pending` when Generate hasn't run.
+- **UI** `src/pages/parent/components/FamilyIdCard.tsx` — green GateScreen-style panel: big MBK-#### + kids (name/grade/transport) + "Download / print my card" reusing the M1 `FamilyCardsDocument` (pocket layout, own family only). Pending state: amber "on the way" panel (no broken card). Wired at the top of ParentDashboard.
+- **Tests**: `familyPortal.test.ts` (parentId-scoped query, pending/empty), `familyIdCard.test.tsx` (react-dom/server render of ready + pending + loading), `routing.test.ts` (role × route matrix incl. office allowed/blocked). 136/136 pass, typecheck clean, build OK.
+- RLS: parent A cannot fetch parent B's familyId — the parent students policy scopes to `current_profile_id()` and there is no unrestricted student SELECT; asserted in the SQL test.

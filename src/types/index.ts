@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'teacher' | 'parent' | 'supervisor';
+export type Role = 'admin' | 'teacher' | 'parent' | 'supervisor' | 'office';
 export type ExamStatus = 'pending' | 'approved' | 'rejected';
 export type ExamType = 'CA' | 'Homework' | 'Classwork' | 'Quiz' | 'Midterm' | 'Final'| 'Attendance' | 'Discipline';
 

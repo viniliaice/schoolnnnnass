@@ -142,6 +142,7 @@ export function MessagesPage() {
     teacher: 'Teacher',
     parent: 'Parent',
     supervisor: 'Supervisor',
+    office: 'Office',
   };
 
   return (
