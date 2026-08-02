@@ -220,7 +220,12 @@ export function RoleProvider({ children }: { children: ReactNode }) {
           }
         }
       } catch (e) {
-        console.error('[RoleContext] fallback getSession apply failed:', e);
+        const message = e instanceof Error ? e.message : String(e);
+        if (message.startsWith(PROFILE_NOT_FOUND_PREFIX)) {
+          console.warn('[RoleContext] fallback getSession auth user without profile (unlinked or pending auth user):', message);
+        } else {
+          console.error('[RoleContext] fallback getSession apply failed:', e);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
