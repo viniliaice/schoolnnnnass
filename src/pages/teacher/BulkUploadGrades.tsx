@@ -96,6 +96,8 @@ export function BulkUploadGrades() {
   const [classes, setClasses] = useState<string[]>([]);
   const [selectedClass, setSelectedClass] = useState('');
   const [classSubjects, setClassSubjects] = useState<Subject[]>([]);
+  const [selectedTemplateSubjectIds, setSelectedTemplateSubjectIds] = useState<string[]>([]);
+  const [templateSubjectMenuOpen, setTemplateSubjectMenuOpen] = useState(false);
   const [currentTerm, setCurrentTerm] = useState<Term | null>(null);
   const [month, setMonth] = useState(MONTHS[new Date().getMonth()]);
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
@@ -110,12 +112,17 @@ export function BulkUploadGrades() {
   const [uploadKey, setUploadKey] = useState(createUploadKey);
 
   const isAdmin = session?.role === 'admin';
-  // This is deliberately derived from the selected class context. For a
-  // teacher, classSubjects is already filtered to that teacher's assignments;
-  // for an admin, it contains only subjects mapped to the selected class.
-  const templateSubjects = useMemo(
-    () => Array.from(new Map(classSubjects.map(subject => [normalized(subject.name), subject.name])).values()),
+  // The dropdown only offers the selected class's allowed subjects. Teachers
+  // cannot put a subject they do not teach into a bulk-upload template.
+  const availableTemplateSubjects = useMemo(
+    () => Array.from(new Map(classSubjects.map(subject => [subject.id, subject])).values()),
     [classSubjects],
+  );
+  const templateSubjects = useMemo(
+    () => availableTemplateSubjects
+      .filter(subject => selectedTemplateSubjectIds.includes(subject.id))
+      .map(subject => subject.name),
+    [availableTemplateSubjects, selectedTemplateSubjectIds],
   );
   const canDownloadTemplate = Boolean(selectedClass && templateSubjects.length > 0);
 
@@ -166,6 +173,17 @@ export function BulkUploadGrades() {
     loadClassContext();
     return () => { active = false; };
   }, [isAdmin, selectedClass, session]);
+
+  useEffect(() => {
+    const allowedIds = new Set(classSubjects.map(subject => subject.id));
+    setSelectedTemplateSubjectIds(previous => previous.filter(id => allowedIds.has(id)));
+  }, [classSubjects]);
+
+  const toggleTemplateSubject = (subjectId: string) => {
+    setSelectedTemplateSubjectIds(previous => previous.includes(subjectId)
+      ? previous.filter(id => id !== subjectId)
+      : [...previous, subjectId]);
+  };
 
   const ingestFile = async (file: File) => {
     setLoadError('');
@@ -378,24 +396,64 @@ export function BulkUploadGrades() {
           <h1 className="text-2xl font-bold text-slate-900">Bulk Upload Grades</h1>
           <p className="mt-1 text-slate-500">Validated subject blocks: HW1–HW4, CPW1–CPW4, Attendance, MT, and per-subject Akhlaaq.</p>
           <p className="mt-1 text-xs text-teal-700">
-            {canDownloadTemplate
-              ? `The example for ${selectedClass} will contain only these mapped subjects: ${templateSubjects.join(', ')}.`
-              : 'Choose a class with mapped subjects to download its example.'}
+            {templateSubjects.length
+              ? `The example for ${selectedClass} will contain: ${templateSubjects.join(', ')}.`
+              : 'Select a class, then choose the subjects to include in its example.'}
           </p>
         </div>
-        <button
-          disabled={!canDownloadTemplate}
-          onClick={() => downloadTemplate(templateSubjects, selectedClass)}
-          title={canDownloadTemplate ? `Download the ${selectedClass} subject template` : 'Select a class with mapped subjects first'}
-          className={cn(
-            'flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium',
-            canDownloadTemplate
-              ? 'border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100'
-              : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400',
+        <div className="relative flex flex-wrap items-center justify-end gap-2">
+          <button
+            disabled={!selectedClass || availableTemplateSubjects.length === 0}
+            onClick={() => setTemplateSubjectMenuOpen(open => !open)}
+            className={cn(
+              'rounded-xl border px-3 py-2 text-sm font-medium',
+              selectedClass && availableTemplateSubjects.length
+                ? 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400',
+            )}
+          >
+            Choose subjects{selectedTemplateSubjectIds.length ? ` (${selectedTemplateSubjectIds.length})` : ''}
+          </button>
+          {templateSubjectMenuOpen && (
+            <div className="absolute right-0 top-11 z-20 w-72 rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Subjects for {selectedClass}</p>
+                <button
+                  onClick={() => setSelectedTemplateSubjectIds(selectedTemplateSubjectIds.length === availableTemplateSubjects.length ? [] : availableTemplateSubjects.map(subject => subject.id))}
+                  className="text-xs font-semibold text-teal-700 hover:text-teal-900"
+                >
+                  {selectedTemplateSubjectIds.length === availableTemplateSubjects.length ? 'Clear all' : 'Select all'}
+                </button>
+              </div>
+              <div className="max-h-64 space-y-1 overflow-y-auto">
+                {availableTemplateSubjects.map(subject => (
+                  <label key={subject.id} className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-2 text-sm text-slate-700 hover:bg-slate-50">
+                    <input
+                      type="checkbox"
+                      checked={selectedTemplateSubjectIds.includes(subject.id)}
+                      onChange={() => toggleTemplateSubject(subject.id)}
+                      className="h-4 w-4 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
+                    />
+                    {subject.name}
+                  </label>
+                ))}
+              </div>
+            </div>
           )}
-        >
-          <Download className="h-4 w-4" /> Download class example
-        </button>
+          <button
+            disabled={!canDownloadTemplate}
+            onClick={() => downloadTemplate(templateSubjects, selectedClass)}
+            title={canDownloadTemplate ? `Download the ${selectedClass} subject template` : 'Choose at least one subject first'}
+            className={cn(
+              'flex items-center gap-2 rounded-xl border px-3 py-2 text-sm font-medium',
+              canDownloadTemplate
+                ? 'border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100'
+                : 'cursor-not-allowed border-slate-200 bg-slate-100 text-slate-400',
+            )}
+          >
+            <Download className="h-4 w-4" /> Download example
+          </button>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 text-sm font-medium">
@@ -411,7 +469,7 @@ export function BulkUploadGrades() {
         <div className="max-w-4xl space-y-5 rounded-2xl border border-slate-200 bg-white p-6">
           <div className="grid gap-4 sm:grid-cols-3">
             <div className="sm:col-span-3"><p className="mb-2 text-sm font-semibold text-slate-700">Class</p><div className="flex flex-wrap gap-2">
-              {classes.map(className => <button key={className} onClick={() => { setSelectedClass(className); setClassSubjects([]); setRoster([]); setServerPreview(null); }} className={cn('rounded-xl border px-3 py-2 text-sm font-medium', selectedClass === className ? 'border-teal-300 bg-teal-100 text-teal-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50')}>{className}</button>)}
+              {classes.map(className => <button key={className} onClick={() => { setSelectedClass(className); setClassSubjects([]); setRoster([]); setSelectedTemplateSubjectIds([]); setTemplateSubjectMenuOpen(false); setServerPreview(null); }} className={cn('rounded-xl border px-3 py-2 text-sm font-medium', selectedClass === className ? 'border-teal-300 bg-teal-100 text-teal-800' : 'border-slate-200 text-slate-600 hover:bg-slate-50')}>{className}</button>)}
               {!classes.length && <span className="text-sm text-slate-500">No uploadable classes are available for this account.</span>}
             </div></div>
             <label className="text-sm font-semibold text-slate-700">Term<input disabled value={currentTerm?.name || 'No current term'} className="mt-1 w-full rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-slate-600" /></label>
