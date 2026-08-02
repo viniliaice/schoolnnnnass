@@ -7,7 +7,8 @@ export type AuditAction =
   | 'class-subject.created' | 'class-subject.updated' | 'class-subject.deleted'
   | 'teacher.replaced' | 'curriculum.copied' | 'bulk.assign' | 'bulk.remove'
   // Family-ID feature (SQL RPCs also write family_ids.generate/transport/override)
-  | 'family_ids.gate_not_found';
+  | 'family_ids.gate_not_found'
+  | 'family_ids.release';
 
 export type AuditEntry = {
   id: number;

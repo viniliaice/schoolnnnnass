@@ -7,6 +7,7 @@ import { GraduationCap, BookOpen, TrendingUp, Award, CalendarCheck2, ClipboardLi
 import { supabase } from '../../lib/supabase';
 import { getParentFamilyCard } from '../../lib/db/familyPortal';
 import { FamilyIdCard, classifyFamilyCard, type FamilyCardState } from './components/FamilyIdCard';
+import { RecentReleases } from './components/RecentReleases';
 
 export function ParentDashboard() {
   const { session } = useRole();
@@ -117,6 +118,9 @@ export function ParentDashboard() {
 
       {/* M3 — own family ID + printable card (parentId-scoped) */}
       <FamilyIdCard state={familyCard} />
+
+      {/* M3 — release log visibility: own children's pickups (RLS-scoped) */}
+      {session && <RecentReleases parentId={session.userId} />}
 
       <div className="bg-white rounded-2xl border border-slate-200 p-5">
         <h2 className="text-lg font-semibold text-slate-900 mb-3">Announcements</h2>

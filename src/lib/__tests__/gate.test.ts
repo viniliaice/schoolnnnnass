@@ -10,7 +10,7 @@ vi.mock('../db/audit', () => ({
 
 import { supabase } from '../supabase';
 import { createAuditLog } from '../db/audit';
-import { lookupGateFamily } from '../db/gate';
+import { lookupGateFamily, recordRelease } from '../db/gate';
 
 const rpc = supabase.rpc as unknown as ReturnType<typeof vi.fn>;
 const audit = createAuditLog as unknown as ReturnType<typeof vi.fn>;
@@ -47,5 +47,22 @@ describe('lookupGateFamily', () => {
     rpc.mockResolvedValue({ data: null, error: { message: 'rpc boom' } });
     await expect(lookupGateFamily('0421')).rejects.toThrow(/rpc boom/);
     expect(audit).not.toHaveBeenCalled();
+  });
+});
+
+describe('recordRelease', () => {
+  it('records a successful handoff with student/family/staff/timestamp', async () => {
+    rpc.mockResolvedValue({
+      data: { id: 7, studentId: 's1', familyId: '0421', staffId: 'office-umal', createdAt: '2026-08-02T14:00:00Z' },
+      error: null,
+    });
+    const record = await recordRelease('s1', '0421');
+    expect(record).toMatchObject({ studentId: 's1', familyId: '0421', staffId: 'office-umal' });
+    expect(rpc).toHaveBeenCalledWith('record_release', { p_student_id: 's1', p_family_id: '0421' });
+  });
+
+  it('throws when the RPC rejects the release (e.g. student not in family)', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'Student does not belong to the given family.' } });
+    await expect(recordRelease('s1', '9999')).rejects.toThrow(/does not belong/);
   });
 });

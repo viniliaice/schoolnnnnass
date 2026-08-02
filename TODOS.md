@@ -2,15 +2,8 @@
 
 Deferred work from CEO review (2026-08-02) — Family ID Generator.
 
-## Release log + parent visibility
-- **What:** Gate "release" tap records (student, family, staff, timestamp) to a `release_log` table; parents see their kids' releases in the portal.
-- **Why:** Accountability layer for the wrong-parent incident — a record of who left with whom.
-- **Pros:** Completes the safety story; cheap once the gate screen exists.
-- **Cons:** Adds scope to M2; needs the gate screen to exist first.
-- **Context:** Deferred in CEO review (Expansion 1). The M2 gate screen ships lookup-only; the release tap and log come after the core match proves out.
-- **Effort:** M (human ~1-2 days / CC ~15 min)
-- **Priority:** P2
-- **Depends on:** Gate screen (M2) shipped.
+## Release log + parent visibility — DONE (2026-08-02)
+- **Implemented:** `supabase/migrations/20260802_release_log.sql` — `release_log` table (studentId, familyId, staffId, createdAt) + `record_release()` RPC (admin/supervisor/office, verifies student belongs to family, mirrors to audit_logs as `family_ids.release`). Gate screen has per-student "Sii Day / Release" buttons with released-state + timestamp; parent dashboard shows own children's recent pickups (`RecentReleases`). RLS: staff read-all, parents own-children-only, no direct writes. Tests: gate wrapper + portal + `supabase/tests/rls-release-log.sql`.
 
 ## Offline-first gate mode
 - **What:** Gate screen becomes a PWA that caches the family lookup table; works with zero connectivity (data labeled "as of last sync").

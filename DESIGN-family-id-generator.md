@@ -309,3 +309,31 @@ Implemented and verified (typecheck clean, 120/120 tests pass, `vite build` succ
 - **UI** `src/pages/parent/components/FamilyIdCard.tsx` — green GateScreen-style panel: big MBK-#### + kids (name/grade/transport) + "Download / print my card" reusing the M1 `FamilyCardsDocument` (pocket layout, own family only). Pending state: amber "on the way" panel (no broken card). Wired at the top of ParentDashboard.
 - **Tests**: `familyPortal.test.ts` (parentId-scoped query, pending/empty), `familyIdCard.test.tsx` (react-dom/server render of ready + pending + loading), `routing.test.ts` (role × route matrix incl. office allowed/blocked). 136/136 pass, typecheck clean, build OK.
 - RLS: parent A cannot fetch parent B's familyId — the parent students policy scopes to `current_profile_id()` and there is no unrestricted student SELECT; asserted in the SQL test.
+
+---
+
+# Release Log Addendum (2026-08-02) — moved up from deferred
+
+The release log (CEO-review Expansion 1, previously deferred) is now implemented — it is the accountability record the project exists to provide. The M2 NOT-FOUND audit only logs failed lookups; `release_log` records every **successful** handoff.
+
+## What shipped
+- **Migration** `supabase/migrations/20260802_release_log.sql`:
+  - `release_log` table: `studentId`, `familyId`, `staffId`, `createdAt` (+ indexes on student/family/staff)
+  - `record_release(p_student_id, p_family_id)` RPC — SECURITY DEFINER:
+    - role gate: admin / supervisor / **office** (the gate roles)
+    - **integrity check**: the student must actually belong to the given family (normalized familyId match) — a logged release is trustworthy by construction
+    - mirrors every release into `audit_logs` as `family_ids.release` (releaseId, studentId, familyId, staffId)
+    - no direct INSERT/UPDATE/DELETE policies on release_log — the RPC is the only writer
+  - RLS: staff (admin/supervisor/office) read all; **parents read only their own children's releases** (join students.parentId = current_profile_id()); no unrestricted SELECT
+- **Gate UI** (`GateScreen`): per-student **✓ Sii Day / Release** button in the found state; on success the row shows "✓ Waa la siiyay / Released" + timestamp (beep); failures surface an inline retry (no silent drop). Soomaali + English strings.
+- **Parent portal** (`RecentReleases` panel on ParentDashboard): own children's pickups — student, family ID, time (parentId-scoped query + RLS).
+- **Client wrapper** `recordRelease()` in `src/lib/db/gate.ts`; `AuditAction` union extended with `family_ids.release`.
+
+## Tests
+- `gate.test.ts`: recordRelease success (student/family/staff/timestamp) + rejection (student not in family)
+- `familyPortal.test.ts`: getRecentReleases scoped to own children, empty-children short-circuit, joined rows
+- `supabase/tests/rls-release-log.sql`: shape, staff read-all, parent own-children scoping, no unrestricted SELECT, no direct writes, RPC role gate + integrity guard
+- 141/141 tests pass · typecheck clean · `vite build` succeeds
+
+## Run order (deployment)
+1. `20260802_family_ids.sql`, 2. `20260802_office_role.sql`, 3. `20260802_release_log.sql` — then RLS assertions (`rls-office-role.sql`, `rls-release-log.sql`).

@@ -5,7 +5,7 @@ vi.mock('../supabase', () => ({
 }));
 
 import { supabase } from '../supabase';
-import { getParentFamilyCard } from '../db/familyPortal';
+import { getParentFamilyCard, getRecentReleases } from '../db/familyPortal';
 
 const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
 
@@ -62,5 +62,66 @@ describe('getParentFamilyCard', () => {
       select: () => ({ eq: () => Promise.resolve({ data: null, error: { message: 'denied' } }) }),
     }));
     await expect(getParentFamilyCard('parent-A')).rejects.toThrow(/denied/);
+  });
+});
+
+describe('getRecentReleases', () => {
+  function mockKidsChain(kids: unknown[]) {
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'students') {
+        return { select: () => ({ eq: () => Promise.resolve({ data: kids, error: null }) }) };
+      }
+      // release_log chain: select(...).in(...).order(...).limit(...)
+      return {
+        select: () => ({
+          in: () => ({
+            order: () => ({
+              limit: () => Promise.resolve({ data: [], error: null }),
+            }),
+          }),
+        }),
+      };
+    });
+  }
+
+  it('scopes releases to the parent\'s own children only', async () => {
+    const kids = [{ id: 's1' }, { id: 's2' }];
+    const inFn = vi.fn(() => ({
+      order: () => ({ limit: () => Promise.resolve({ data: [], error: null }) }),
+    }));
+    mockFrom.mockImplementation((table: string) =>
+      table === 'students'
+        ? { select: () => ({ eq: () => Promise.resolve({ data: kids, error: null }) }) }
+        : { select: () => ({ in: inFn }) },
+    );
+
+    await getRecentReleases('parent-A');
+    expect(inFn).toHaveBeenCalledWith('studentId', ['s1', 's2']);
+  });
+
+  it('returns [] without querying release_log when the parent has no children', async () => {
+    mockKidsChain([]);
+    const res = await getRecentReleases('parent-A');
+    expect(res).toEqual([]);
+  });
+
+  it('returns joined release rows', async () => {
+    const rows = [
+      { id: 1, studentId: 's1', familyId: '0421', staffId: 'office-umal', createdAt: '2026-08-02T14:00:00Z', students: { name: 'Fartun Axmed', className: 'Grade 4-A' } },
+    ];
+    mockFrom.mockImplementation((table: string) =>
+      table === 'students'
+        ? { select: () => ({ eq: () => Promise.resolve({ data: [{ id: 's1' }], error: null }) }) }
+        : {
+            select: () => ({
+              in: () => ({
+                order: () => ({ limit: () => Promise.resolve({ data: rows, error: null }) }),
+              }),
+            }),
+          },
+    );
+    const res = await getRecentReleases('parent-A');
+    expect(res).toHaveLength(1);
+    expect(res[0].students?.name).toBe('Fartun Axmed');
   });
 });

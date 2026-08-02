@@ -8,6 +8,15 @@
 import { supabase } from '../supabase';
 import type { Student } from '../../types';
 
+export interface RecentRelease {
+  id: number;
+  studentId: string;
+  familyId: string;
+  staffId: string;
+  createdAt: string;
+  students: { name: string; className: string } | null;
+}
+
 export interface ParentFamilyCard {
   /** Family ID ('0421') or null when Generate hasn't run for this family yet. */
   familyId: string | null;
@@ -38,4 +47,32 @@ export async function getParentFamilyCard(parentId: string): Promise<ParentFamil
     students,
     pending: familyId === null,
   };
+}
+
+/**
+ * A parent's recent releases (pickups) — own children only. The query is
+ * scoped to the parent's kids, and the release_log RLS policy
+ * ("Parents can read own children releases") enforces the same boundary at
+ * the database: a parent can never see another family's releases.
+ */
+export async function getRecentReleases(parentId: string, limit = 5): Promise<RecentRelease[]> {
+  const { data: kids, error: kidsError } = await supabase
+    .from('students')
+    .select('id')
+    .eq('parentId', parentId);
+  if (kidsError) throw kidsError;
+
+  const studentIds = (kids ?? []).map(k => (k as { id: string }).id);
+  if (studentIds.length === 0) return [];
+
+  const { data, error } = await supabase
+    .from('release_log')
+    .select('id,studentId,familyId,staffId,createdAt,students(name,className)')
+    .in('studentId', studentIds)
+    .order('createdAt', { ascending: false })
+    .limit(limit);
+  if (error) throw error;
+  // PostgREST types the to-one join as an array; the runtime shape is an
+  // object (or null), so cast via unknown.
+  return (data ?? []) as unknown as RecentRelease[];
 }

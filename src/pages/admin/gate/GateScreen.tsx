@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
-import { lookupGateFamily, type GateLookupResult } from '../../../lib/db/gate';
+import { lookupGateFamily, recordRelease, type GateLookupResult, type GateLookupRow } from '../../../lib/db/gate';
 import { formatGateDigits, gateCanCheck, normalizeGateInput } from '../../../lib/gate/gate-utils';
 import { errorBuzz, successBeep } from '../../../lib/gate/beep';
 import { gateT, gateTransportLabel, type GateLang } from '../../../lib/i18n/gateStrings';
@@ -35,6 +35,12 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
   const [result, setResult] = useState<GateLookupResult | null>(null);
   const [camera, setCamera] = useState<CameraState>('off');
   const [cameraError, setCameraError] = useState('');
+  // studentId → ISO timestamp of successful release (release log)
+  const [released, setReleased] = useState<Record<string, string>>({});
+  // studentId → release in flight
+  const [releasing, setReleasing] = useState<Record<string, boolean>>({});
+  // studentId → last release attempt failed (surfaces an inline retry)
+  const [releaseErrors, setReleaseErrors] = useState<Record<string, boolean>>({});
 
   const inputRef = useRef<HTMLInputElement>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -44,7 +50,26 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
   const resetToIdle = useCallback(() => {
     setStatus('idle');
     setResult(null);
+    setReleased({});
+    setReleasing({});
+    setReleaseErrors({});
     inputRef.current?.focus();
+  }, []);
+
+  // Record a successful handoff in the release log (student, family, staff, time).
+  const handleRelease = useCallback(async (student: GateLookupRow, familyId: string) => {
+    setReleasing(prev => ({ ...prev, [student.id]: true }));
+    setReleaseErrors(prev => ({ ...prev, [student.id]: false }));
+    try {
+      const record = await recordRelease(student.id, familyId);
+      setReleased(prev => ({ ...prev, [student.id]: record.createdAt }));
+      successBeep();
+    } catch {
+      setReleaseErrors(prev => ({ ...prev, [student.id]: true }));
+      errorBuzz();
+    } finally {
+      setReleasing(prev => ({ ...prev, [student.id]: false }));
+    }
   }, []);
 
   const doCheck = useCallback(async (rawInput?: string) => {
@@ -259,17 +284,41 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
               <span aria-hidden className="text-3xl">✓</span>
               {t.found} · {displayFamilyId(result.familyId)}
             </div>
-            {result.students.map(s => (
-              <div key={s.id} className="mt-2 flex items-center justify-between rounded-xl border border-emerald-200 bg-white p-3">
-                <div>
-                  <div className="text-lg font-bold">{s.name}</div>
-                  <div className="text-sm text-slate-500">{s.className} · {gateTransportLabel(lang, s.transport)}</div>
+            {result.students.map(s => {
+              const releasedAt = released[s.id];
+              return (
+                <div key={s.id} className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white p-3">
+                  <div className="min-w-0">
+                    <div className="text-lg font-bold">{s.name}</div>
+                    <div className="text-sm text-slate-500">{s.className} · {gateTransportLabel(lang, s.transport)}</div>
+                    {releasedAt && (
+                      <div className="text-xs font-semibold text-emerald-700">
+                        {t.releasedAt}: {new Date(releasedAt).toLocaleTimeString()}
+                      </div>
+                    )}
+                    {releaseErrors[s.id] && (
+                      <div className="text-xs font-semibold text-red-600">{t.releaseFailed}</div>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-800">
+                      {gateTransportLabel(lang, s.transport)}
+                    </span>
+                    {releasedAt ? (
+                      <span className="rounded-full bg-emerald-700 px-3 py-1 text-xs font-black text-white">✓ {t.released}</span>
+                    ) : (
+                      <button
+                        onClick={() => void handleRelease(s, result.familyId)}
+                        disabled={!!releasing[s.id]}
+                        className="min-h-[44px] rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50"
+                      >
+                        {releasing[s.id] ? t.releasing : `✓ ${t.release}`}
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-800">
-                  {gateTransportLabel(lang, s.transport)}
-                </span>
-              </div>
-            ))}
+              );
+            })}
             <div className="mt-3 text-sm text-slate-700">
               📞 {t.phone}: <b>{result.students.find(s => s.parentPhone)?.parentPhone ?? '—'}</b>
             </div>

@@ -35,6 +35,11 @@ export interface GateStrings {
   error: string;
   errorHint: string;
   emptyPrompt: string;
+  release: string;
+  releasing: string;
+  released: string;
+  releaseFailed: string;
+  releasedAt: string;
 }
 
 const SO: GateStrings = {
@@ -65,6 +70,11 @@ const SO: GateStrings = {
   error: 'Cilad dhacday',
   errorHint: 'Isku day mar kale',
   emptyPrompt: 'Scan ama ku qor MBK-####',
+  release: 'Sii Day',
+  releasing: 'Sii dayn…',
+  released: 'Waa la siiyay',
+  releaseFailed: 'Cilad — mar kale isku day',
+  releasedAt: 'Waqtiga la siiyay',
 };
 
 const EN: GateStrings = {
@@ -95,6 +105,11 @@ const EN: GateStrings = {
   error: 'Something went wrong',
   errorHint: 'Try again',
   emptyPrompt: 'Scan or type MBK-####',
+  release: 'Release',
+  releasing: 'Releasing…',
+  released: 'Released',
+  releaseFailed: 'Failed — try again',
+  releasedAt: 'Released at',
 };
 
 export const GATE_STRINGS: Record<GateLang, GateStrings> = { so: SO, en: EN };
