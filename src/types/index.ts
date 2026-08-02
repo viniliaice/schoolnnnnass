@@ -105,7 +105,7 @@ export interface Exam {
   id: string;
   studentId: string;
   subject: string;
-  score: number;
+  score: number | null;
   total: number;
   examType: ExamType;
   month: string;
@@ -114,6 +114,13 @@ export interface Exam {
   date: string;
   createdAt: string;
   teacherId: string;
+  assessmentLabel?: string | null;
+  entryState?: 'scored' | 'absent' | 'not_applicable';
+  uploadedBy?: string | null;
+}
+
+export function isScoredExam(exam: Pick<Exam, 'score' | 'entryState'>): boolean {
+  return exam.score !== null && (exam.entryState == null || exam.entryState === 'scored');
 }
 
 export interface TeacherExamProgress {
@@ -284,7 +291,7 @@ export interface Exam {
   id: string;
   studentId: string;
   subject: string;
-  score: number;
+  score: number | null;
   total: number;
   examType: ExamType;
   month: string;
@@ -293,9 +300,12 @@ export interface Exam {
   date: string;
   createdAt: string;
   teacherId: string;
-  termId?: string;  // New
-  subjectId?: string;  // New
-  comment?: string; // optional per-exam teacher comment
+  assessmentLabel?: string | null;
+  entryState?: 'scored' | 'absent' | 'not_applicable';
+  uploadedBy?: string | null;
+  termId?: string;
+  subjectId?: string;
+  comment?: string;
 }
 
 // Add report types

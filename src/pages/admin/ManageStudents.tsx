@@ -570,14 +570,14 @@ function ExamEntriesDialogContent({ studentId, entries, loading, reportComments 
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {rows.map(e => {
-                  const pct = e.total > 0 ? Math.round((e.score / e.total) * 100) : 0;
+                  const pct = e.score != null && e.entryState !== 'absent' && e.entryState !== 'not_applicable' && e.total > 0 ? Math.round((e.score / e.total) * 100) : null;
                   return (
                     <tr key={e.id} className="hover:bg-slate-50 transition-colors">
                       <td className="px-5 py-3 text-sm text-slate-700">{e.subject}</td>
                       <td className="px-5 py-3 text-sm text-slate-600">{e.examType}</td>
                       <td className="px-5 py-3 text-sm text-slate-600">{e.month}</td>
-                      <td className="px-5 py-3 text-center font-bold text-sm text-slate-800">{e.score}/{e.total}</td>
-                      <td className="px-5 py-3 text-center"><span className={cn('text-sm font-bold', pct >= 80 ? 'text-emerald-600' : pct >= 60 ? 'text-amber-600' : 'text-red-600')}>{pct}%</span></td>
+                      <td className="px-5 py-3 text-center font-bold text-sm text-slate-800">{e.entryState === 'absent' ? 'Absent' : e.entryState === 'not_applicable' ? 'N/A' : `${e.score}/${e.total}`}</td>
+                      <td className="px-5 py-3 text-center">{pct == null ? <span className="text-sm text-slate-400">Excluded</span> : <span className={cn('text-sm font-bold', pct >= 80 ? 'text-emerald-600' : pct >= 60 ? 'text-amber-600' : 'text-red-600')}>{pct}%</span>}</td>
                       <td className="px-5 py-3 text-sm text-slate-600">{e.status}</td>
                       <td className="px-5 py-3 text-sm text-slate-600">{reportComments[e.id] || '—'}</td>
                     </tr>

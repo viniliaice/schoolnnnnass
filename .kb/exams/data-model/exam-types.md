@@ -6,8 +6,8 @@ tags: [exams, configuration]
 timestamp: 2026-07-27T00:00:00Z
 ---
 
-EXAM_TYPES: CA, Homework, Classwork, Quiz, Midterm, Final, Attendance — all 7 types.
-CA_TYPES: CA, Homework, Classwork, Quiz, Attendance — 5 types counted toward continuous assessment.
+EXAM_TYPES: CA, Homework, Classwork, Quiz, Midterm, Final, Attendance, Discipline — all 8 types.
+CA_TYPES: CA, Homework, Classwork, Quiz, Attendance — 5 types counted toward continuous assessment. Discipline/Akhlaaq is recorded per subject but intentionally remains a separate reported metric, not an academic CA component.
 From src/types/index.ts.
 
 ## Related

@@ -48,6 +48,13 @@ export async function bulkCreateStudents(dataList: Omit<Student, 'id' | 'created
   return data || [];
 }
 
+/**
+ * Legacy/general exam insert used by the single-subject entry flow.
+ *
+ * Do not use this for Excel bulk grades: that flow must use
+ * submitBulkGrades(), whose RPC validates assessment slots, authorization,
+ * idempotency, and update-vs-insert behavior atomically.
+ */
 export async function bulkCreateExams(dataList: Omit<Exam, 'id' | 'createdAt'>[]): Promise<Exam[]> {
   const examsWithTimestamps = dataList.map(data => {
     const timestamp = Date.now();

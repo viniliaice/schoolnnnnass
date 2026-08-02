@@ -31,16 +31,33 @@ CREATE TABLE students (
 CREATE TABLE exams (
   id TEXT PRIMARY KEY,
   "studentId" TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
+  "subjectId" TEXT,
   subject TEXT NOT NULL,
-  score INTEGER NOT NULL,
-  total INTEGER NOT NULL,
+  score INTEGER,
+  total INTEGER NOT NULL CHECK (total > 0),
   "examType" TEXT NOT NULL CHECK ("examType" IN ('CA', 'Homework', 'Classwork', 'Quiz', 'Midterm', 'Final', 'Attendance', 'Discipline')),
+  "assessmentLabel" TEXT CHECK ("assessmentLabel" IS NULL OR "assessmentLabel" IN ('HW1', 'HW2', 'HW3', 'HW4', 'CPW1', 'CPW2', 'CPW3', 'CPW4', 'ATTENDANCE', 'MT', 'AKHLAAQ')),
+  "entryState" TEXT NOT NULL DEFAULT 'scored' CHECK ("entryState" IN ('scored', 'absent', 'not_applicable')),
+  "termId" TEXT,
   month TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('pending', 'approved', 'rejected')),
   "parentId" TEXT REFERENCES profiles(id) ON DELETE SET NULL,
   date DATE NOT NULL,
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  "teacherId" TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE
+  "teacherId" TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  "uploadedBy" TEXT REFERENCES profiles(id) ON DELETE SET NULL,
+  CHECK (
+    ("entryState" = 'scored' AND score IS NOT NULL AND score >= 0 AND score <= total)
+    OR ("entryState" IN ('absent', 'not_applicable') AND score IS NULL)
+  ),
+  CHECK (
+    "assessmentLabel" IS NULL
+    OR ("assessmentLabel" IN ('HW1', 'HW2', 'HW3', 'HW4') AND "examType" = 'Homework' AND total = 5)
+    OR ("assessmentLabel" IN ('CPW1', 'CPW2', 'CPW3', 'CPW4') AND "examType" = 'Classwork' AND total = 15)
+    OR ("assessmentLabel" = 'ATTENDANCE' AND "examType" = 'Attendance' AND total = 20)
+    OR ("assessmentLabel" = 'MT' AND "examType" = 'Quiz' AND total = 20)
+    OR ("assessmentLabel" = 'AKHLAAQ' AND "examType" = 'Discipline' AND total = 10)
+  )
 );
 
 -- Basic subjects table used for class_subjects and admin options
@@ -64,6 +81,21 @@ CREATE INDEX idx_exams_parentId ON exams("parentId");
 CREATE INDEX idx_exams_teacherId ON exams("teacherId");
 CREATE INDEX idx_exams_status ON exams(status);
 CREATE INDEX IF NOT EXISTS idx_exams_teacher_month_examtype ON exams("teacherId", "month", "examType");
+CREATE INDEX IF NOT EXISTS idx_exams_bulk_identity_lookup ON exams("studentId", "subjectId", "termId", "assessmentLabel");
+CREATE INDEX IF NOT EXISTS idx_exams_uploaded_by ON exams("uploadedBy");
+CREATE UNIQUE INDEX IF NOT EXISTS exams_bulk_assessment_identity_unique
+  ON exams("studentId", "subjectId", "examType", "assessmentLabel", "termId")
+  WHERE "subjectId" IS NOT NULL AND "termId" IS NOT NULL AND "assessmentLabel" IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS grade_uploads (
+  id TEXT PRIMARY KEY,
+  "uploadedBy" TEXT NOT NULL REFERENCES profiles(id) ON DELETE RESTRICT,
+  payload_hash TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('completed')),
+  result JSONB NOT NULL,
+  "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_grade_uploads_uploaded_by ON grade_uploads("uploadedBy", "createdAt" DESC);
 
 -- Class subject mapping for supervisors/teachers
 CREATE TABLE class_subjects (
@@ -332,40 +364,51 @@ CREATE INDEX idx_quiz_attempts_student ON quiz_attempts("studentId");
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE students ENABLE ROW LEVEL SECURITY;
 ALTER TABLE exams ENABLE ROW LEVEL SECURITY;
+ALTER TABLE grade_uploads ENABLE ROW LEVEL SECURITY;
 
 -- Create policies (adjust based on your auth requirements)
 -- For now, allow all operations (you may want to restrict this)
 CREATE POLICY "Allow all operations on profiles" ON profiles FOR ALL USING (true);
 CREATE POLICY "Allow all operations on students" ON students FOR ALL USING (true);
--- Remove open policy and add secure RLS for teachers
+-- Exam writes are scoped to the authenticated profile, the student's class,
+-- and the corresponding class_subject assignment. auth.uid() is the Supabase
+-- UUID, so it is resolved through profiles.auth_id rather than compared with
+-- the application text id directly.
+CREATE OR REPLACE FUNCTION current_profile_id()
+RETURNS TEXT LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT id FROM profiles WHERE auth_id = auth.uid() LIMIT 1;
+$$;
+CREATE OR REPLACE FUNCTION current_profile_role()
+RETURNS TEXT LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT role FROM profiles WHERE auth_id = auth.uid() LIMIT 1;
+$$;
+CREATE OR REPLACE FUNCTION can_submit_exam_target(p_student_id TEXT, p_subject_id TEXT, p_teacher_id TEXT)
+RETURNS BOOLEAN LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM students s
+    JOIN class_subjects cs ON cs."className" = s."className"
+      AND cs."subjectId" = p_subject_id AND cs."teacherId" = p_teacher_id
+    WHERE s.id = p_student_id
+  );
+$$;
+
 DROP POLICY IF EXISTS "Allow all operations on exams" ON exams;
+DROP POLICY IF EXISTS "Teachers can only insert exams for their assigned subjects" ON exams;
+DROP POLICY IF EXISTS "Teachers can only update exams for their assigned subjects" ON exams;
+DROP POLICY IF EXISTS "Allow select on exams for all" ON exams;
 
--- Allow teachers to insert/update only for their assigned subjects
-
-CREATE POLICY "Teachers can only insert exams for their assigned subjects" ON exams
-  FOR INSERT
-  WITH CHECK (
-    EXISTS (
-      SELECT 1 FROM profiles u
-      WHERE u.id = auth.uid()
-        AND (
-          exams.subjectId = ANY (SELECT jsonb_array_elements_text(u.assignedSubjects))
-        )
-    )
-  );
-
--- Allow teachers to update exams only for their assigned subjects
-CREATE POLICY "Teachers can only update exams for their assigned subjects" ON exams
-  FOR UPDATE
-  USING (
-    EXISTS (
-      SELECT 1 FROM profiles u
-      WHERE u.id = auth.uid()
-        AND (
-          exams.subjectId = ANY (SELECT jsonb_array_elements_text(u.assignedSubjects))
-        )
-    )
-  );
-
--- Allow select for all roles (adjust as needed)
-CREATE POLICY "Allow select on exams for all" ON exams FOR SELECT USING (true);
+CREATE POLICY "exam_select_authorized" ON exams FOR SELECT TO authenticated USING (
+  current_profile_role() IN ('admin', 'supervisor')
+  OR "teacherId" = current_profile_id()
+  OR "parentId" = current_profile_id()
+);
+CREATE POLICY "exam_insert_authorized" ON exams FOR INSERT TO authenticated WITH CHECK (
+  (current_profile_role() = 'teacher' AND "teacherId" = current_profile_id() AND can_submit_exam_target("studentId", "subjectId", "teacherId"))
+  OR (current_profile_role() = 'admin' AND can_submit_exam_target("studentId", "subjectId", "teacherId"))
+);
+CREATE POLICY "exam_update_authorized" ON exams FOR UPDATE TO authenticated
+  USING (current_profile_role() IN ('admin', 'supervisor') OR ("teacherId" = current_profile_id() AND current_profile_role() = 'teacher'))
+  WITH CHECK (current_profile_role() IN ('admin', 'supervisor') OR (current_profile_role() = 'teacher' AND "teacherId" = current_profile_id() AND can_submit_exam_target("studentId", "subjectId", "teacherId")));
+CREATE POLICY "exam_delete_authorized" ON exams FOR DELETE TO authenticated USING (
+  current_profile_role() = 'admin' OR ("teacherId" = current_profile_id() AND current_profile_role() = 'teacher')
+);

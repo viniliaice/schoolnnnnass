@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { getAnnouncementsForParent } from '../../lib/db/communications';
 import { getParentPortalSnapshot } from '../../lib/db/parent-portal';
-import { Announcement, AttendanceRecord, Exam, HomeworkRecord, Student, CA_TYPES, getGrade } from '../../types';
+import { Announcement, AttendanceRecord, Exam, HomeworkRecord, Student, CA_TYPES, getGrade, isScoredExam } from '../../types';
 import { GraduationCap, BookOpen, TrendingUp, Award, CalendarCheck2, ClipboardList } from 'lucide-react';
 import { supabase } from '../../lib/supabase';
 
@@ -82,16 +82,18 @@ export function ParentDashboard() {
     };
   }, [session]);
 
-  const totalExams = exams.length;
+  // Explicit Absent/N/A grade entries are intentionally not academic scores.
+  const scoredExams = exams.filter(isScoredExam);
+  const totalExams = scoredExams.length;
   const overallAvg = totalExams > 0
-    ? Math.round(exams.reduce((sum, e) => sum + (e.score / e.total) * 100, 0) / totalExams)
+    ? Math.round(scoredExams.reduce((sum, e) => sum + ((e.score ?? 0) / e.total) * 100, 0) / totalExams)
     : 0;
 
-  // Best subject
+  // Best subject uses only scored entries; Discipline remains outside CA_TYPES.
   const subjectAvgs: Record<string, { total: number; count: number }> = {};
-  exams.forEach(e => {
+  scoredExams.forEach(e => {
     if (!subjectAvgs[e.subject]) subjectAvgs[e.subject] = { total: 0, count: 0 };
-    subjectAvgs[e.subject].total += (e.score / e.total) * 100;
+    subjectAvgs[e.subject].total += ((e.score ?? 0) / e.total) * 100;
     subjectAvgs[e.subject].count += 1;
   });
   const bestSubject = Object.entries(subjectAvgs).sort((a, b) =>
@@ -167,10 +169,11 @@ export function ParentDashboard() {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {children.map(child => {
           const childExams = exams.filter(e => e.studentId === child.id);
-          const childAvg = childExams.length > 0
-            ? Math.round(childExams.reduce((sum, e) => sum + (e.score / e.total) * 100, 0) / childExams.length)
+          const childScoredExams = childExams.filter(isScoredExam);
+          const childAvg = childScoredExams.length > 0
+            ? Math.round(childScoredExams.reduce((sum, e) => sum + ((e.score ?? 0) / e.total) * 100, 0) / childScoredExams.length)
             : 0;
-          const caExams = childExams.filter(e => CA_TYPES.includes(e.examType));
+          const caExams = childScoredExams.filter(e => CA_TYPES.includes(e.examType));
           const midExams = childExams.filter(e => e.examType === 'Midterm');
           const finalExams = childExams.filter(e => e.examType === 'Final');
 
