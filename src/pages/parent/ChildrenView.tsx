@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { getStudentsByParent } from '../../lib/db/students';
 import { getExamsByParent } from '../../lib/db/exams';
-import { Student, Exam } from '../../types';
+import { Student, Exam, isScoredExam } from '../../types';
 import { GraduationCap, BookOpen } from 'lucide-react';
 
 export function ChildrenView() {
@@ -40,7 +40,7 @@ export function ChildrenView() {
       ) : (
         <div className="space-y-6">
           {children.map(child => {
-            const childExams = exams.filter(e => e.studentId === child.id);
+            const childExams = exams.filter(e => e.studentId === child.id).filter(isScoredExam);
             const subjects = [...new Set(childExams.map(e => e.subject))];
 
             return (
@@ -65,7 +65,7 @@ export function ChildrenView() {
                     <div className="space-y-3">
                       {subjects.map(sub => {
                         const subExams = childExams.filter(e => e.subject === sub);
-                        const avg = Math.round(subExams.reduce((s, e) => s + (e.score / e.total) * 100, 0) / subExams.length);
+                        const avg = Math.round(subExams.reduce((s, e) => s + ((e.score ?? 0) / e.total) * 100, 0) / subExams.length);
                         return (
                           <div key={sub} className="flex items-center gap-4">
                             <span className="text-sm font-medium text-slate-700 w-32 truncate">{sub}</span>

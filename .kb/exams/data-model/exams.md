@@ -18,9 +18,14 @@ linked_concepts:
 | id | text | PK, format prefix-timestamp-random |
 | studentId | text | FK → students.id, CASCADE |
 | subject | text | NOT NULL |
-| score | int | NOT NULL |
-| total | int | NOT NULL |
-| examType | text | NOT NULL, CHECK (CA\|Homework\|Classwork\|Quiz\|Midterm\|Final) |
+| subjectId | text | Subject identifier for authorized class-subject mapping |
+| score | int | Nullable only for explicit absent/not-applicable entries |
+| total | int | NOT NULL, must be positive |
+| examType | text | NOT NULL, CHECK (CA\|Homework\|Classwork\|Quiz\|Midterm\|Final\|Attendance\|Discipline) |
+| assessmentLabel | text | Optional for legacy rows; bulk grades use HW1–HW4, CPW1–CPW4, ATTENDANCE, MT, or AKHLAAQ |
+| entryState | text | scored, absent, or not_applicable |
+| termId | text | Required for new bulk records |
+| uploadedBy | text | Actor who submitted the upload; may differ from assigned teacher |
 | month | text | NOT NULL |
 | status | text | CHECK (pending\|approved\|rejected) |
 | parentId | text | FK → profiles.id, SET NULL |
@@ -40,7 +45,9 @@ linked_concepts:
 ## Constraints
 
 - Text PKs use prefix-timestamp-random format
-- examType limited to: CA, Homework, Classwork, Quiz, Midterm, Final
+- examType limited to: CA, Homework, Classwork, Quiz, Midterm, Final, Attendance, Discipline
+- scored entries require a finite score from 0 through total; absent/N/A entries store a null score and are excluded from academic averages
+- classified bulk records are unique by student, subject, exam type, assessment label, and term
 - status limited to: pending, approved, rejected
 
 ## Related

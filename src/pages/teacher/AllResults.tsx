@@ -94,8 +94,7 @@ export function AllResults() {
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-600">{exam.month}</td>
                     <td className="px-5 py-3 text-center">
-                      <span className="font-bold text-slate-800 text-sm">{exam.score}/{exam.total}</span>
-                      <span className="text-xs text-slate-400 ml-1">({Math.round(exam.score / exam.total * 100)}%)</span>
+                      {exam.entryState === 'absent' ? <span className="font-bold text-slate-600 text-sm">Absent</span> : exam.entryState === 'not_applicable' ? <span className="font-bold text-slate-500 text-sm">N/A</span> : <><span className="font-bold text-slate-800 text-sm">{exam.score}/{exam.total}</span><span className="text-xs text-slate-400 ml-1">({Math.round(((exam.score ?? 0) / exam.total) * 100)}%)</span></>}
                     </td>
                     <td className="px-5 py-3 text-center">
                       <div className="flex items-center justify-center gap-1.5">

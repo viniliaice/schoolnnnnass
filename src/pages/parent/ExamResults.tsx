@@ -4,7 +4,7 @@ import { getStudentsByParent } from '../../lib/db/students';
 import { getExamsByParent } from '../../lib/db/exams';
 import { getCurrentTerm } from '../../lib/db/academic';
 import { getReportCommentsForStudentTerm } from '../../lib/db/reports';
-import { Student, Exam, ExamType, EXAM_TYPES } from '../../types';
+import { Student, Exam, ExamType, EXAM_TYPES, isScoredExam } from '../../types';
 import { BookOpen } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
@@ -106,7 +106,8 @@ export function ExamResults() {
             <tbody className="divide-y divide-slate-100">
               {filtered.map(exam => {
                 const child = children.find(c => c.id === exam.studentId);
-                const pct = Math.round(exam.score / exam.total * 100);
+                const pct = isScoredExam(exam) ? Math.round(((exam.score ?? 0) / exam.total) * 100) : null;
+                const stateLabel = exam.entryState === 'absent' ? 'Absent' : exam.entryState === 'not_applicable' ? 'N/A' : null;
                 return (
                   <tr key={exam.id} className="hover:bg-slate-50 transition-colors">
                     <td className="px-5 py-3 text-sm font-medium text-slate-800">{child?.name || '—'}</td>
@@ -119,11 +120,9 @@ export function ExamResults() {
                       )}>{exam.examType}</span>
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-600">{exam.month}</td>
-                    <td className="px-5 py-3 text-center font-bold text-sm text-slate-800">{exam.score}/{exam.total}</td>
+                    <td className="px-5 py-3 text-center font-bold text-sm text-slate-800">{stateLabel || `${exam.score}/${exam.total}`}</td>
                     <td className="px-5 py-3 text-center">
-                      <span className={cn("text-sm font-bold",
-                        pct >= 80 ? 'text-emerald-600' : pct >= 60 ? 'text-amber-600' : 'text-red-600'
-                      )}>{pct}%</span>
+                      {pct == null ? <span className="text-sm font-medium text-slate-400">Excluded</span> : <span className={cn("text-sm font-bold", pct >= 80 ? 'text-emerald-600' : pct >= 60 ? 'text-amber-600' : 'text-red-600')}>{pct}%</span>}
                     </td>
                     <td className="px-5 py-3 text-sm text-slate-600">{reportCommentsByExam[exam.id] || '—'}</td>
                   </tr>

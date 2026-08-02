@@ -71,7 +71,7 @@ async function getSystemStatsFallback(): Promise<SystemStats> {
     countRows('exams', query => query.eq('status', 'pending')),
     countRows('exams', query => query.eq('status', 'approved')),
     countRows('exams', query => query.eq('status', 'rejected')),
-    supabase.from('exams').select('score,total').limit(30000),
+    supabase.from('exams').select('score,total').eq('entryState', 'scored').limit(30000),
   ]);
 
   const { data: examRows, error: examError } = examsForAverage;

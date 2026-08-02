@@ -146,6 +146,7 @@ export async function getMidtermReportFallback(studentId: string, termId: string
       .eq('studentId', studentId)
       .eq('termId', termId)
       .eq('examType', 'Midterm')
+      .eq('entryState', 'scored')
       .eq('status', 'approved')
       .returns<Exam[]>(),
     supabase
@@ -170,6 +171,7 @@ export async function getMidtermReportFallback(studentId: string, termId: string
         .in('studentId', classStudentIds)
         .eq('termId', termId)
         .eq('examType', 'Midterm')
+        .eq('entryState', 'scored')
         .eq('status', 'approved')
         .returns<Exam[]>()
     : { data: [], error: null };
@@ -179,28 +181,28 @@ export async function getMidtermReportFallback(studentId: string, termId: string
   const bySubject = new Map<string, MidtermScore>();
 
   for (const e of studentExams ?? []) {
-    const percentage = e.total > 0 ? Math.round((e.score / e.total) * 100) : 0;
+    const percentage = e.total > 0 ? Math.round(((e.score ?? 0) / e.total) * 100) : 0;
     const grade = getGrade(percentage);
     const remark = grade === 'A' ? 'Excellent' : grade === 'B' ? 'Very Good' : grade === 'C' ? 'Good' : grade === 'D' ? 'Satisfactory' : 'Needs Improvement';
 
     const sameSubjectClass = (classExams ?? []).filter(ex => ex.subject === e.subject);
     const classAvg = sameSubjectClass.length
-      ? Math.round(sameSubjectClass.reduce((sum, ex) => sum + (ex.total > 0 ? (ex.score / ex.total) * 100 : 0), 0) / sameSubjectClass.length)
+      ? Math.round(sameSubjectClass.reduce((sum, ex) => sum + (ex.total > 0 ? ((ex.score ?? 0) / ex.total) * 100 : 0), 0) / sameSubjectClass.length)
       : 0;
 
     const highestInClass = sameSubjectClass.length
-      ? Math.max(...sameSubjectClass.map(ex => (ex.total > 0 ? Math.round((ex.score / ex.total) * 100) : 0)))
+      ? Math.max(...sameSubjectClass.map(ex => (ex.total > 0 ? Math.round(((ex.score ?? 0) / ex.total) * 100) : 0)))
       : 0;
 
     const sortedSubject = [...sameSubjectClass]
-      .map(ex => (ex.total > 0 ? Math.round((ex.score / ex.total) * 100) : 0))
+      .map(ex => (ex.total > 0 ? Math.round(((ex.score ?? 0) / ex.total) * 100) : 0))
       .sort((a, b) => b - a);
 
     const subjectRank = sortedSubject.indexOf(percentage) + 1;
 
     bySubject.set(e.subject, {
       subject: e.subject,
-      score: e.score,
+      score: e.score ?? 0,
       total: e.total,
       percentage,
       grade,
@@ -222,7 +224,7 @@ export async function getMidtermReportFallback(studentId: string, termId: string
   for (const sid of classStudentIds) {
     const exams = (classExams ?? []).filter(ex => ex.studentId === sid);
     const pct = exams.length
-      ? Math.round(exams.reduce((sum, ex) => sum + (ex.total > 0 ? (ex.score / ex.total) * 100 : 0), 0) / exams.length)
+      ? Math.round(exams.reduce((sum, ex) => sum + (ex.total > 0 ? ((ex.score ?? 0) / ex.total) * 100 : 0), 0) / exams.length)
       : 0;
     classAverages.set(sid, pct);
   }
