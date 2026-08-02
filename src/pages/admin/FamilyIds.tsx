@@ -114,8 +114,18 @@ export function FamilyIds() {
   const handleApply = async () => {
     setApplying(true);
     try {
-      const { applied, skipped } = await applyTransportImport(importedRows);
-      addToast({ type: 'success', title: `Applied ${applied} row(s)`, description: skipped ? `${skipped} skipped` : undefined });
+      const { applied, skipped, errors } = await applyTransportImport(importedRows);
+      if (errors.length > 0) {
+        // Surface the real per-row failures instead of a silent "0 applied".
+        const sample = errors.slice(0, 3).join(' · ');
+        addToast({
+          type: 'error',
+          title: `Applied ${applied} of ${importedRows.length} row(s)`,
+          description: `${skipped} skipped — ${sample}${errors.length > 3 ? ` (+${errors.length - 3} more)` : ''}`,
+        });
+      } else {
+        addToast({ type: 'success', title: `Applied ${applied} row(s)`, description: skipped ? `${skipped} skipped` : undefined });
+      }
       setImportedRows([]);
       setImportText('');
       await reload();
@@ -154,7 +164,7 @@ export function FamilyIds() {
   };
 
   const handleOverride = async (studentId: string) => {
-    const familyId = window.prompt('Family ID to assign (e.g. 0043 — existing or new):');
+    const familyId = window.prompt('Family ID to assign (exactly 4 digits, e.g. 0043 — existing or new):');
     if (!familyId) return;
     try {
       await assignFamilyOverride(studentId, familyId);

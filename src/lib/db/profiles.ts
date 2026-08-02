@@ -79,14 +79,37 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
 
   const id = `${data.role}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
 
-  const { data: created, error } = await supabase
-    .from('profiles')
-    .insert({ id, ...rest, auth_id: authData.user.id, createdAt: new Date().toISOString() })
-    .select()
-    .single();
+  // profiles is SELECT-only under RLS (20260708_profiles_auth_session_rls) —
+  // a direct supabase.from('profiles').insert() is denied for every role
+  // (this is the office-role save bug). Profile creation goes through the
+  // admin-only SECURITY DEFINER RPC instead.
+  const { error } = await supabase.rpc('create_user_profile', {
+    p_id: id,
+    p_name: rest.name,
+    p_email: rest.email,
+    p_role: rest.role,
+    p_auth_id: authData.user.id,
+    p_phone1: rest.phone1 ?? null,
+    p_phone2: rest.phone2 ?? null,
+    p_xafada: rest.xafada ?? null,
+    p_udow: rest.udow ?? null,
+    p_paymentnumber: rest.paymentnumber ?? null,
+    p_assigned_classes: rest.assignedClasses ?? [],
+    p_assigned_subjects: rest.assignedSubjects ?? [],
+  });
   if (error) throw error;
 
-  return created as User;
+  return { id, ...rest, createdAt: new Date().toISOString() } as User;
+}
+
+/**
+ * Admin-only role change (e.g. grant the office gate role to an existing
+ * user). The RPC enforces the admin check in SQL — a non-admin caller gets
+ * insufficient_privilege and cannot grant itself or others elevated roles.
+ */
+export async function setUserRole(userId: string, role: Role): Promise<void> {
+  const { error } = await supabase.rpc('set_user_role', { p_user_id: userId, p_role: role });
+  if (error) throw error;
 }
 
 export async function updateUser(id: string, data: Partial<User>): Promise<User> {
