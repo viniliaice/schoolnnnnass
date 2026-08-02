@@ -2,6 +2,23 @@
 
 Deferred work from CEO review (2026-08-02) — Family ID Generator.
 
+## RLS write-path fixes (family-ID/gate) — DONE (2026-08-02)
+- **Root cause:** the app's Supabase client uses the anon key, so RLS applies to every REST write. `students` and `profiles` are SELECT-only under RLS (20260708_profiles_auth_session_rls) — **no INSERT/UPDATE policy for any role** — so every direct `supabase.from(...).update()/.insert()` is silently denied. Two instances of this bug class shipped inside the family-ID feature; both fixed by moving writes to admin-only SECURITY DEFINER RPCs:
+  1. **Transport import "Apply"** (`applyTransportImport`) used `supabase.from('students').update()` → always "Applied 0 row(s)". Fixed with `set_student_import_fields()` RPC (`supabase/migrations/20260802_family_import_rpc.sql`); client now reports real per-row errors instead of a silent success count.
+  2. **Office-role save** — `createUser(role:'office')` used `supabase.from('profiles').insert()` → the office account never persisted. Fixed with `create_user_profile()` + `set_user_role()` RPCs (`supabase/migrations/20260802_user_role_rpc.sql`).
+  3. Also hardened: `assign_family_override()` now caps manual IDs at 4 digits so an oversized override can't overflow `generate_family_ids()`'s `MAX(::INTEGER)` and permanently brick the generator.
+- **Tests:** `src/lib/__tests__/family-ids.test.ts` (RPC path + regression: no direct UPDATE; real error propagation; override guard), `src/lib/__tests__/user-roles.test.ts` (office role persists via RPC; non-admin rejected), `supabase/tests/rls-family-import.sql` + `supabase/tests/rls-user-role.sql` (real-schema assertions: no direct write policies, RPCs are SECURITY DEFINER + admin-gated + PUBLIC-execute revoked).
+
+## Flagged — same bug class OUTSIDE the family-ID/gate feature (NOT fixed, per scope)
+Direct `.insert()/.update()/.delete()` on RLS-protected tables from the anon-key client will be denied in production for the same reason. Audit each before/at go-live:
+- `src/lib/db/profiles.ts` — `updateUser()` (`.update` on profiles), `deleteUser()` (`.delete` on profiles + `.update` on students)
+- `src/lib/db/students.ts:114/123/132` — ManageStudents create/edit/delete
+- `src/lib/db/bulk.ts:46` — bulk student insert
+- `src/lib/db/promotions.ts:115` — class promotion `.update` on students
+- `src/lib/devSeed.ts` — dev-seed inserts (dev only, but same class)
+
+**Fix pattern when addressed:** same as above — admin-only SECURITY DEFINER RPCs (or role-scoped DML policies if the table genuinely needs direct REST writes).
+
 ## Release log + parent visibility — DONE (2026-08-02)
 - **Implemented:** `supabase/migrations/20260802_release_log.sql` — `release_log` table (studentId, familyId, staffId, createdAt) + `record_release()` RPC (admin/supervisor/office, verifies student belongs to family, mirrors to audit_logs as `family_ids.release`). Gate screen has per-student "Sii Day / Release" buttons with released-state + timestamp; parent dashboard shows own children's recent pickups (`RecentReleases`). RLS: staff read-all, parents own-children-only, no direct writes. Tests: gate wrapper + portal + `supabase/tests/rls-release-log.sql`.
 
