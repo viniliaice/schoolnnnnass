@@ -5,8 +5,9 @@
 // the design review state table (loading / empty / error / success / partial)
 // are implemented inline.
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PDFDownloadLink } from '@react-pdf/renderer';
+import { HelpCircle, ChevronDown, Download, Upload } from 'lucide-react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
 import { canGenerateFamilyIds } from '../../lib/routing';
@@ -16,9 +17,14 @@ import {
   generateFamilyIds, groupStudentsByFamily, setStudentTransport,
   type GenerateSummary,
 } from '../../lib/db/familyIds';
-import { parseTransportImport, matchImportRows, summarizeImport, type TransportImportRow } from '../../lib/import/transportImport';
+import {
+  parseTransportImport, matchImportRows, summarizeImport,
+  type TransportImportResult, type TransportImportRow,
+} from '../../lib/import/transportImport';
+import { TRANSPORT_EXAMPLE_CSV, downloadExampleWorkbook } from '../../lib/import/transportTemplate';
 import { displayFamilyId, transportLabel } from '../../lib/transport';
 import { buildFamilyCardData, FamilyCardsDocument, type CardLayout } from '../../lib/print/familyCards';
+import { cn } from '../../utils/cn';
 import type { Student } from '../../types';
 
 const TRANSPORT_OPTIONS = ['WALKER', 'CAR'] as const;
@@ -36,6 +42,9 @@ export function FamilyIds() {
   const [generateResult, setGenerateResult] = useState<GenerateSummary | null>(null);
   const [layout, setLayout] = useState<CardLayout>('pocket');
   const [withLookup, setWithLookup] = useState(true);
+  const [helpOpen, setHelpOpen] = useState(true);
+  const [dragOver, setDragOver] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -55,16 +64,13 @@ export function FamilyIds() {
   const families = useMemo(() => Array.from(groups.entries()), [groups]);
   const importSummary = useMemo(() => (importedRows.length ? summarizeImport(importedRows) : null), [importedRows]);
 
-  const handleParse = () => {
-    if (!importText.trim()) {
-      addToast({ type: 'error', title: 'Paste the sheet export first' });
-      return;
-    }
-    const result = parseTransportImport(importText);
+  /** Shared by paste and file upload: match rows, store them, surface the summary. */
+  const processImportResult = useCallback((result: TransportImportResult) => {
     const rows = matchImportRows(result.rows, students);
     setImportedRows(rows);
-    if (result.issues.some(i => i.severity === 'error')) {
-      addToast({ type: 'error', title: 'Import failed', description: result.issues.find(i => i.severity === 'error')?.message });
+    const fatal = result.issues.find(i => i.severity === 'error');
+    if (fatal) {
+      addToast({ type: 'error', title: 'Import failed', description: fatal.message });
       return;
     }
     const s = summarizeImport(rows);
@@ -73,6 +79,36 @@ export function FamilyIds() {
       title: `${s.total} rows parsed`,
       description: `${s.matched} matched · ${s.ambiguous} ambiguous · ${s.unmatched} unmatched`,
     });
+  }, [students, addToast]);
+
+  const handleParse = () => {
+    if (!importText.trim()) {
+      addToast({ type: 'error', title: 'Paste the sheet export first' });
+      return;
+    }
+    processImportResult(parseTransportImport(importText));
+  };
+
+  const handleFile = async (file: File) => {
+    try {
+      // .csv/.txt come through as text; Excel files as binary — the parser
+      // accepts both (XLSX.read type 'string' vs 'array').
+      const input = /\.(csv|txt)$/i.test(file.name) ? await file.text() : await file.arrayBuffer();
+      setImportText('');
+      processImportResult(parseTransportImport(input));
+    } catch (err) {
+      addToast({ type: 'error', title: 'Could not read file', description: err instanceof Error ? err.message : undefined });
+    }
+  };
+
+  const handleDownloadExample = () => {
+    downloadExampleWorkbook();
+    addToast({ type: 'success', title: 'Example workbook downloaded', description: 'Fill it in with your students, then drop it back here.' });
+  };
+
+  const handlePasteExample = () => {
+    setImportText(TRANSPORT_EXAMPLE_CSV);
+    addToast({ type: 'info', title: 'Example pasted', description: 'Press "Parse & match" to see how it imports.' });
   };
 
   const handleApply = async () => {
@@ -139,6 +175,81 @@ export function FamilyIds() {
         <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Aqoonsiga qoyska</span>
       </div>
 
+      {/* How-to — clear directions for first-time admins (collapsible, open by default) */}
+      <section className="mb-6 rounded-2xl border border-indigo-200 bg-indigo-50/70 p-5">
+        <button
+          onClick={() => setHelpOpen(o => !o)}
+          className="flex w-full items-center justify-between gap-3 text-left"
+          aria-expanded={helpOpen}
+        >
+          <span className="flex items-center gap-2">
+            <HelpCircle className="h-5 w-5 shrink-0 text-indigo-700" />
+            <h2 className="text-base font-bold text-indigo-900">How to create family IDs — Sida loo sameeyo</h2>
+          </span>
+          <ChevronDown className={cn('h-5 w-5 shrink-0 text-indigo-500 transition-transform', helpOpen && 'rotate-180')} />
+        </button>
+
+        {helpOpen && (
+          <div className="mt-4 grid gap-5 lg:grid-cols-[1.4fr_1fr]">
+            <ol className="space-y-3 text-sm leading-relaxed text-slate-700">
+              <li>
+                <span className="font-bold text-indigo-900">1 · Open the master sheet.</span> In Google Sheets, open the student
+                transport sheet used at the office. It must have a <b>Name</b> column; <b>Grade</b>, <b>Bus</b>, <b>Gov-id</b> and
+                {' '}<b>SECOND NUMBER</b> are optional but recommended. Headers are matched by name, so column order doesn't matter.
+              </li>
+              <li>
+                <span className="font-bold text-indigo-900">2 · Export or copy.</span> In Google Sheets: <i>File → Download → Excel (.xlsx)</i>{' '}
+                or <i>Comma-separated values (.csv)</i>. You can also just select the rows and copy them.
+              </li>
+              <li>
+                <span className="font-bold text-indigo-900">3 · Upload it here.</span> Drop the file into the box in section 2 below
+                (or click to browse, or paste the copied rows). Check the <b>matched / ambiguous / unmatched</b> counts, then press{' '}
+                <b>Apply</b> to save the transport data.
+              </li>
+              <li>
+                <span className="font-bold text-indigo-900">4 · Generate &amp; print.</span> Press the green{' '}
+                <b>⚙ Generate / Dhali lambarrada</b> button to create the <code>MBK-####</code> IDs, then download the cards from the
+                bottom <b>Print cards</b> section.
+              </li>
+            </ol>
+
+            <div className="rounded-xl border border-indigo-200 bg-white p-4 text-xs">
+              <p className="mb-2 font-bold text-indigo-900">Expected columns</p>
+              <table className="w-full">
+                <thead>
+                  <tr className="text-left text-slate-500">
+                    <th className="py-1 pr-3">Column</th>
+                    <th className="py-1">Example</th>
+                  </tr>
+                </thead>
+                <tbody className="text-slate-600">
+                  <tr><td className="py-1 pr-3"><code>Name</code> <span className="font-semibold text-emerald-700">(required)</span></td><td>Xalimo Xasan Maxamed</td></tr>
+                  <tr><td className="py-1 pr-3"><code>Bus</code></td><td>9 · or NB / 0 / empty = walker</td></tr>
+                  <tr><td className="py-1 pr-3"><code>Grade</code></td><td>G7A, F3A …</td></tr>
+                  <tr><td className="py-1 pr-3"><code>Gov-id</code></td><td>634555034</td></tr>
+                  <tr><td className="py-1 pr-3"><code>SECOND NUMBER</code></td><td>+252 63 4555034</td></tr>
+                </tbody>
+              </table>
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  onClick={handleDownloadExample}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-indigo-700 px-3 py-1.5 font-semibold text-white transition hover:bg-indigo-800"
+                >
+                  <Download className="h-3.5 w-3.5" /> Download example (.xlsx)
+                </button>
+                <button
+                  onClick={handlePasteExample}
+                  className="rounded-lg border border-indigo-300 bg-white px-3 py-1.5 font-semibold text-indigo-800 transition hover:bg-indigo-50"
+                >
+                  Paste example
+                </button>
+              </div>
+              <p className="mt-2 text-[11px] text-slate-400">Download the example to see the exact format before uploading your own file.</p>
+            </div>
+          </div>
+        )}
+      </section>
+
       {/* Stats row (IA: stats first) */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="Families" value={families.length} />
@@ -176,8 +287,41 @@ export function FamilyIds() {
       <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-base font-semibold text-slate-900">2 · Import the transport sheet</h2>
         <p className="mb-3 text-sm text-slate-500">
-          Paste the Google Sheets export (or drop a .csv / .xlsx file). Columns are matched by header name — order doesn't matter.
+          Drop the Excel / CSV export below, or paste the copied rows. Columns are matched by header name — order doesn't matter.
         </p>
+
+        {/* Drop zone */}
+        <div
+          onClick={() => fileInputRef.current?.click()}
+          onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={e => {
+            e.preventDefault();
+            setDragOver(false);
+            const file = e.dataTransfer.files?.[0];
+            if (file) void handleFile(file);
+          }}
+          className={cn(
+            'mb-3 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed px-6 py-8 text-center transition',
+            dragOver ? 'border-emerald-500 bg-emerald-50' : 'border-slate-300 bg-slate-50 hover:border-emerald-400 hover:bg-emerald-50/50'
+          )}
+        >
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".xlsx,.xls,.csv,.txt"
+            className="hidden"
+            onChange={e => {
+              const file = e.target.files?.[0];
+              if (file) void handleFile(file);
+              e.target.value = '';
+            }}
+          />
+          <Upload className="h-8 w-8 text-emerald-700" />
+          <p className="text-sm font-semibold text-slate-700">Drop your Excel file here, or click to browse</p>
+          <p className="text-xs text-slate-500">Supports .xlsx, .xls, .csv — or paste the rows into the box below</p>
+        </div>
+
         <textarea
           value={importText}
           onChange={e => setImportText(e.target.value)}
