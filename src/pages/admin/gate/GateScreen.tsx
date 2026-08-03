@@ -124,7 +124,16 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
       scannerRef.current = scanner;
       await scanner.start(
         { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 220, height: 220 } },
+        {
+          fps: 10,
+          // Function form: compute a true square from the live viewfinder
+          // dimensions instead of a fixed box the library may stretch to
+          // match the container's aspect ratio.
+          qrbox: (viewfinderWidth, viewfinderHeight) => {
+            const size = Math.max(160, Math.min(viewfinderWidth, viewfinderHeight));
+            return { width: size, height: size };
+          },
+        },
         decoded => { void onScan(decoded); },
         () => { /* per-frame errors are noisy — ignore */ },
       );
@@ -215,7 +224,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
         {/* 2 · Input: keypad OR camera */}
         {/* Scanner element is ALWAYS in the DOM (hidden when off) so
             Html5Qrcode.start() can find it without racing React's render. */}
-        <div id="gate-scanner" className={camera === 'off' ? 'hidden' : 'mb-4 aspect-square w-full overflow-hidden rounded-2xl bg-black'} />
+        <div id="gate-scanner" className={camera === 'off' ? 'hidden' : 'mx-auto mb-4 aspect-square w-full max-w-xs overflow-hidden rounded-2xl bg-black'} />
         {camera === 'off' ? (
           <div className="mb-4">
             <div className="grid grid-cols-3 gap-3">
