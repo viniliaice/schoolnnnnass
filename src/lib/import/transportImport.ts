@@ -22,7 +22,23 @@ import * as XLSX from 'xlsx';
 import type { Student } from '../../types';
 import { mapSheetClassCode, normalizeName, normalizePhone, parseTransportCell, type ParsedTransport } from '../transport';
 
+const LOG = '[family-ids]';
+
 export type ImportMatchStatus = 'matched' | 'ambiguous' | 'unmatched';
+
+/** Which sheet-bucket a row's Bus cell belongs to (drives apply filters). */
+export type ImportBucket = 'nb' | 'empty' | 'bus' | 'other';
+
+const NB_MARKERS = new Set(['nb', 'n/b', 'no bus', '0', '-']);
+
+/** Classify the raw Bus cell so the admin can apply only a subset of rows. */
+export function bucketOf(raw: string): ImportBucket {
+  const v = raw.trim().toLowerCase();
+  if (v === '') return 'empty';
+  if (NB_MARKERS.has(v)) return 'nb';
+  if (/^\d+$/.test(v)) return 'bus';
+  return 'other';
+}
 
 export interface TransportImportRow {
   rowNumber: number;
@@ -33,6 +49,8 @@ export interface TransportImportRow {
   secondNumber: string;
   status: string;
   transport: ParsedTransport;
+  /** Raw Bus cell text, kept for bucket filtering (NB vs empty vs number). */
+  busRaw: string;
   issues: ImportIssue[];
   /** Set by matchImportRows. */
   match: ImportMatchStatus;
@@ -182,6 +200,7 @@ export function parseTransportImport(input: string | ArrayBuffer): TransportImpo
       secondNumber,
       status,
       transport,
+      busRaw,
       issues: rowIssues,
       match: 'unmatched',
       studentId: null,
@@ -190,6 +209,16 @@ export function parseTransportImport(input: string | ArrayBuffer): TransportImpo
   }
 
   issues.push(...out.flatMap(row => row.issues));
+  console.log(`${LOG} parsed sheet`, {
+    sheet: sheetName,
+    headers,
+    mappedHeaders,
+    rowCount: out.length,
+    issues: {
+      errors: issues.filter(i => i.severity === 'error').length,
+      warnings: issues.filter(i => i.severity === 'warning').length,
+    },
+  });
   return { rows: out, issues, headers, mappedHeaders };
 }
 
@@ -212,12 +241,14 @@ export function matchImportRows(rows: TransportImportRow[], students: Student[])
     const candidates = byName.get(normalizeName(row.name)) ?? [];
     if (candidates.length === 0) {
       row.match = 'unmatched';
+      console.log(`${LOG} match`, { row: row.rowNumber, name: row.name, match: 'unmatched', reason: 'no student with that name' });
       continue;
     }
     if (candidates.length === 1) {
       row.match = 'matched';
       row.studentId = candidates[0].id;
       row.classMismatch = !!row.appClass && candidates[0].className !== row.appClass;
+      console.log(`${LOG} match`, { row: row.rowNumber, name: row.name, match: 'matched', studentId: row.studentId, classMismatch: row.classMismatch });
       continue;
     }
     const byClass = row.appClass
@@ -227,10 +258,12 @@ export function matchImportRows(rows: TransportImportRow[], students: Student[])
       row.match = 'matched';
       row.studentId = byClass[0].id;
       row.classMismatch = false;
+      console.log(`${LOG} match`, { row: row.rowNumber, name: row.name, match: 'matched', studentId: row.studentId, via: 'class' });
       continue;
     }
     row.match = 'ambiguous';
     row.studentId = null;
+    console.log(`${LOG} match`, { row: row.rowNumber, name: row.name, match: 'ambiguous', candidates: candidates.length, byClass: byClass.length });
   }
   return rows;
 }

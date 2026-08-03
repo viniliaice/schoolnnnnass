@@ -6,8 +6,9 @@ vi.mock('../supabase', () => ({
 
 import { supabase } from '../supabase';
 import {
-  assignFamilyOverride, applyTransportImport, generateFamilyIds,
-  groupStudentsByFamily, lookupFamily, setStudentTransport,
+  assignFamilyOverride, applyTransportImport, findLeftStudents, findUnattached,
+  generateFamilyIds, groupStudentsByFamily, lookupFamily, markStudentLeft,
+  setStudentTransport,
 } from '../db/familyIds';
 import { parseTransportImport, matchImportRows } from '../import/transportImport';
 
@@ -25,7 +26,18 @@ describe('generateFamilyIds', () => {
       error: null,
     });
     await expect(generateFamilyIds()).resolves.toMatchObject({ familiesCreated: 42, totalFamilies: 248 });
-    expect(rpc).toHaveBeenCalledWith('generate_family_ids');
+    expect(rpc).toHaveBeenCalledWith('generate_family_ids', {});
+  });
+
+  it('passes the transport filter and omits it for "all"', async () => {
+    rpc.mockResolvedValue({
+      data: { familiesCreated: 3, studentsAssigned: 5, unattached: [], totalFamilies: 10 },
+      error: null,
+    });
+    await generateFamilyIds('bus');
+    expect(rpc).toHaveBeenCalledWith('generate_family_ids', { p_transport_filter: 'bus' });
+    await generateFamilyIds('all');
+    expect(rpc).toHaveBeenLastCalledWith('generate_family_ids', {});
   });
 
   it('throws on RPC error', async () => {
@@ -128,8 +140,9 @@ describe('applyTransportImport', () => {
     const result = await applyTransportImport(rows);
     expect(result.applied).toBe(0);
     expect(result.skipped).toBe(2);
-    expect(result.errors).toHaveLength(2);
+    expect(result.errors).toHaveLength(3);
     expect(result.errors[0]).toMatch(/Only admins may apply/);
+    expect(result.errors[1]).toMatch(/\[diag\]/);
   });
 
   it('sends transport null for LEFT rows', async () => {
@@ -140,6 +153,49 @@ describe('applyTransportImport', () => {
     ]);
     await applyTransportImport(rows);
     expect(rpc).toHaveBeenCalledWith('set_student_import_fields', expect.objectContaining({ p_transport: null }));
+  });
+
+  it('filters by buckets when a set is passed (only NB rows applied)', async () => {
+    rpc.mockResolvedValue({ data: null, error: null });
+    const parsed = parseTransportImport('Name,Bus\nFartun Axmed,NB\nCadnan Maxamed,9\nX Stud,\nY Stud,LEFT');
+    const rows = matchImportRows(parsed.rows, [
+      { id: 's1', name: 'Fartun Axmed', className: 'Grade 1-A', parentId: null, createdAt: '' },
+      { id: 's2', name: 'Cadnan Maxamed', className: 'Grade 7-A', parentId: null, createdAt: '' },
+      { id: 's3', name: 'X Stud', className: 'Grade 2-A', parentId: null, createdAt: '' },
+      { id: 's4', name: 'Y Stud', className: 'Grade 2-A', parentId: null, createdAt: '' },
+    ]);
+    const result = await applyTransportImport(rows, new Set(['nb']));
+    expect(result.applied).toBe(1);
+    expect(result.skipped).toBe(3); // 9, empty, LEFT all filtered
+    expect(rpc).toHaveBeenCalledTimes(1);
+    expect(rpc).toHaveBeenCalledWith('set_student_import_fields', expect.objectContaining({ p_student_id: 's1' }));
+  });
+    it('sends transport null for unknown bus values instead of raw sheet text (regression: 22023)', async () => {
+    rpc.mockResolvedValue({ data: null, error: null });
+    const parsed = parseTransportImport('Name,Bus\nFartun Axmed,?');
+    const rows = matchImportRows(parsed.rows, [
+      { id: 's1', name: 'Fartun Axmed', className: 'Grade 1-A', parentId: null, createdAt: '' },
+    ]);
+    const result = await applyTransportImport(rows);
+    expect(result).toEqual({ applied: 1, skipped: 0, errors: [] });
+    // The raw '?' must never reach the RPC — the DB rejects it with 22023.
+    expect(rpc).toHaveBeenCalledWith('set_student_import_fields', expect.objectContaining({ p_transport: null }));
+    expect(rpc.mock.calls[0][1].p_transport).not.toBe('?');
+  });
+});
+
+describe('markStudentLeft', () => {
+  it('calls the mark_student_left RPC with the left flag', async () => {
+    rpc.mockResolvedValue({ data: null, error: null });
+    await markStudentLeft('s1', true);
+    expect(rpc).toHaveBeenCalledWith('mark_student_left', { p_student_id: 's1', p_left: true });
+    await markStudentLeft('s1', false);
+    expect(rpc).toHaveBeenCalledWith('mark_student_left', { p_student_id: 's1', p_left: false });
+  });
+
+  it('throws on RPC error', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'Only admins may mark students as left.' } });
+    await expect(markStudentLeft('s1', true)).rejects.toThrow(/Only admins/);
   });
 });
 
@@ -152,5 +208,15 @@ describe('groupStudentsByFamily / unattached helpers', () => {
     ];
     const groups = groupStudentsByFamily(students as never);
     expect(groups.get('0421')).toHaveLength(2);
+  });
+
+  it('excludes LEFT students from the unattached bucket', () => {
+    const students = [
+      { id: 's1', name: 'A', className: 'G1-A', parentId: null, createdAt: '', transport: 'LEFT' },
+      { id: 's2', name: 'B', className: 'G1-A', parentId: null, createdAt: '', transport: null },
+    ];
+    expect(findUnattached(students as never)).toHaveLength(1);
+    expect(findUnattached(students as never)[0].id).toBe('s2');
+    expect(findLeftStudents(students as never).map(s => s.id)).toEqual(['s1']);
   });
 });

@@ -60,6 +60,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
       if (!profile) {
         throw new Error(`${PROFILE_NOT_FOUND_PREFIX} ${authUserId}`);
       }
+      console.log('[RoleContext] profile loaded:', { profileId: profile.id, authId: authUserId, role: profile.role, email: profile.email });
       const roleSession = buildRoleSession(profile);
       setSession(roleSession);
       setUser({ id: profile.id, authId: authUserId, email: profile.email ?? authEmail });
@@ -113,6 +114,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
     setError(null);
     try {
       const restored = await signInProfileSession(email, password);
+      console.log('[RoleContext] login success:', { profileId: restored.profile.id, authId: restored.profile.auth_id, role: restored.roleSession.role, email: restored.profile.email });
       setSession(restored.roleSession);
       setUser({
         id: restored.profile.id,

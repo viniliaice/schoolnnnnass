@@ -1,5 +1,6 @@
 import type { Role, User } from '../../types';
-import { supabase } from '../supabase';
+import { createAuthedClient, supabase } from '../supabase';
+import { getProfileByAuthId } from '../auth';
 
 const MAX_QUERY_LIMIT = 30000;
 
@@ -20,6 +21,7 @@ export async function getUsersPaginated(
   page: number = 1,
   limit: number = 10,
   search?: string,
+  role?: string,
 ): Promise<{ users: User[]; total: number }> {
   const from = (page - 1) * limit;
   const to = from + limit - 1;
@@ -30,6 +32,10 @@ export async function getUsersPaginated(
 
   if (search && search.trim()) {
     query = query.or(`name.ilike.%${search}%,email.ilike.%${search}%`);
+  }
+
+  if (role) {
+    query = query.eq('role', role);
   }
 
   const { data, error, count } = await query.range(from, to);
@@ -73,15 +79,19 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
 
   if (!password) throw new Error('Password is required');
 
-  // signUp() (with email auto-confirm enabled) replaces the client session
-  // with the NEW user's session and fires an auth event before the profile
-  // row exists. If we then called the RPC, it would run as the new user —
-  // denied, because their profile doesn't exist yet (current_profile_role()
-  // is NULL). It would also leave the admin's stored session pointing at the
-  // brand-new user. Capture the admin session first and restore it after
-  // signUp, before the profile write.
+  // A previous failed attempt can leave a brand-new user's session in
+  // storage: signUp() swaps the shared client's session, and the setSession()
+  // restore has silent no-op paths in auth-js. A retry would then capture
+  // THAT session, pin the RPC to it, and get 403 "Only admins may create
+  // user profiles" (the new user has no profile yet, so
+  // current_profile_role() is NULL). Verify the captured session resolves
+  // to an admin profile before creating anything.
   const { data: sessionData } = await supabase.auth.getSession();
   const adminSession = sessionData?.session;
+  const adminProfile = adminSession ? await getProfileByAuthId(adminSession.user.id) : null;
+  if (!adminSession || !adminProfile || adminProfile.role !== 'admin') {
+    throw new Error('Not signed in as an admin. Sign out and log in again, then retry.');
+  }
 
   const { data: authData, error: authError } = await supabase.auth.signUp({ email: data.email, password });
   if (authError) throw new Error(authError.message || 'Failed to create auth user');
@@ -91,19 +101,24 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
 
   // Restore the admin identity BEFORE the profile write so the RPC runs with
   // admin privileges (and the stored session stays the admin's).
-  if (adminSession) {
-    const { error: restoreError } = await supabase.auth.setSession(adminSession);
-    if (restoreError) {
-      console.warn('[createUser] could not restore admin session:', restoreError.message);
-      throw new Error(`Failed to restore admin session: ${restoreError.message}`);
-    }
+  const { error: restoreError } = await supabase.auth.setSession(adminSession);
+  if (restoreError) {
+    console.warn('[createUser] could not restore admin session:', restoreError.message);
+    throw new Error(`Failed to restore admin session: ${restoreError.message}`);
   }
 
   // profiles is SELECT-only under RLS (20260708_profiles_auth_session_rls) —
   // a direct supabase.from('profiles').insert() is denied for every role
   // (this is the office-role save bug). Profile creation goes through the
   // admin-only SECURITY DEFINER RPC instead.
-  const { error: rpcError } = await supabase.rpc('create_user_profile', {
+  //
+  // The RPC must run as the ADMIN, but signUp() swapped the shared client's
+  // session to the new user and setSession() restore is not reliable in this
+  // supabase-js version (silent no-op paths in auth-js _setSession). So the
+  // RPC is issued on a client pinned to the admin's (verified) access token
+  // — its Authorization header carries the admin's JWT no matter what the
+  // shared client's session is.
+  const args = {
     p_id: id,
     p_name: rest.name,
     p_email: rest.email,
@@ -116,7 +131,8 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
     p_paymentnumber: rest.paymentnumber ?? null,
     p_assigned_classes: rest.assignedClasses ?? [],
     p_assigned_subjects: rest.assignedSubjects ?? [],
-  });
+  };
+  const { error: rpcError } = await createAuthedClient(adminSession.access_token).rpc('create_user_profile', args);
   if (rpcError) throw new Error(rpcError.message || 'Failed to create user profile');
 
   return { id, ...rest, createdAt: new Date().toISOString() } as User;

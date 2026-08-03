@@ -42,9 +42,10 @@ export function ManageUsers() {
   const [formSubjects, setFormSubjects] = useState<string[]>([]);
   const [formPassword, setFormPassword] = useState('');
 
-  const refresh = async (page: number = currentPage, searchTerm?: string) => {
+  const refresh = async (page: number = currentPage, searchTerm?: string, role?: string) => {
+    const resolvedRole = role ?? (roleFilter === 'all' ? undefined : roleFilter);
     const [usersData, studentsData] = await Promise.all([
-      getUsersPaginated(page, USERS_PER_PAGE, searchTerm || search),
+      getUsersPaginated(page, USERS_PER_PAGE, searchTerm ?? (debouncedSearch || undefined), resolvedRole),
       getStudents()
     ]);
     setUsers(usersData.users);
@@ -56,6 +57,11 @@ export function ManageUsers() {
     refresh();
   }, [currentPage]);
 
+  useEffect(() => {
+    setCurrentPage(1);
+    refresh(1, debouncedSearch, roleFilter === 'all' ? undefined : roleFilter);
+  }, [roleFilter]);
+
   // Debounce the search input
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search.trim()), 350);
@@ -64,7 +70,7 @@ export function ManageUsers() {
 
   useEffect(() => {
     setCurrentPage(1);
-    refresh(1, debouncedSearch);
+    refresh(1, debouncedSearch, roleFilter === 'all' ? undefined : roleFilter);
   }, [debouncedSearch]);
 
   const handlePageChange = (page: number) => {
@@ -72,8 +78,6 @@ export function ManageUsers() {
   };
 
   const getChildren = (parentId: string) => students.filter(s => s.parentId === parentId);
-
-  const filtered = users.filter(u => roleFilter === 'all' || u.role === roleFilter);
 
   const columns: ColumnDef<User>[] = [
     {
@@ -293,6 +297,7 @@ export function ManageUsers() {
     { label: 'Parents', value: 'parent', color: 'bg-violet-100 text-violet-700' },
     { label: 'Admins', value: 'admin', color: 'bg-indigo-100 text-indigo-700' },
     { label: 'Supervisors', value: 'supervisor', color: 'bg-amber-100 text-amber-700' },
+    { label: 'Office', value: 'office', color: 'bg-sky-100 text-sky-700' },
   ];
 
   return (
@@ -338,21 +343,14 @@ export function ManageUsers() {
 
       {/* Users Table */}
       <DataTable
-        data={filtered}
+        data={users}
         columns={columns}
         searchPlaceholder="Search users..."
         searchValue={search}
         onSearchChange={setSearch}
       />
 
-      {filtered.length === 0 && (
-        <div className="text-center py-12 text-slate-400">
-          <UsersIcon className="w-12 h-12 mx-auto mb-3 opacity-50" />
-          <p className="font-medium">No users found</p>
-        </div>
-      )}
-
-      {filtered.length === 0 && (
+      {users.length === 0 && (
         <div className="text-center py-12 text-slate-400">
           <UsersIcon className="w-12 h-12 mx-auto mb-3 opacity-50" />
           <p className="font-medium">No users found</p>
@@ -517,6 +515,7 @@ export function ManageUsers() {
                   </Listbox.Options>
                 </div>
               </Listbox>
+              {showEdit?.role === 'teacher' && (
                 <div className="mt-3">
                   <label className="text-sm font-semibold text-slate-700 mb-2 block">Assigned Subjects</label>
                   <Listbox value={formSubjects} onChange={setFormSubjects} multiple>
@@ -542,6 +541,7 @@ export function ManageUsers() {
                     </div>
                   </Listbox>
                 </div>
+              )}
             </div>
           )}
 

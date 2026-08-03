@@ -6,42 +6,86 @@
 // are implemented inline.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { PDFDownloadLink } from '@react-pdf/renderer';
+import { pdf } from '@react-pdf/renderer';
 import { HelpCircle, ChevronDown, Download, Upload } from 'lucide-react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
 import { canGenerateFamilyIds } from '../../lib/routing';
 import { getStudents } from '../../lib/db/students';
 import {
-  applyTransportImport, assignFamilyOverride, findUnattached,
-  generateFamilyIds, groupStudentsByFamily, setStudentTransport,
+  applyTransportImport, assignFamilyOverride, findLeftStudents, findUnattached,
+  generateFamilyIds, getParentNames, groupStudentsByFamily, markStudentLeft, setStudentTransport,
   type GenerateSummary,
 } from '../../lib/db/familyIds';
 import {
-  parseTransportImport, matchImportRows, summarizeImport,
+  parseTransportImport, matchImportRows, summarizeImport, bucketOf,
+  type ImportBucket,
   type TransportImportResult, type TransportImportRow,
 } from '../../lib/import/transportImport';
 import { TRANSPORT_EXAMPLE_CSV, downloadExampleWorkbook } from '../../lib/import/transportTemplate';
 import { displayFamilyId, transportLabel } from '../../lib/transport';
-import { buildFamilyCardData, FamilyCardsDocument, type CardLayout } from '../../lib/print/familyCards';
+import { buildFamilyCardData, FamilyCardsDocument, type CardLayout, type FamilyCardData } from '../../lib/print/familyCards';
 import { cn } from '../../utils/cn';
 import type { Student } from '../../types';
 
 const TRANSPORT_OPTIONS = ['WALKER', 'CAR'] as const;
+
+const BUCKET_LABELS: Array<[ImportBucket, string]> = [
+  ['nb', 'Walkers (NB / 0)'],
+  ['empty', 'Empty bus cell'],
+  ['bus', 'Bus riders'],
+  ['other', 'Other / flagged'],
+];
+
+const ALL_BUCKETS = new Set<ImportBucket>(BUCKET_LABELS.map(([b]) => b));
+
+/** Mock families for the sample preview — shows the card design before any real IDs exist. */
+const SAMPLE_FAMILIES: FamilyCardData[] = [
+  {
+    familyId: '0042',
+    parentName: 'Xasan Maxamed Cabdi',
+    parentPhone: '+252 61 2345678',
+    students: [
+      { id: 's-0042-1', name: 'Xalimo Xasan Maxamed', className: 'G7A', parentId: 'p-0042', createdAt: '', transport: '9', parentPhone: '+252 61 2345678', familyId: '0042' },
+      { id: 's-0042-2', name: 'Ahmed Xasan Maxamed', className: 'F3B', parentId: 'p-0042', createdAt: '', transport: '9', parentPhone: '+252 61 2345678', familyId: '0042' },
+    ],
+  },
+  {
+    familyId: '0017',
+    parentName: 'Cabdiraxmaan Cali Yuusuf',
+    parentPhone: '+252 68 1122334',
+    students: [
+      { id: 's-0017-1', name: 'Hodan Cabdiraxmaan Cali', className: 'G5A', parentId: 'p-0017', createdAt: '', transport: 'WALKER', parentPhone: '+252 68 1122334', familyId: '0017' },
+    ],
+  },
+  {
+    familyId: '0103',
+    parentName: 'Cali Nuur Cumar',
+    parentPhone: '+252 63 9988776',
+    students: [
+      { id: 's-0103-1', name: 'Yasmin Cali Nuur', className: 'G9C', parentId: 'p-0103', createdAt: '', transport: 'CAR', parentPhone: '+252 63 9988776', familyId: '0103' },
+      { id: 's-0103-2', name: 'Fartuun Cali Nuur', className: 'F1A', parentId: 'p-0103', createdAt: '', transport: 'CAR', parentPhone: '+252 63 9988776', familyId: '0103' },
+    ],
+  },
+];
 
 export function FamilyIds() {
   const { addToast } = useToast();
   const { session } = useRole();
   const canWrite = !!session && canGenerateFamilyIds(session.role);
   const [students, setStudents] = useState<Student[]>([]);
+  const [parentNames, setParentNames] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [importText, setImportText] = useState('');
   const [importedRows, setImportedRows] = useState<TransportImportRow[]>([]);
+  const [applyBuckets, setApplyBuckets] = useState<Set<ImportBucket>>(new Set(ALL_BUCKETS));
   const [applying, setApplying] = useState(false);
   const [generating, setGenerating] = useState(false);
+  const [genFilter, setGenFilter] = useState('all');
   const [generateResult, setGenerateResult] = useState<GenerateSummary | null>(null);
   const [layout, setLayout] = useState<CardLayout>('pocket');
   const [withLookup, setWithLookup] = useState(true);
+  const [printFilter, setPrintFilter] = useState('all');
   const [helpOpen, setHelpOpen] = useState(true);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -49,7 +93,16 @@ export function FamilyIds() {
   const reload = useCallback(async () => {
     setLoading(true);
     try {
-      setStudents(await getStudents());
+      const loaded = await getStudents();
+      setStudents(loaded);
+      const parentIds = loaded.map(s => s.parentId).filter((p): p is string => !!p);
+      if (parentIds.length > 0) {
+        try {
+          setParentNames(await getParentNames(parentIds));
+        } catch (err) {
+          console.error('[family-ids] parent names fetch failed', err);
+        }
+      }
     } catch (err) {
       addToast({ type: 'error', title: 'Failed to load students', description: err instanceof Error ? err.message : undefined });
     } finally {
@@ -61,12 +114,57 @@ export function FamilyIds() {
 
   const groups = useMemo(() => groupStudentsByFamily(students), [students]);
   const unattached = useMemo(() => findUnattached(students), [students]);
+  const leftStudents = useMemo(() => findLeftStudents(students), [students]);
   const families = useMemo(() => Array.from(groups.entries()), [groups]);
+  /** Print-batch filter: families whose (first) student matches the transport bucket. */
+  const filteredFamilies = useMemo(() => {
+    if (printFilter === 'all') return families;
+    const match = (t: string | null | undefined) => {
+      if (printFilter === 'bus') return /^\d+$/.test(t ?? '');
+      if (printFilter === 'walker') return t === 'WALKER' || t === 'CAR';
+      if (printFilter === 'empty') return !t || t === '';
+      return true;
+    };
+    return families.filter(([, students]) => match(students[0]?.transport));
+  }, [families, printFilter]);
   const importSummary = useMemo(() => (importedRows.length ? summarizeImport(importedRows) : null), [importedRows]);
+  /** Matched-row count per bucket, for the Apply-only chips. */
+  const bucketCounts = useMemo(() => {
+    const counts: Record<ImportBucket, number> = { nb: 0, empty: 0, bus: 0, other: 0 };
+    for (const row of importedRows) {
+      if (row.match === 'matched') counts[bucketOf(row.busRaw)] += 1;
+    }
+    return counts;
+  }, [importedRows]);
+
+  /** Unassigned students per transport bucket, for the generate-filter dropdown counts. */
+  const genCounts = useMemo(() => {
+    const candidates = students.filter(s => !s.familyId && s.transport !== 'LEFT');
+    return {
+      all: candidates.length,
+      bus: candidates.filter(s => /^\d+$/.test(s.transport ?? '')).length,
+      walker: candidates.filter(s => s.transport === 'WALKER' || s.transport === 'CAR').length,
+      empty: candidates.filter(s => !s.transport || s.transport === '').length,
+    };
+  }, [students]);
+
+  const toggleBucket = (bucket: ImportBucket) => {
+    setApplyBuckets(prev => {
+      const next = new Set(prev);
+      if (next.has(bucket)) next.delete(bucket); else next.add(bucket);
+      return next;
+    });
+  };
 
   /** Shared by paste and file upload: match rows, store them, surface the summary. */
   const processImportResult = useCallback((result: TransportImportResult) => {
+    console.log('[family-ids] parse result', {
+      headers: result.headers,
+      mappedHeaders: result.mappedHeaders,
+      issues: result.issues.map(i => ({ code: i.code, row: i.row })),
+    });
     const rows = matchImportRows(result.rows, students);
+    console.log('[family-ids] match result', rows.slice(0, 20).map(r => ({ name: r.name, match: r.match, studentId: r.studentId, classMismatch: r.classMismatch })));
     setImportedRows(rows);
     const fatal = result.issues.find(i => i.severity === 'error');
     if (fatal) {
@@ -86,17 +184,20 @@ export function FamilyIds() {
       addToast({ type: 'error', title: 'Paste the sheet export first' });
       return;
     }
+    console.log('[family-ids] parse clicked', { chars: importText.length, preview: importText.slice(0, 300) });
     processImportResult(parseTransportImport(importText));
   };
 
   const handleFile = async (file: File) => {
     try {
+      console.log('[family-ids] file selected', { name: file.name, size: file.size, type: file.type });
       // .csv/.txt come through as text; Excel files as binary — the parser
       // accepts both (XLSX.read type 'string' vs 'array').
       const input = /\.(csv|txt)$/i.test(file.name) ? await file.text() : await file.arrayBuffer();
       setImportText('');
       processImportResult(parseTransportImport(input));
     } catch (err) {
+      console.error('[family-ids] file read failed', err);
       addToast({ type: 'error', title: 'Could not read file', description: err instanceof Error ? err.message : undefined });
     }
   };
@@ -114,7 +215,9 @@ export function FamilyIds() {
   const handleApply = async () => {
     setApplying(true);
     try {
-      const { applied, skipped, errors } = await applyTransportImport(importedRows);
+      console.log('[family-ids] apply clicked', { rows: importedRows.length, buckets: Array.from(applyBuckets) });
+      const { applied, skipped, errors } = await applyTransportImport(importedRows, applyBuckets);
+      console.log('[family-ids] apply returned', { applied, skipped, errors });
       if (errors.length > 0) {
         // Surface the real per-row failures instead of a silent "0 applied".
         const sample = errors.slice(0, 3).join(' · ');
@@ -139,7 +242,7 @@ export function FamilyIds() {
   const handleGenerate = async () => {
     setGenerating(true);
     try {
-      const result = await generateFamilyIds();
+      const result = await generateFamilyIds(genFilter);
       setGenerateResult(result);
       addToast({
         type: 'success',
@@ -172,6 +275,20 @@ export function FamilyIds() {
       await reload();
     } catch (err) {
       addToast({ type: 'error', title: 'Assign failed', description: err instanceof Error ? err.message : undefined });
+    }
+  };
+
+  const handleMarkLeft = async (student: Student, left: boolean) => {
+    try {
+      await markStudentLeft(student.id, left);
+      addToast({
+        type: 'success',
+        title: left ? `Marked ${student.name} as left` : `Restored ${student.name}`,
+        description: left ? 'Removed from families and gate cards.' : 'They can be assigned a family ID again.',
+      });
+      await reload();
+    } catch (err) {
+      addToast({ type: 'error', title: left ? 'Mark failed' : 'Restore failed', description: err instanceof Error ? err.message : undefined });
     }
   };
 
@@ -272,16 +389,29 @@ export function FamilyIds() {
       <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-base font-semibold text-slate-900">1 · Generate family IDs</h2>
         <p className="mb-3 text-sm text-slate-500">
-          Idempotent: re-running never reassigns existing IDs. Students without a parent link or phone stay unattached.
+          Idempotent: re-running never reassigns existing IDs. Pick a transport group to generate only those students, or "All" for everything.
         </p>
-        <button
-          onClick={handleGenerate}
-          disabled={!canWrite || generating}
-          title={canWrite ? undefined : 'Generate is admin-only'}
-          className="rounded-xl bg-emerald-800 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-50"
-        >
-          {generating ? 'Generating… / Dhali…' : '⚙ Generate / Dhali lambarrada'}
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <select
+            value={genFilter}
+            onChange={e => setGenFilter(e.target.value)}
+            disabled={!canWrite || generating}
+            className="rounded-xl border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-800 disabled:opacity-50"
+          >
+            <option value="all">All students ({genCounts.all})</option>
+            <option value="bus">Bus riders ({genCounts.bus})</option>
+            <option value="walker">Walking ({genCounts.walker})</option>
+            <option value="empty">Empty transport ({genCounts.empty})</option>
+          </select>
+          <button
+            onClick={handleGenerate}
+            disabled={!canWrite || generating || genCounts[genFilter as keyof typeof genCounts] === 0}
+            title={canWrite ? undefined : 'Generate is admin-only'}
+            className="rounded-xl bg-emerald-800 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {generating ? 'Generating… / Dhali…' : `⚙ Generate / Dhali lambarrada`}
+          </button>
+        </div>
         {!canWrite && (
           <p className="mt-2 text-xs font-medium text-slate-500">Office/supervisor view is read-only — Generate is admin-only.</p>
         )}
@@ -339,6 +469,33 @@ export function FamilyIds() {
           rows={6}
           className="mb-3 w-full rounded-xl border border-slate-300 p-3 font-mono text-xs"
         />
+        {importedRows.length > 0 && canWrite && (
+          <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+            <span className="font-semibold text-slate-600">Apply only:</span>
+            {BUCKET_LABELS.map(([bucket, label]) => {
+              const count = bucketCounts[bucket];
+              const on = applyBuckets.has(bucket);
+              return (
+                <label
+                  key={bucket}
+                  className={cn(
+                    'flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1 font-medium transition',
+                    on ? 'border-emerald-500 bg-emerald-50 text-emerald-800' : 'border-slate-300 bg-white text-slate-500'
+                  )}
+                >
+                  <input
+                    type="checkbox"
+                    checked={on}
+                    disabled={count === 0}
+                    onChange={() => toggleBucket(bucket)}
+                    className="h-3.5 w-3.5 accent-emerald-700"
+                  />
+                  {label} <span className={cn('rounded-full px-1.5', on ? 'bg-emerald-200' : 'bg-slate-200')}>{count}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
         <div className="flex flex-wrap gap-2">
           <button onClick={handleParse} className="rounded-xl bg-slate-800 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-900">
             Parse & match
@@ -456,17 +613,53 @@ export function FamilyIds() {
       {/* Unattached bucket */}
       <section className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-5">
         <h2 className="mb-1 text-base font-semibold text-amber-900">Unattached — no parent link, no phone</h2>
-        <p className="mb-3 text-sm text-amber-700">These students can't be grouped automatically. Assign a family ID manually (existing or new).</p>
+        <p className="mb-3 text-sm text-amber-700">These students can't be grouped automatically. Assign a family ID manually (existing or new), or mark as left if they've left the school.</p>
         {unattached.length === 0 ? (
           <p className="text-sm text-emerald-700">No unattached students 🎉</p>
         ) : (
           <ul className="divide-y divide-amber-200">
             {unattached.map(s => (
-              <li key={s.id} className="flex items-center justify-between py-2 text-sm">
+              <li key={s.id} className="flex items-center justify-between gap-3 py-2 text-sm">
                 <span>{s.name} <span className="text-amber-700/70">· {s.className}</span></span>
+                <span className="flex shrink-0 gap-2">
+                  {canWrite && (
+                    <button
+                      onClick={() => handleMarkLeft(s, true)}
+                      className="rounded-lg border border-rose-300 bg-white px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-50"
+                      title="They left the school — removes from families and gate cards"
+                    >
+                      Mark as left
+                    </button>
+                  )}
+                  {canWrite && (
+                    <button onClick={() => handleOverride(s.id)} className="rounded-lg border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100">
+                      Assign →
+                    </button>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </section>
+
+      {/* Marked as left */}
+      <section className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 p-5">
+        <h2 className="mb-1 text-base font-semibold text-rose-900">Marked as left — {leftStudents.length}</h2>
+        <p className="mb-3 text-sm text-rose-700">No family ID, no gate card. Restore if they come back.</p>
+        {leftStudents.length === 0 ? (
+          <p className="text-sm text-slate-500">No students marked as left.</p>
+        ) : (
+          <ul className="divide-y divide-rose-200">
+            {leftStudents.map(s => (
+              <li key={s.id} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <span>{s.name} <span className="text-rose-700/70">· {s.className}</span></span>
                 {canWrite && (
-                  <button onClick={() => handleOverride(s.id)} className="rounded-lg border border-amber-300 bg-white px-3 py-1 text-xs font-semibold text-amber-800 hover:bg-amber-100">
-                    Assign →
+                  <button
+                    onClick={() => handleMarkLeft(s, false)}
+                    className="shrink-0 rounded-lg border border-rose-300 bg-white px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
+                  >
+                    Restore
                   </button>
                 )}
               </li>
@@ -478,7 +671,23 @@ export function FamilyIds() {
       {/* Print */}
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-base font-semibold text-slate-900">4 · Print cards</h2>
-        <p className="mb-3 text-sm text-slate-500">Office prints: pocket (85×54), lanyard for walkers (60×90), windshield placard for car line (A5 landscape).</p>
+        <p className="mb-3 text-sm text-slate-500">Office prints: pocket &amp; lanyard (60×90 — fits the 65×95 pouch film), windshield placard for car line (A5 landscape). Pick a group to print only those, or "All". Each card prints FRONT + BACK for duplex lamination; back rows are mirrored for long-edge flip.</p>
+        <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
+          <label className="flex items-center gap-1.5 text-slate-700">
+            <span className="font-medium text-slate-600">Which students:</span>
+            <select
+              value={printFilter}
+              onChange={e => setPrintFilter(e.target.value)}
+              className="rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-sm font-medium text-slate-800"
+            >
+              <option value="all">All students ({families.length})</option>
+              <option value="bus">Bus riders</option>
+              <option value="walker">Walking (WALKER / CAR)</option>
+              <option value="empty">Empty transport</option>
+            </select>
+            <span className="text-xs text-slate-400">{filteredFamilies.length} of {families.length} families</span>
+          </label>
+        </div>
         <div className="mb-3 flex flex-wrap items-center gap-3 text-sm">
           <label className="flex items-center gap-1">
             <input type="radio" checked={layout === 'pocket'} onChange={() => setLayout('pocket')} /> Pocket
@@ -493,11 +702,13 @@ export function FamilyIds() {
             <input type="checkbox" checked={withLookup} onChange={e => setWithLookup(e.target.checked)} /> Include gate lookup list
           </label>
         </div>
-        {families.length === 0 ? (
-          <p className="text-sm text-slate-500">Generate IDs before printing.</p>
-        ) : (
-          <AsyncPrintLink families={families} layout={layout} withLookup={withLookup} />
+        {families.length === 0 && (
+          <p className="text-sm text-slate-500">Generate IDs before printing — or use the sample preview below to see the card design first.</p>
         )}
+        {filteredFamilies.length === 0 && families.length > 0 && (
+          <p className="text-sm text-slate-500">No families match this group.</p>
+        )}
+        <AsyncPrintLink families={filteredFamilies} layout={layout} withLookup={withLookup} parentNames={parentNames} />
       </section>
     </div>
   );
@@ -513,29 +724,161 @@ function StatCard({ label, value, tone }: { label: string; value: number; tone?:
 }
 
 /** Builds QR data URLs then renders the download link (loading → ready states). */
-function AsyncPrintLink({ families, layout, withLookup }: { families: [string, Student[]][]; layout: CardLayout; withLookup: boolean }) {
+function AsyncPrintLink({ families, layout, withLookup, parentNames }: { families: [string, Student[]][]; layout: CardLayout; withLookup: boolean; parentNames: Map<string, string> }) {
   const [data, setData] = useState<Awaited<ReturnType<typeof buildFamilyCardData>> | null>(null);
   const [error, setError] = useState(false);
+  const [preparing, setPreparing] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewIsSample, setPreviewIsSample] = useState(false);
+  const pdfBlobRef = useRef<Blob | null>(null);
+  const cancelledRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     setData(null);
     setError(false);
-    buildFamilyCardData(new Map(families))
+    pdfBlobRef.current = null;
+    buildFamilyCardData(new Map(families), parentNames)
       .then(d => { if (!cancelled) setData(d); })
       .catch(() => { if (!cancelled) setError(true); });
     return () => { cancelled = true; };
-  }, [families]);
+  }, [families, parentNames]);
 
-  if (error) return <p className="text-sm text-red-600">Could not build the PDF (QR generation failed). Try again.</p>;
-  if (!data) return <p className="text-sm text-slate-400">Preparing PDF…</p>;
+  useEffect(() => () => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+  }, [previewUrl]);
+
+  const buildPdf = async (fams: FamilyCardData[]) => {
+    const blob = await pdf(
+      <FamilyCardsDocument families={fams} layout={layout} includeLookupList={withLookup} />
+    ).toBlob();
+    return blob;
+  };
+
+  const openPreview = (blob: Blob, isSample: boolean) => {
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewIsSample(isSample);
+    setPreviewUrl(URL.createObjectURL(blob));
+    setPreviewOpen(true);
+  };
+
+  const handleSamplePreview = async () => {
+    if (previewing || preparing) return;
+    setPreviewing(true);
+    cancelledRef.current = false;
+    try {
+      const blob = await buildPdf(SAMPLE_FAMILIES);
+      if (cancelledRef.current) return;
+      openPreview(blob, true);
+    } catch {
+      if (!cancelledRef.current) setError(true);
+    } finally {
+      if (!cancelledRef.current) setPreviewing(false);
+    }
+  };
+
+  const handlePreview = async () => {
+    if (previewing || !data || families.length === 0) return;
+    setPreviewing(true);
+    cancelledRef.current = false;
+    try {
+      if (!pdfBlobRef.current) pdfBlobRef.current = await buildPdf(data);
+      if (cancelledRef.current) return;
+      openPreview(pdfBlobRef.current, false);
+    } catch {
+      if (!cancelledRef.current) setError(true);
+    } finally {
+      if (!cancelledRef.current) setPreviewing(false);
+    }
+  };
+
+  const handlePrepare = async () => {
+    if (preparing || !data || families.length === 0) return;
+    setPreparing(true);
+    cancelledRef.current = false;
+    try {
+      if (!pdfBlobRef.current) pdfBlobRef.current = await buildPdf(data);
+      if (cancelledRef.current) return; // stopped — discard the blob
+      const url = URL.createObjectURL(pdfBlobRef.current);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `mbk-family-cards-${layout}.pdf`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+    } catch {
+      if (!cancelledRef.current) setError(true);
+    } finally {
+      if (!cancelledRef.current) setPreparing(false);
+    }
+  };
+
+  const handleClosePreview = () => {
+    setPreviewOpen(false);
+    if (previewUrl) { URL.revokeObjectURL(previewUrl); setPreviewUrl(null); }
+  };
+
+  if (error) return <p className="text-sm text-red-600">Could not build the PDF. Try again.</p>;
+  if (families.length > 0 && !data) return <p className="text-sm text-slate-400">Preparing data…</p>;
+  const hasReal = families.length > 0 && !!data;
+
   return (
-    <PDFDownloadLink
-      document={<FamilyCardsDocument families={data} layout={layout} includeLookupList={withLookup} />}
-      fileName={`mbk-family-cards-${layout}.pdf`}
-      className="rounded-xl bg-emerald-800 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-900"
-    >
-      {({ loading }) => (loading ? 'Preparing…' : `⬇ Download ${layout} cards PDF`)}
-    </PDFDownloadLink>
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          onClick={handleSamplePreview}
+          disabled={previewing}
+          className="rounded-xl bg-indigo-700 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {previewing ? 'Preparing sample…' : '👁 Sample — front & back'}
+        </button>
+        {hasReal && (
+          <>
+            <button
+              onClick={handlePreview}
+              disabled={previewing}
+              className="rounded-xl bg-slate-700 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {previewing ? 'Preparing preview…' : '👁 Preview'}
+            </button>
+            <button
+              onClick={handlePrepare}
+              disabled={preparing}
+              className="rounded-xl bg-emerald-800 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {preparing ? 'Preparing…' : `⬇ Download ${layout} cards PDF`}
+            </button>
+          </>
+        )}
+      </div>
+      {previewOpen && previewUrl && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={handleClosePreview}>
+          <div className="flex h-full w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3">
+              <div className="flex items-center gap-3">
+                <h3 className="text-sm font-semibold text-slate-800">
+                  {previewIsSample ? 'Sample — mock data' : 'Preview'} · {layout} cards · front + back
+                </h3>
+                <a
+                  href={previewUrl}
+                  download={`mbk-family-cards-${layout}.pdf`}
+                  className="rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-900"
+                >
+                  ⬇ Download
+                </a>
+              </div>
+              <button
+                onClick={handleClosePreview}
+                className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100"
+              >
+                Close
+              </button>
+            </div>
+            <iframe title="Family cards preview" src={previewUrl} className="w-full flex-1" />
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

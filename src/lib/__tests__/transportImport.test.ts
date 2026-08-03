@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { matchImportRows, parseTransportImport, summarizeImport } from '../import/transportImport';
+import { bucketOf, matchImportRows, parseTransportImport, summarizeImport } from '../import/transportImport';
 import type { Student } from '../../types';
 
 // Realistic header row from the MBK Google Sheet export.
@@ -131,5 +131,32 @@ describe('matchImportRows', () => {
     expect(summary.matched).toBe(1);
     expect(summary.ambiguous).toBe(1);
     expect(summary.unmatched).toBe(1);
+  });
+});
+
+describe('bucketOf', () => {
+  it('classifies NB markers, empty, digits, and unknown', () => {
+    expect(bucketOf('NB')).toBe('nb');
+    expect(bucketOf('n/b')).toBe('nb');
+    expect(bucketOf('0')).toBe('nb');
+    expect(bucketOf('-')).toBe('nb');
+    expect(bucketOf('')).toBe('empty');
+    expect(bucketOf('  ')).toBe('empty');
+    expect(bucketOf('9')).toBe('bus');
+    expect(bucketOf('19')).toBe('bus');
+    expect(bucketOf('?')).toBe('other');
+    expect(bucketOf('Bike')).toBe('other');
+  });
+});
+
+describe('busRaw tracking', () => {
+  it('preserves the raw Bus cell value for bucket filtering', () => {
+    const result = parseTransportImport(csv([
+      ['1', '', 'NB', 'G2A', 'X Student', '', ''],
+      ['2', '', 'LEFT', 'G2A', 'Y Student', '', ''],
+      ['3', '', '', 'G2A', 'Z Student', '', ''],
+      ['4', '', '9', 'G2A', 'W Student', '', ''],
+    ]));
+    expect(result.rows.map(r => r.busRaw)).toEqual(['NB', 'LEFT', '', '9']);
   });
 });
