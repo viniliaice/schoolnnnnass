@@ -124,7 +124,15 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
       scannerRef.current = scanner;
       await scanner.start(
         { facingMode: 'environment' },
-        { fps: 10, qrbox: { width: 220, height: 220 } },
+        {
+          fps: 10,
+          // Use the function form so the scan region is always a square,
+          // regardless of the video's native aspect ratio.
+          qrbox: (videoWidth: number, videoHeight: number) => {
+            const side = Math.min(videoWidth, videoHeight, 280);
+            return { width: side, height: side };
+          },
+        },
         decoded => { void onScan(decoded); },
         () => { /* per-frame errors are noisy — ignore */ },
       );
@@ -215,7 +223,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
         {/* 2 · Input: keypad OR camera */}
         {/* Scanner element is ALWAYS in the DOM (hidden when off) so
             Html5Qrcode.start() can find it without racing React's render. */}
-        <div id="gate-scanner" className={camera === 'off' ? 'hidden' : 'mb-4 aspect-square w-full overflow-hidden rounded-2xl bg-black'} />
+        <div id="gate-scanner" className={camera === 'off' ? 'hidden' : 'mb-4 w-full overflow-hidden rounded-2xl bg-black'} style={{ aspectRatio: '1 / 1' }} />
         {camera === 'off' ? (
           <div className="mb-4">
             <div className="grid grid-cols-3 gap-3">
