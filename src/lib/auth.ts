@@ -30,8 +30,16 @@ export async function getProfileByAuthId(authId: string): Promise<ProfileSession
 }
 
 export function buildRoleSession(profile: ProfileSessionRow): RoleSession {
+  // Normalize a stored role that may carry casing/whitespace drift (e.g. a
+  // manually-inserted profile row with 'Office' or 'office '). Falls back to
+  // 'office' for any unrecognized value so the app renders instead of hitting
+  // an unknown-role branch.
+  const raw = String(profile.role ?? '').toLowerCase().trim();
+  const role: Role = (['admin', 'teacher', 'parent', 'supervisor', 'office'] as const).includes(raw as Role)
+    ? (raw as Role)
+    : 'office';
   return {
-    role: profile.role,
+    role,
     userId: profile.id, // profile id (your app uses this)
     userName: profile.name,
   };

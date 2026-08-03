@@ -122,8 +122,15 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
 
   if (!session) return null;
 
-  const items = navItems[session.role];
-  const gradientClass = roleColors[session.role];
+  // A profile row with an unexpected role value (NULL, casing/whitespace
+  // drift, a role added before the office migration) would make
+  // navItems[session.role] undefined and crash items.map below. Fall back
+  // to a safe empty list so the app renders instead of white-screening.
+  const items = navItems[session.role] ?? [];
+  const gradientClass = roleColors[session.role] ?? roleColors.admin;
+  if (items.length === 0) {
+    console.warn('[Sidebar] unknown role in session — nav hidden:', session.role);
+  }
 
   const sidebarContent = (
     <div className={cn("theme-sidebar flex flex-col h-full bg-linear-to-b", gradientClass)}>
