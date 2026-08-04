@@ -10,6 +10,7 @@ import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
 import { AiReviewPanel, minutesSince } from '../../components/lesson-planner/AiReviewPanel';
 import { LessonPlanPdfDocument } from '../shared/LessonPlanPdfDocument';
+import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
 import { describePlanWeek } from '../../utils/weekDates';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
 
@@ -52,12 +53,13 @@ export function LessonPlanReview() {
   const retryMut = useRetryAIReview();
   const revisionMut = useRequestRevision();
   const [yearStart, setYearStart] = useState<string | null>(null);
+  const plan = planWithPeriods?.plan;
+  const { data: unitPlans = [] } = useUnitPlansByClass(plan?.class_name ?? null);
 
   useEffect(() => {
     getCurrentAcademicYear().then((ay) => setYearStart(ay?.startDate ?? null));
   }, []);
 
-  const plan = planWithPeriods?.plan;
   const readPeriods = useMemo(
     () => toReadPeriods(planWithPeriods?.periods ?? []),
     [planWithPeriods?.periods]
@@ -211,7 +213,7 @@ export function LessonPlanReview() {
                       {plan.status === 'ai_failed' ? 'AI failed' : plan.status.replace('_', ' ')}
                     </span>
                     <PDFDownloadLink
-                      document={<LessonPlanPdfDocument plan={plan} periods={planWithPeriods.periods} review={review} />}
+                      document={<LessonPlanPdfDocument plan={plan} periods={planWithPeriods.periods} review={review} unitPlans={unitPlans} />}
                       fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
                       className="no-print flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 sm:w-auto"
                     >
@@ -230,6 +232,8 @@ export function LessonPlanReview() {
                 periods={readPeriods}
                 periodCount={plan.period_count}
                 planClassName={plan.class_name}
+                unitPlans={unitPlans}
+                showAiReview
                 collapsible
                 defaultCollapsed
               />

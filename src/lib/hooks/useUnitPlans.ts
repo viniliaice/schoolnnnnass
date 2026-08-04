@@ -27,6 +27,8 @@ export function useUnitPlansByClass(className: string | null) {
       return unitPlansDb.fetchUnitPlansByClass(className);
     },
     enabled: !!className,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 15,
   });
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { PDFDownloadLink } from '@react-pdf/renderer';
 import { useRole } from '../../context/RoleContext';
 import { useTeacherPlans, usePlanWithPeriods } from '../../lib/hooks/useLessonPlans';
+import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
 import { LessonPlanPeriod, PlanStatus, Subject, DAYS_OF_WEEK, isPlanEditable } from '../../types';
 import {
   FileText, CheckCircle, Clock, AlertTriangle, XCircle, Download,
@@ -214,6 +215,7 @@ function PlanDetail({
   onEditPlan?: (planId: string) => void;
 }) {
   const { data, isLoading } = usePlanWithPeriods(planId);
+  const { data: unitPlans = [] } = useUnitPlansByClass(data?.plan.class_name ?? null);
 
   if (isLoading || !data) {
     return (
@@ -249,7 +251,7 @@ function PlanDetail({
             </button>
           )}
           <PDFDownloadLink
-            document={<LessonPlanPdfDocument plan={plan} periods={periods} />}
+            document={<LessonPlanPdfDocument plan={plan} periods={periods} unitPlans={unitPlans} />}
             fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
             className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
           >
