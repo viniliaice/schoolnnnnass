@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import {
   useSupervisorPlans, usePlanWithPeriods, useReview,
   useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout,
@@ -13,6 +14,7 @@ import { LessonPlanPdfDocument } from '../shared/LessonPlanPdfDocument';
 import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
 import { describePlanWeek } from '../../utils/weekDates';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
+import { getSubjects } from '../../lib/db/subjects';
 
 function toReadPeriods(periods: LessonPlanPeriod[]): ReadPeriod[] {
   return periods.map((p) => ({
@@ -55,6 +57,11 @@ export function LessonPlanReview() {
   const [yearStart, setYearStart] = useState<string | null>(null);
   const plan = planWithPeriods?.plan;
   const { data: unitPlans = [] } = useUnitPlansByClass(plan?.class_name ?? null);
+  const { data: subjects } = useQuery({
+    queryKey: ['subjects'],
+    queryFn: getSubjects,
+    staleTime: 1000 * 60 * 10,
+  });
 
   useEffect(() => {
     getCurrentAcademicYear().then((ay) => setYearStart(ay?.startDate ?? null));
@@ -213,7 +220,7 @@ export function LessonPlanReview() {
                       {plan.status === 'ai_failed' ? 'AI failed' : plan.status.replace('_', ' ')}
                     </span>
                     <ExportLessonPlanPdfButton
-                      document={<LessonPlanPdfDocument plan={plan} periods={planWithPeriods.periods} review={review} unitPlans={unitPlans} />}
+                      document={<LessonPlanPdfDocument plan={plan} periods={planWithPeriods.periods} review={review} unitPlans={unitPlans} subjects={subjects} />}
                       fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
                       className="no-print flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
                     />
@@ -225,6 +232,7 @@ export function LessonPlanReview() {
                 periods={readPeriods}
                 periodCount={plan.period_count}
                 planClassName={plan.class_name}
+                subjects={subjects}
                 unitPlans={unitPlans}
                 showAiReview
                 collapsible

@@ -251,7 +251,7 @@ function PlanDetail({
             </button>
           )}
           <ExportLessonPlanPdfButton
-            document={<LessonPlanPdfDocument plan={plan} periods={periods} unitPlans={unitPlans} />}
+            document={<LessonPlanPdfDocument plan={plan} periods={periods} unitPlans={unitPlans} subjects={subjects} />}
             fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
             className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
           />

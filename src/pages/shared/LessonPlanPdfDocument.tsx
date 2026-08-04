@@ -1,5 +1,5 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
-import { DAYS_OF_WEEK, LessonPlan, LessonPlanPeriod, AIReview, PeriodActivity, UnitPlan } from '../../types';
+import { DAYS_OF_WEEK, LessonPlan, LessonPlanPeriod, AIReview, PeriodActivity, UnitPlan, Subject } from '../../types';
 import { reviewPeriodInstruction, summarizeDay } from '../../lib/lessonPlanReview';
 
 const INK = '#0f172a';
@@ -147,6 +147,7 @@ interface LessonPlanPdfDocumentProps {
   periods: LessonPlanPeriod[];
   review?: AIReview | null;
   unitPlans?: UnitPlan[];
+  subjects?: Subject[];
 }
 
 function formatStatus(status: string): string {
@@ -164,6 +165,11 @@ function pdfAlignmentLabel(label: string): string {
   return label.replace(/[✅⚠️❌]/g, '').trim();
 }
 
+function subjectName(subjects: Subject[] | undefined, value: string | null | undefined): string {
+  if (!value) return 'Subject —';
+  return subjects?.find((subject) => subject.id === value)?.name || value;
+}
+
 function activityLines(period: LessonPlanPeriod): string[] {
   const details: PeriodActivity[] = period.details || [];
   if (details.length) {
@@ -172,7 +178,7 @@ function activityLines(period: LessonPlanPeriod): string[] {
   return period.activities ? [period.activities] : [];
 }
 
-function PeriodBlock({ period, unitPlans }: { period: LessonPlanPeriod; unitPlans: UnitPlan[] }) {
+function PeriodBlock({ period, unitPlans, subjects }: { period: LessonPlanPeriod; unitPlans: UnitPlan[]; subjects?: Subject[] }) {
   const isFree = !!period.is_free || period.subject === '__FREE__';
   const coach = reviewPeriodInstruction(period, unitPlans);
   const activities = activityLines(period);
@@ -187,8 +193,8 @@ function PeriodBlock({ period, unitPlans }: { period: LessonPlanPeriod; unitPlan
       {!isFree && (
         <>
           <View style={styles.tagRow}>
-            <Text style={styles.tag}>{period.subject || 'Subject —'}</Text>
-            <Text style={styles.tag}>{period.class_name || 'Class —'}</Text>
+            <Text style={styles.tag}>{subjectName(subjects, period.subject)}</Text>
+            <Text style={styles.tag}>Class {period.class_name || '—'}</Text>
             {period.slide_number && <Text style={styles.tag}>Page {period.slide_number}</Text>}
           </View>
           {period.objective && (
@@ -228,7 +234,7 @@ function PeriodBlock({ period, unitPlans }: { period: LessonPlanPeriod; unitPlan
   );
 }
 
-function DaySection({ day, periods, periodCount, unitPlans }: { day: string; periods: LessonPlanPeriod[]; periodCount: number; unitPlans: UnitPlan[] }) {
+function DaySection({ day, periods, periodCount, unitPlans, subjects }: { day: string; periods: LessonPlanPeriod[]; periodCount: number; unitPlans: UnitPlan[]; subjects?: Subject[] }) {
   const dayPeriods = Array.from({ length: periodCount }, (_, pi) =>
     periods.find((p) => p.day === day && p.period_number === pi + 1) ?? ({
       id: `${day}-${pi + 1}-missing`,
@@ -266,12 +272,12 @@ function DaySection({ day, periods, periodCount, unitPlans }: { day: string; per
           <View style={[styles.progressFill, { width: Math.max(1, Math.min(430, summary.percent * 4.3)) }]} />
         </View>
       </View>
-      {dayPeriods.map((period) => <PeriodBlock key={`${period.day}-${period.period_number}`} period={period} unitPlans={unitPlans} />)}
+      {dayPeriods.map((period) => <PeriodBlock key={`${period.day}-${period.period_number}`} period={period} unitPlans={unitPlans} subjects={subjects} />)}
     </View>
   );
 }
 
-export function LessonPlanPdfDocument({ plan, periods, review, unitPlans = [] }: LessonPlanPdfDocumentProps) {
+export function LessonPlanPdfDocument({ plan, periods, review, unitPlans = [], subjects }: LessonPlanPdfDocumentProps) {
   return (
     <Document title={`${plan.title} — ${plan.class_name} ${plan.week_label}`}>
       <Page size="A4" style={styles.page} wrap>
@@ -298,7 +304,7 @@ export function LessonPlanPdfDocument({ plan, periods, review, unitPlans = [] }:
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Weekly Lesson Plan</Text>
           {DAYS_OF_WEEK.map((day) => (
-            <DaySection key={day} day={day} periods={periods} periodCount={plan.period_count} unitPlans={unitPlans} />
+            <DaySection key={day} day={day} periods={periods} periodCount={plan.period_count} unitPlans={unitPlans} subjects={subjects} />
           ))}
         </View>
 
