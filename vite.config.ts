@@ -14,6 +14,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),
+      // Force browser code that imports Node's `buffer` builtin to use the
+      // npm polyfill instead of Vite's externalized browser stub.
+      buffer: "buffer/",
     },
+  },
+  optimizeDeps: {
+    include: ["buffer"],
   },
 });
