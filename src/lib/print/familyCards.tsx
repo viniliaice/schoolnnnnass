@@ -5,10 +5,9 @@
 // windshield/rearview mirror). Both card sizes fit the 65×95mm laminating
 // pouch film with a ~5mm sealing margin. Each card prints FRONT + BACK:
 //   - front  : branded hero (gradient + logo badge + title), kid rows with
-//              circular icon badges, family-ID + parent-phone rows, small
-//              corner QR for balance.
+//              circular icon badges, family-ID + parent-phone rows.
 //   - back   : large scanning QR (~60–70% of the shorter dimension), family
-//              ID, "Present at gate for scanning." caption, minimal footer.
+//              ID, "Present at gate for scanning." caption, bold school footer.
 //
 // Duplex alignment (grid layouts: pocket/lanyard): when a sheet is printed
 // double-sided and flipped on the LONG edge (the standard for portrait
@@ -110,7 +109,7 @@ const styles = StyleSheet.create({
   brandTitleLarge: { color: '#ffffff', fontSize: 14, fontWeight: 'bold', letterSpacing: 0.6 },
   brandSub: { color: 'rgba(255,255,255,0.85)', fontSize: 6, fontWeight: 'bold', letterSpacing: 1.5, marginTop: 0.5 * MM },
   brandSubLarge: { color: 'rgba(255,255,255,0.85)', fontSize: 9, fontWeight: 'bold', letterSpacing: 2, marginTop: 0.8 * MM },
-  heroQr: { marginLeft: 'auto' },
+  heroSpacer: { marginLeft: 'auto' },
 
   // circular logo badge — clip image to circle via overflow:hidden + radius
   logoBadge: { width: 9 * MM, height: 9 * MM, borderRadius: 4.5 * MM, overflow: 'hidden', borderWidth: 0.8, borderColor: '#ffffff' },
@@ -159,8 +158,8 @@ const styles = StyleSheet.create({
   backFooterLarge: { flexDirection: 'row', alignItems: 'center', gap: 2.5 * MM },
   backFooterLogo: { width: 5 * MM, height: 5 * MM },
   backFooterLogoLarge: { width: 8 * MM, height: 8 * MM },
-  backFooterName: { fontSize: 5.5, fontWeight: 'bold', color: MBK_BLUE_DARK, letterSpacing: 0.3 },
-  backFooterNameLarge: { fontSize: 8, fontWeight: 'bold', color: MBK_BLUE_DARK, letterSpacing: 0.3 },
+  backFooterName: { fontSize: 8, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', color: MBK_BLUE_DARK, letterSpacing: 0.4 },
+  backFooterNameLarge: { fontSize: 13, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', color: MBK_BLUE_DARK, letterSpacing: 0.5 },
 
   // ── Gate lookup list page (unchanged) ──────────────────────────────
   lookupTitle: { fontSize: 12, fontWeight: 'bold', marginBottom: 6, color: INK },
@@ -236,9 +235,6 @@ function CardFront({ layout, data }: { layout: CardLayout; data: FamilyCardData 
   const footText = large ? styles.footTextLarge : styles.footText;
   const badge = large ? styles.modeBadgeLarge : styles.modeBadge;
 
-  const smallQrPath = buildQrPath(data.familyId);
-  const smallQrSize = (large ? 16 : 12) * MM;
-
   return (
     <View style={cardStyle} wrap={false}>
       {/* Hero */}
@@ -251,11 +247,7 @@ function CardFront({ layout, data }: { layout: CardLayout; data: FamilyCardData 
           <Text style={titleStyle}>MBK International</Text>
           <Text style={subStyle}>FAMILY CARD</Text>
         </View>
-        <View style={styles.heroQr}>
-          <Svg width={smallQrSize} height={smallQrSize} viewBox={`0 0 ${smallQrPath.size} ${smallQrPath.size}`}>
-            <Path d={smallQrPath.d} fill="#ffffff" />
-          </Svg>
-        </View>
+        <View style={styles.heroSpacer} />
       </View>
 
       {/* Kids + family ID + parent phone */}
