@@ -67,7 +67,7 @@ const styles = StyleSheet.create({
   statusPill: {
     marginTop: 8,
     alignSelf: 'flex-start',
-    borderRadius: 999,
+    borderRadius: 20,
     paddingHorizontal: 10,
     paddingVertical: 4,
     backgroundColor: '#ffffff',
@@ -89,13 +89,13 @@ const styles = StyleSheet.create({
   dayTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   dayName: { fontSize: 15, fontWeight: 'bold', color: '#0f172a' },
   dayPercent: { fontSize: 11, fontWeight: 'bold', color: BLUE },
-  statRow: { flexDirection: 'row', gap: 6, marginBottom: 7 },
-  statPill: { borderRadius: 7, backgroundColor: '#ffffff', paddingHorizontal: 8, paddingVertical: 4, fontSize: 9, color: '#334155' },
-  progressTrack: { height: 5, borderRadius: 999, backgroundColor: '#e2e8f0' },
-  progressFill: { height: 5, borderRadius: 999, backgroundColor: BLUE },
+  statRow: { flexDirection: 'row', marginBottom: 7 },
+  statPill: { borderRadius: 7, backgroundColor: '#ffffff', paddingHorizontal: 8, paddingVertical: 4, marginRight: 6, fontSize: 9, color: '#334155' },
+  progressTrack: { height: 5, borderRadius: 20, backgroundColor: '#e2e8f0' },
+  progressFill: { height: 5, borderRadius: 20, backgroundColor: BLUE },
 
   periodCard: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#f1f5f9' },
-  periodTop: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+  periodTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 6 },
   periodBadge: {
     width: 26,
     height: 24,
@@ -107,9 +107,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     paddingTop: 6,
   },
-  periodTitle: { flex: 1, fontSize: 13, fontWeight: 'bold', color: INK },
-  tagRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 5, marginBottom: 6 },
-  tag: { borderRadius: 6, backgroundColor: '#f1f5f9', color: '#475569', paddingHorizontal: 7, paddingVertical: 3, fontSize: 8.5, fontWeight: 'bold' },
+  periodTitle: { flex: 1, fontSize: 13, fontWeight: 'bold', color: INK, marginLeft: 8 },
+  tagRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 6 },
+  tag: { borderRadius: 6, backgroundColor: '#f1f5f9', color: '#475569', paddingHorizontal: 7, paddingVertical: 3, marginRight: 5, marginBottom: 4, fontSize: 8.5, fontWeight: 'bold' },
   label: { fontSize: 9, fontWeight: 'bold', color: '#334155', marginTop: 4, marginBottom: 2 },
   body: { fontSize: 10, color: '#334155', lineHeight: 1.5 },
   activity: { fontSize: 9.5, color: '#475569', marginBottom: 2, lineHeight: 1.45 },
@@ -123,6 +123,7 @@ const styles = StyleSheet.create({
   coachTitle: { fontSize: 9.5, fontWeight: 'bold', color: '#1e293b', marginBottom: 3 },
   coachBody: { fontSize: 9.5, color: '#334155', lineHeight: 1.45 },
   coachReason: { fontSize: 8.5, color: MUTED, marginTop: 3 },
+  coachGap: { fontSize: 8.5, color: '#334155', marginTop: 5, padding: 6, borderRadius: 6, backgroundColor: '#ffffff' },
   suggestionBox: { marginTop: 7, borderRadius: 7, backgroundColor: '#ffffff', padding: 7 },
   suggestionTitle: { fontSize: 8.5, fontWeight: 'bold', color: '#334155', marginBottom: 3 },
   suggestionItem: { fontSize: 8.7, color: '#334155', lineHeight: 1.35, marginBottom: 2 },
@@ -130,8 +131,8 @@ const styles = StyleSheet.create({
   reviewSummary: { borderWidth: 1, borderColor: '#c7d2fe', backgroundColor: '#eef2ff', borderRadius: 12, padding: 12, marginBottom: 12 },
   reviewScore: { fontSize: 16, fontWeight: 'bold', color: '#3730a3', marginBottom: 4 },
   summary: { fontSize: 10.5, color: '#334155', lineHeight: 1.5 },
-  scoreGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 7 },
-  scoreItem: { width: '31.5%', backgroundColor: '#f8fafc', borderRadius: 9, borderWidth: 1, borderColor: '#e2e8f0', padding: 8, marginBottom: 7 },
+  scoreGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  scoreItem: { width: 160, backgroundColor: '#f8fafc', borderRadius: 9, borderWidth: 1, borderColor: '#e2e8f0', padding: 8, marginBottom: 7 },
   scoreLabel: { fontSize: 8.5, color: MUTED, marginBottom: 3, textTransform: 'capitalize' },
   scoreValue: { fontSize: 14, fontWeight: 'bold', color: INK },
   scoreExplanation: { fontSize: 8, color: '#475569', marginTop: 3, lineHeight: 1.35 },
@@ -177,7 +178,7 @@ function PeriodBlock({ period, unitPlans }: { period: LessonPlanPeriod; unitPlan
   const activities = activityLines(period);
 
   return (
-    <View style={styles.periodCard} wrap={false}>
+    <View style={styles.periodCard}>
       <View style={styles.periodTop}>
         <Text style={styles.periodBadge}>P{period.period_number}</Text>
         <Text style={styles.periodTitle}>{isFree ? 'Free period' : period.topic || 'No topic entered'}</Text>
@@ -211,6 +212,9 @@ function PeriodBlock({ period, unitPlans }: { period: LessonPlanPeriod; unitPlan
         <Text style={styles.coachTitle}>AI Review: {pdfAlignmentLabel(coach.alignmentLabel)}</Text>
         <Text style={styles.coachBody}>{coach.aiReview}</Text>
         <Text style={styles.coachReason}>{coach.alignmentReason}</Text>
+        {coach.alignmentStatus !== 'full' && coach.alignmentStatus !== 'unknown' && (
+          <Text style={styles.coachGap}>Alignment gap: {coach.alignmentGap}</Text>
+        )}
         {coach.suggestedActivities.length > 0 && (
           <View style={styles.suggestionBox}>
             <Text style={styles.suggestionTitle}>Suggested Activities</Text>
@@ -259,7 +263,7 @@ function DaySection({ day, periods, periodCount, unitPlans }: { day: string; per
           <Text style={styles.statPill}>{summary.total} total periods</Text>
         </View>
         <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: `${summary.percent}%` }]} />
+          <View style={[styles.progressFill, { width: Math.max(1, Math.min(430, summary.percent * 4.3)) }]} />
         </View>
       </View>
       {dayPeriods.map((period) => <PeriodBlock key={`${period.day}-${period.period_number}`} period={period} unitPlans={unitPlans} />)}

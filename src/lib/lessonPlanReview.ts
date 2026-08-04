@@ -6,6 +6,7 @@ export interface PeriodInstructionalReview {
   alignmentStatus: AlignmentStatus;
   alignmentLabel: string;
   alignmentReason: string;
+  alignmentGap: string;
   aiReview: string;
   suggestedActivities: string[];
   matchedUnit?: UnitPlan;
@@ -68,8 +69,8 @@ function gradeBand(className: string | null | undefined): 'early' | 'middle' | '
   return 'upper';
 }
 
-function subjectKind(subject: string | null | undefined): 'math' | 'english' | 'science' | 'social' | 'arabic' | 'general' {
-  const value = (subject ?? '').toLowerCase();
+function subjectKind(...values: Array<string | null | undefined>): 'math' | 'english' | 'science' | 'social' | 'arabic' | 'general' {
+  const value = values.filter(Boolean).join(' ').toLowerCase();
   if (/math|numeracy|algebra|geometry|addition|subtraction|multiplication|division/.test(value)) return 'math';
   if (/english|literacy|reading|writing|language|grammar/.test(value)) return 'english';
   if (/science|biology|chemistry|physics|environment/.test(value)) return 'science';
@@ -90,7 +91,7 @@ function buildSuggestedActivities(period: LessonPlanPeriod, matchedUnit?: UnitPl
   const unitName = matchedUnit?.name || 'the relevant Unit Plan';
   const band = gradeBand(period.class_name);
 
-  switch (subjectKind(period.subject)) {
+  switch (subjectKind(period.subject, period.topic, period.objective, matchedUnit?.name, matchedUnit?.objectives)) {
     case 'math':
       return band === 'early'
         ? [
@@ -171,6 +172,7 @@ export function reviewPeriodInstruction(period: LessonPlanPeriod, unitPlans: Uni
       alignmentStatus: 'unknown',
       alignmentLabel: 'Free Period',
       alignmentReason: 'No instructional alignment is needed for a free period.',
+      alignmentGap: 'None — free period.',
       aiReview: 'This is marked as a free period, so no instructional coaching review is required.',
       suggestedActivities: [],
     };
@@ -186,20 +188,23 @@ export function reviewPeriodInstruction(period: LessonPlanPeriod, unitPlans: Uni
   let alignmentStatus: AlignmentStatus = 'none';
   let alignmentLabel = '❌ Not Aligned';
   let alignmentReason = 'No matching Unit Plan was found for this subject, class/grade, and topic.';
+  let alignmentGap = 'Unit Plan match is missing, so the reviewer cannot verify the lesson topic/objective against the expected unit sequence.';
 
   if (matchedUnit && topicAligned && measurableObjective && supportedByActivities) {
     alignmentStatus = 'full';
     alignmentLabel = '✅ Fully Aligned';
     alignmentReason = `Matches "${matchedUnit.name}" and the objective, topic, and activities support the unit direction.`;
+    alignmentGap = 'No alignment gap found.';
   } else if (matchedUnit) {
     alignmentStatus = 'partial';
     alignmentLabel = '⚠️ Partially Aligned';
     const gaps = [
-      !topicAligned && 'topic link is not explicit',
-      !measurableObjective && 'objective needs a clearer measurable outcome',
-      !supportedByActivities && 'activities should connect more directly to the objective',
-    ].filter(Boolean).join('; ');
-    alignmentReason = `Matches "${matchedUnit.name}", but ${gaps || 'some lesson evidence is incomplete'}.`;
+      !topicAligned && 'the lesson topic is not clearly represented in the Unit Plan objectives',
+      !measurableObjective && 'the objective is not measurable enough to verify mastery',
+      !supportedByActivities && 'the activities do not directly practise or assess the stated objective',
+    ].filter(Boolean) as string[];
+    alignmentGap = gaps.join('; ') || 'some lesson evidence is incomplete.';
+    alignmentReason = `Matches "${matchedUnit.name}", but ${alignmentGap}.`;
   }
 
   const objectiveSentence = measurableObjective
@@ -216,6 +221,7 @@ export function reviewPeriodInstruction(period: LessonPlanPeriod, unitPlans: Uni
     alignmentStatus,
     alignmentLabel,
     alignmentReason,
+    alignmentGap,
     aiReview: `${objectiveSentence}, and ${activitySentence}. ${unitSentence}`,
     suggestedActivities: alignmentStatus === 'full' ? [] : buildSuggestedActivities(period, matchedUnit),
     matchedUnit,
