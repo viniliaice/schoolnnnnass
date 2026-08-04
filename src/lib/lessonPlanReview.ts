@@ -7,6 +7,7 @@ export interface PeriodInstructionalReview {
   alignmentLabel: string;
   alignmentReason: string;
   aiReview: string;
+  suggestedActivities: string[];
   matchedUnit?: UnitPlan;
 }
 
@@ -60,6 +61,81 @@ function activitiesSupportObjective(period: LessonPlanPeriod): boolean {
   return overlapCount(objectiveWords, activityWords) >= Math.min(2, objectiveWords.length);
 }
 
+function gradeBand(className: string | null | undefined): 'early' | 'middle' | 'upper' {
+  const n = Number((className ?? '').match(/\d+/)?.[0] ?? 0);
+  if (n > 0 && n <= 3) return 'early';
+  if (n > 0 && n <= 6) return 'middle';
+  return 'upper';
+}
+
+function subjectKind(subject: string | null | undefined): 'math' | 'english' | 'science' | 'social' | 'arabic' | 'general' {
+  const value = (subject ?? '').toLowerCase();
+  if (/math|numeracy|algebra|geometry|addition|subtraction|multiplication|division/.test(value)) return 'math';
+  if (/english|literacy|reading|writing|language|grammar/.test(value)) return 'english';
+  if (/science|biology|chemistry|physics|environment/.test(value)) return 'science';
+  if (/social|history|geography|civic|islamic|somali/.test(value)) return 'social';
+  if (/arabic|quran|qur/.test(value)) return 'arabic';
+  return 'general';
+}
+
+function activityNoun(period: LessonPlanPeriod): string {
+  const topic = period.topic?.trim();
+  const objective = period.objective?.trim();
+  return topic || objective || 'the lesson skill';
+}
+
+function buildSuggestedActivities(period: LessonPlanPeriod, matchedUnit?: UnitPlan): string[] {
+  const topic = activityNoun(period);
+  const objective = period.objective?.trim() || `understand ${topic}`;
+  const unitName = matchedUnit?.name || 'the relevant Unit Plan';
+  const band = gradeBand(period.class_name);
+
+  switch (subjectKind(period.subject)) {
+    case 'math':
+      return band === 'early'
+        ? [
+          `Students model ${topic} with counters, base-ten blocks, or classroom objects and explain their thinking to a partner.`,
+          `Pairs solve three scaffolded ${topic} problems on mini-whiteboards, showing each step and checking against the objective: ${objective}.`,
+          `Students complete a short real-life ${topic} task linked to ${unitName}, then share one strategy that worked.`,
+        ]
+        : [
+          `Students solve a graduated set of ${topic} problems individually, annotating the rule or method used for each step.`,
+          `Small groups compare two solution strategies for ${topic} and justify which strategy best meets the objective: ${objective}.`,
+          `Students create and exchange a word problem connected to ${unitName}, then solve and peer-check the answer.`,
+        ];
+    case 'english':
+      return [
+        `Students annotate a short text for examples of ${topic}, then cite one line that proves their answer.`,
+        `Pairs use a sentence frame to practise ${objective}, revising one response after peer feedback.`,
+        `Students write a brief exit response connected to ${unitName}, using two vocabulary words from the lesson.`,
+      ];
+    case 'science':
+      return [
+        `Students observe or sort concrete examples of ${topic}, recording evidence in a simple table.`,
+        `Groups conduct a short demonstration or model that tests the idea in the objective: ${objective}.`,
+        `Students explain how their evidence connects to ${unitName} using a claim-evidence-reasoning sentence frame.`,
+      ];
+    case 'social':
+      return [
+        `Students analyze a map, image, timeline, or short source related to ${topic} and identify two key details.`,
+        `Pairs discuss how the evidence supports the objective: ${objective}, then report one conclusion to the class.`,
+        `Students complete a short comparison or cause-effect task that connects ${topic} to ${unitName}.`,
+      ];
+    case 'arabic':
+      return [
+        `Students practise reading or reciting examples related to ${topic} with partner correction and teacher feedback.`,
+        `Pairs identify key vocabulary or language patterns that support the objective: ${objective}.`,
+        `Students complete a short oral or written application task connected to ${unitName}.`,
+      ];
+    default:
+      return [
+        `Students complete a guided practice task using ${topic} and explain how it meets the objective: ${objective}.`,
+        `Pairs apply ${topic} in a short scenario or example connected to ${unitName}.`,
+        `Students finish with an exit ticket that asks them to demonstrate the objective independently.`,
+      ];
+  }
+}
+
 export function summarizeDay(periods: Array<Pick<LessonPlanPeriod, 'is_free' | 'topic'>>, periodCount: number): DayPlanningSummary {
   const free = periods.filter((period) => period?.is_free).length;
   const planned = periods.filter((period) => period && !period.is_free && (period.topic ?? '').trim()).length;
@@ -96,6 +172,7 @@ export function reviewPeriodInstruction(period: LessonPlanPeriod, unitPlans: Uni
       alignmentLabel: 'Free Period',
       alignmentReason: 'No instructional alignment is needed for a free period.',
       aiReview: 'This is marked as a free period, so no instructional coaching review is required.',
+      suggestedActivities: [],
     };
   }
 
@@ -132,7 +209,7 @@ export function reviewPeriodInstruction(period: LessonPlanPeriod, unitPlans: Uni
     ? 'the activities support the intended learning progression'
     : 'the activities need a clearer connection to the stated objective';
   const unitSentence = matchedUnit
-    ? `The lesson ${alignmentStatus === 'full' ? 'aligns well' : 'partially aligns'} with the Unit Plan "${matchedUnit.name}".`
+    ? `The lesson ${alignmentStatus === 'full' ? 'follows' : 'partly follows'} the Unit Plan "${matchedUnit.name}".`
     : 'A matching Unit Plan was not found, so alignment should be confirmed before approval.';
 
   return {
@@ -140,6 +217,7 @@ export function reviewPeriodInstruction(period: LessonPlanPeriod, unitPlans: Uni
     alignmentLabel,
     alignmentReason,
     aiReview: `${objectiveSentence}, and ${activitySentence}. ${unitSentence}`,
+    suggestedActivities: alignmentStatus === 'full' ? [] : buildSuggestedActivities(period, matchedUnit),
     matchedUnit,
   };
 }

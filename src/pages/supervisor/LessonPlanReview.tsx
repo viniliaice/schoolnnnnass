@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { PDFDownloadLink } from '@react-pdf/renderer';
 import {
   useSupervisorPlans, usePlanWithPeriods, useReview,
   useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout,
 } from '../../lib/hooks/useLessonPlans';
 import { LessonPlanPeriod, PlanStatus } from '../../types';
-import { ClipboardCheck, ChevronRight, Filter, Download, AlertTriangle, Loader2, Unlock, CalendarRange } from 'lucide-react';
+import { ClipboardCheck, ChevronRight, Filter, AlertTriangle, Loader2, Unlock, CalendarRange } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
+import { ExportLessonPlanPdfButton } from '../../components/lesson-planner/ExportLessonPlanPdfButton';
 import { AiReviewPanel, minutesSince } from '../../components/lesson-planner/AiReviewPanel';
 import { LessonPlanPdfDocument } from '../shared/LessonPlanPdfDocument';
 import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
@@ -212,18 +212,11 @@ export function LessonPlanReview() {
                     <span className={cn('w-fit rounded-full px-3 py-1.5 text-xs font-semibold', STATUS_CHIP[plan.status])}>
                       {plan.status === 'ai_failed' ? 'AI failed' : plan.status.replace('_', ' ')}
                     </span>
-                    <PDFDownloadLink
+                    <ExportLessonPlanPdfButton
                       document={<LessonPlanPdfDocument plan={plan} periods={planWithPeriods.periods} review={review} unitPlans={unitPlans} />}
                       fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
-                      className="no-print flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 sm:w-auto"
-                    >
-                      {({ loading }) => (
-                        <>
-                          <Download className="w-4 h-4" />
-                          {loading ? 'Preparing PDF…' : 'Export PDF'}
-                        </>
-                      )}
-                    </PDFDownloadLink>
+                      className="no-print flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
+                    />
                   </div>
                 </div>
               </div>

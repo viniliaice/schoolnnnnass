@@ -73,6 +73,19 @@ function AiReviewBox({ period, unitPlans }: { period: ReadPeriod; unitPlans: Uni
       </div>
       <p className="text-sm leading-6">{review.aiReview}</p>
       <p className="mt-1 text-xs leading-5 opacity-80">{review.alignmentReason}</p>
+      {review.suggestedActivities.length > 0 && (
+        <div className="mt-3 rounded-lg bg-white/75 p-3 text-slate-800 shadow-sm">
+          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-600">Suggested Activities</p>
+          <ol className="space-y-1.5 text-sm leading-6">
+            {review.suggestedActivities.map((activity, index) => (
+              <li key={activity} className="flex gap-2">
+                <span className="font-bold text-slate-500">{index + 1}.</span>
+                <span>{activity}</span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
     </div>
   );
 }
@@ -98,7 +111,7 @@ export function PlanReadView({
           periods.find((p) => p.day === day && p.period_number === pi + 1)
         );
         const summary = summarizeDay(
-          dayPeriods.filter(Boolean).map((period) => ({ is_free: !!period!.isFree, topic: period!.topic })),
+          dayPeriods.map((period) => ({ is_free: !period || !!period.isFree, topic: period?.topic ?? '' })),
           periodCount
         );
         const isExpanded = expandedDays[day] ?? !defaultCollapsed;

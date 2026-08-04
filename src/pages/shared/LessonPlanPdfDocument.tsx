@@ -123,6 +123,9 @@ const styles = StyleSheet.create({
   coachTitle: { fontSize: 9.5, fontWeight: 'bold', color: '#1e293b', marginBottom: 3 },
   coachBody: { fontSize: 9.5, color: '#334155', lineHeight: 1.45 },
   coachReason: { fontSize: 8.5, color: MUTED, marginTop: 3 },
+  suggestionBox: { marginTop: 7, borderRadius: 7, backgroundColor: '#ffffff', padding: 7 },
+  suggestionTitle: { fontSize: 8.5, fontWeight: 'bold', color: '#334155', marginBottom: 3 },
+  suggestionItem: { fontSize: 8.7, color: '#334155', lineHeight: 1.35, marginBottom: 2 },
 
   reviewSummary: { borderWidth: 1, borderColor: '#c7d2fe', backgroundColor: '#eef2ff', borderRadius: 12, padding: 12, marginBottom: 12 },
   reviewScore: { fontSize: 16, fontWeight: 'bold', color: '#3730a3', marginBottom: 4 },
@@ -208,6 +211,14 @@ function PeriodBlock({ period, unitPlans }: { period: LessonPlanPeriod; unitPlan
         <Text style={styles.coachTitle}>AI Review: {pdfAlignmentLabel(coach.alignmentLabel)}</Text>
         <Text style={styles.coachBody}>{coach.aiReview}</Text>
         <Text style={styles.coachReason}>{coach.alignmentReason}</Text>
+        {coach.suggestedActivities.length > 0 && (
+          <View style={styles.suggestionBox}>
+            <Text style={styles.suggestionTitle}>Suggested Activities</Text>
+            {coach.suggestedActivities.map((activity, index) => (
+              <Text key={activity} style={styles.suggestionItem}>{index + 1}. {activity}</Text>
+            ))}
+          </View>
+        )}
       </View>
     </View>
   );
