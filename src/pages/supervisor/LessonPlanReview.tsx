@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { PDFDownloadLink } from '@react-pdf/renderer';
 import {
   useSupervisorPlans, usePlanWithPeriods, useReview,
@@ -57,27 +57,13 @@ export function LessonPlanReview() {
     getCurrentAcademicYear().then((ay) => setYearStart(ay?.startDate ?? null));
   }, []);
 
-  const handleRequestRevision = async () => {
-    if (!selectedPlanId) return;
-    await revisionMut.mutateAsync({ planId: selectedPlanId, note: comment || undefined });
-    setComment('');
-  };
-
-  const handleApprove = async () => {
-    if (!selectedPlanId) return;
-    await approveMut.mutateAsync({ planId: selectedPlanId, reviewId: review?.id, comment });
-    setComment('');
-  };
-
-  const handleReject = async () => {
-    if (!selectedPlanId) return;
-    await rejectMut.mutateAsync({ planId: selectedPlanId, reviewId: review?.id, comment });
-    setComment('');
-  };
-
-  const handleRetryReview = async () => {
-    if (!selectedPlanId || !planWithPeriods) return;
-    const periods = planWithPeriods.periods.map((p) => ({
+  const plan = planWithPeriods?.plan;
+  const readPeriods = useMemo(
+    () => toReadPeriods(planWithPeriods?.periods ?? []),
+    [planWithPeriods?.periods]
+  );
+  const retryPeriods = useMemo(() => (
+    planWithPeriods?.periods.map((p) => ({
       day: p.day,
       period_number: p.period_number,
       topic: p.topic,
@@ -85,12 +71,37 @@ export function LessonPlanReview() {
       activities: p.activities,
       slide_number: p.slide_number ?? null,
       details: (p.details as any[]) ?? [],
-    }));
-    await retryMut.mutateAsync({ planId: selectedPlanId, periods });
-  };
+    })) ?? []
+  ), [planWithPeriods?.periods]);
+  const filteredPlans = useMemo(
+    () => plans?.filter((p) => statusFilter === 'all' || p.status === statusFilter) ?? [],
+    [plans, statusFilter]
+  );
+
+  const handleRequestRevision = useCallback(async () => {
+    if (!selectedPlanId) return;
+    await revisionMut.mutateAsync({ planId: selectedPlanId, note: comment || undefined });
+    setComment('');
+  }, [comment, revisionMut, selectedPlanId]);
+
+  const handleApprove = useCallback(async () => {
+    if (!selectedPlanId) return;
+    await approveMut.mutateAsync({ planId: selectedPlanId, reviewId: review?.id, comment });
+    setComment('');
+  }, [approveMut, comment, review?.id, selectedPlanId]);
+
+  const handleReject = useCallback(async () => {
+    if (!selectedPlanId) return;
+    await rejectMut.mutateAsync({ planId: selectedPlanId, reviewId: review?.id, comment });
+    setComment('');
+  }, [comment, rejectMut, review?.id, selectedPlanId]);
+
+  const handleRetryReview = useCallback(async () => {
+    if (!selectedPlanId || !planWithPeriods) return;
+    await retryMut.mutateAsync({ planId: selectedPlanId, periods: retryPeriods });
+  }, [planWithPeriods, retryMut, retryPeriods, selectedPlanId]);
 
   const pending = approveMut.isPending || rejectMut.isPending || revisionMut.isPending;
-  const plan = planWithPeriods?.plan;
   const aiFailed = plan?.status === 'ai_failed';
   const waitingOnAi = !!plan && plan.status === 'submitted' && !review;
   const waitedMinutes = minutesSince(plan?.updated_at);
@@ -130,7 +141,7 @@ export function LessonPlanReview() {
             {(!plans || plans.length === 0) && (
               <div className="p-8 text-center text-sm text-slate-500">No submitted plans</div>
             )}
-            {plans?.filter((p) => statusFilter === 'all' || p.status === statusFilter).map((p) => (
+            {filteredPlans.map((p) => (
               <button
                 key={p.id}
                 onClick={() => setSelectedPlanId(p.id)}
@@ -216,7 +227,7 @@ export function LessonPlanReview() {
               </div>
 
               <PlanReadView
-                periods={toReadPeriods(planWithPeriods.periods)}
+                periods={readPeriods}
                 periodCount={plan.period_count}
                 planClassName={plan.class_name}
                 collapsible
