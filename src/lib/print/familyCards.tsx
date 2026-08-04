@@ -42,7 +42,7 @@ const MBK_BLUE = '#3C618E';
 const MBK_BLUE_DARK = '#26466B';
 const MBK_BLUE_DEEP = '#1E3A5F';
 const INK = '#111827';
-const MUTED = '#6b7280';
+const MUTED = '#4b5563';
 const HAIR = '#e5e7eb';
 const PANEL = '#ffffff';
 
@@ -101,34 +101,34 @@ const styles = StyleSheet.create({
   },
 
   // ── Front: hero ───────────────────────────────────────────────────
-  hero: { position: 'relative', paddingVertical: 3 * MM, paddingHorizontal: 3 * MM, flexDirection: 'row', alignItems: 'center' },
-  heroLarge: { position: 'relative', paddingVertical: 5 * MM, paddingHorizontal: 6 * MM, flexDirection: 'row', alignItems: 'center' },
+  hero: { position: 'relative', height: 19 * MM, paddingVertical: 0, paddingHorizontal: 3 * MM, flexDirection: 'row', alignItems: 'stretch' },
+  heroLarge: { position: 'relative', height: 24 * MM, paddingVertical: 0, paddingHorizontal: 6 * MM, flexDirection: 'row', alignItems: 'stretch' },
   heroWrap: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 },
-  brandBlock: { flex: 1, marginLeft: 2.5 * MM },
-  brandTitle: { color: '#ffffff', fontSize: 9, fontWeight: 'bold', letterSpacing: 0.4 },
-  brandTitleLarge: { color: '#ffffff', fontSize: 14, fontWeight: 'bold', letterSpacing: 0.6 },
-  brandSub: { color: 'rgba(255,255,255,0.85)', fontSize: 6, fontWeight: 'bold', letterSpacing: 1.5, marginTop: 0.5 * MM },
-  brandSubLarge: { color: 'rgba(255,255,255,0.85)', fontSize: 9, fontWeight: 'bold', letterSpacing: 2, marginTop: 0.8 * MM },
+  brandBlock: { flex: 1, marginLeft: 3 * MM, justifyContent: 'center', paddingVertical: 1.5 * MM },
+  brandTitle: { color: '#ffffff', fontSize: 10.5, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', letterSpacing: 0.35 },
+  brandTitleLarge: { color: '#ffffff', fontSize: 16, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', letterSpacing: 0.5 },
+  brandSub: { color: '#f8fafc', fontSize: 6.7, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', letterSpacing: 1.4, marginTop: 0.8 * MM },
+  brandSubLarge: { color: '#f8fafc', fontSize: 10, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', letterSpacing: 1.8, marginTop: 1 * MM },
   heroSpacer: { marginLeft: 'auto' },
 
-  // circular logo badge — clip image to circle via overflow:hidden + radius
-  logoBadge: { width: 9 * MM, height: 9 * MM, borderRadius: 4.5 * MM, overflow: 'hidden', borderWidth: 0.8, borderColor: '#ffffff' },
-  logoBadgeLarge: { width: 14 * MM, height: 14 * MM, borderRadius: 7 * MM, overflow: 'hidden', borderWidth: 1, borderColor: '#ffffff' },
-  logoFill: { width: '100%', height: '100%' },
+  // Logo fills the full hero height while the image itself keeps its aspect ratio.
+  logoBadge: { width: 15 * MM, height: '100%', justifyContent: 'center', alignItems: 'center', backgroundColor: '#ffffff' },
+  logoBadgeLarge: { width: 22 * MM, height: '100%', justifyContent: 'center', alignItems: 'center', backgroundColor: '#ffffff' },
+  logoFill: { width: '100%', height: '100%', objectFit: 'contain' },
 
   // ── Front: rows panel ──────────────────────────────────────────────
-  panel: { flex: 1, paddingHorizontal: 3 * MM, paddingVertical: 2.5 * MM },
-  panelLarge: { flex: 1, paddingHorizontal: 6 * MM, paddingVertical: 4 * MM },
-  panelLabel: { fontSize: 5, color: MUTED, fontWeight: 'bold', letterSpacing: 1, marginBottom: 1.5 * MM },
-  panelLabelLarge: { fontSize: 8, color: MUTED, fontWeight: 'bold', letterSpacing: 1, marginBottom: 2 * MM },
+  panel: { flex: 1, paddingHorizontal: 3.5 * MM, paddingTop: 4 * MM, paddingBottom: 3 * MM },
+  panelLarge: { flex: 1, paddingHorizontal: 7 * MM, paddingTop: 5 * MM, paddingBottom: 4.5 * MM },
+  panelLabel: { fontSize: 6.2, color: MBK_BLUE_DARK, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', letterSpacing: 1, marginBottom: 2 * MM },
+  panelLabelLarge: { fontSize: 9.5, color: MBK_BLUE_DARK, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', letterSpacing: 1, marginBottom: 2.5 * MM },
 
-  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 1.2 * MM },
-  rowLarge: { flexDirection: 'row', alignItems: 'center', paddingVertical: 1.8 * MM },
-  rowBody: { flex: 1, marginLeft: 2 * MM },
-  rowName: { fontSize: 7.5, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', color: INK },
-  rowNameLarge: { fontSize: 11, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', color: INK },
-  rowMeta: { fontSize: 5.5, color: MUTED },
-  rowMetaLarge: { fontSize: 8.5, color: MUTED },
+  row: { flexDirection: 'row', alignItems: 'center', paddingVertical: 1.35 * MM },
+  rowLarge: { flexDirection: 'row', alignItems: 'center', paddingVertical: 2 * MM },
+  rowBody: { flex: 1, marginLeft: 2.3 * MM, paddingRight: 1 * MM },
+  rowName: { fontSize: 8.3, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', color: INK },
+  rowNameLarge: { fontSize: 12.5, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', color: INK },
+  rowMeta: { fontSize: 6.3, color: MUTED, fontWeight: 'bold' },
+  rowMetaLarge: { fontSize: 9.5, color: MUTED, fontWeight: 'bold' },
   divider: { height: 0.5, backgroundColor: HAIR, marginVertical: 1.5 * MM },
 
   // circular icon badge (initial/glyph in a colored disc)
@@ -141,19 +141,19 @@ const styles = StyleSheet.create({
   // ── Front: footer ──────────────────────────────────────────────────
   foot: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 3 * MM, paddingVertical: 2 * MM, backgroundColor: '#f3f4f6' },
   footLarge: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 6 * MM, paddingVertical: 3 * MM, backgroundColor: '#f3f4f6' },
-  footText: { fontSize: 5.5, color: '#374151' },
-  footTextLarge: { fontSize: 8, color: '#374151' },
-  modeBadge: { fontSize: 5.5, color: MBK_BLUE_DARK, borderWidth: 0.6, borderColor: MBK_BLUE, borderRadius: 2, paddingHorizontal: 2, paddingVertical: 0.5, fontWeight: 'bold' },
-  modeBadgeLarge: { fontSize: 8, color: MBK_BLUE_DARK, borderWidth: 0.8, borderColor: MBK_BLUE, borderRadius: 2, paddingHorizontal: 3, paddingVertical: 1, fontWeight: 'bold' },
+  footText: { fontSize: 6.3, color: INK, fontWeight: 'bold' },
+  footTextLarge: { fontSize: 9, color: INK, fontWeight: 'bold' },
+  modeBadge: { fontSize: 6.3, color: MBK_BLUE_DARK, borderWidth: 0.6, borderColor: MBK_BLUE, borderRadius: 2, paddingHorizontal: 2.5, paddingVertical: 1, fontWeight: 'bold', fontFamily: 'Helvetica-Bold' },
+  modeBadgeLarge: { fontSize: 9, color: MBK_BLUE_DARK, borderWidth: 0.8, borderColor: MBK_BLUE, borderRadius: 2, paddingHorizontal: 4, paddingVertical: 1.5, fontWeight: 'bold', fontFamily: 'Helvetica-Bold' },
 
   // ── Back side ──────────────────────────────────────────────────────
   backTop: { alignItems: 'center' },
   backId: { fontSize: 14, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', color: INK, letterSpacing: 1.5, marginTop: 1.5 * MM },
   backIdLarge: { fontSize: 26, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', color: INK, letterSpacing: 2, marginTop: 2 * MM },
-  backIdTag: { fontSize: 5, color: MUTED, fontWeight: 'bold', letterSpacing: 2 },
-  backIdTagLarge: { fontSize: 7, color: MUTED, fontWeight: 'bold', letterSpacing: 2 },
-  backCaption: { fontSize: 6, color: MUTED, fontWeight: 'bold', marginTop: 2 * MM, letterSpacing: 0.5 },
-  backCaptionLarge: { fontSize: 9, color: MUTED, fontWeight: 'bold', marginTop: 3 * MM, letterSpacing: 0.5 },
+  backIdTag: { fontSize: 6.3, color: MBK_BLUE_DARK, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', letterSpacing: 2 },
+  backIdTagLarge: { fontSize: 9, color: MBK_BLUE_DARK, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', letterSpacing: 2 },
+  backCaption: { fontSize: 7.2, color: INK, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', marginTop: 2 * MM, letterSpacing: 0.3 },
+  backCaptionLarge: { fontSize: 10.5, color: INK, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', marginTop: 3 * MM, letterSpacing: 0.3 },
   backFooter: { flexDirection: 'row', alignItems: 'center', gap: 1.5 * MM },
   backFooterLarge: { flexDirection: 'row', alignItems: 'center', gap: 2.5 * MM },
   backFooterLogo: { width: 5 * MM, height: 5 * MM },
@@ -173,7 +173,7 @@ const styles = StyleSheet.create({
 /** Diagonal gradient background for the front hero. Stretched to fill its parent. */
 function GradientBg({ large }: { large: boolean }) {
   const w = large ? 148 * MM : 60 * MM;
-  const h = large ? 22 * MM : 18 * MM; // hero height only; clipped by hero overflow
+  const h = large ? 24 * MM : 19 * MM; // hero height only; clipped by hero overflow
   return (
     <Svg width={w} height={h} style={styles.heroWrap}>
       <Defs>

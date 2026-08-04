@@ -97,18 +97,18 @@ export function LessonPlanReview() {
   const aiLikelyStuck = waitingOnAi && waitedMinutes >= 3;
 
   return (
-    <div className="max-w-7xl mx-auto p-6">
-      <div className="flex items-center gap-3 mb-6">
+    <div className="mx-auto max-w-7xl p-4 sm:p-6">
+      <div className="mb-5 flex items-start gap-3 sm:mb-6 sm:items-center">
         <div className="p-2.5 rounded-xl bg-amber-100 text-amber-700">
           <ClipboardCheck className="w-6 h-6" />
         </div>
-        <div>
-          <h1 className="text-2xl font-bold text-slate-900">Lesson Plan Review</h1>
-          <p className="text-sm text-slate-500">Read the plan, check the AI score, then approve or request revisions.</p>
+        <div className="min-w-0">
+          <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">Lesson Plan Review</h1>
+          <p className="mt-1 text-sm leading-5 text-slate-500">Read the plan, check the AI score, then approve or request revisions.</p>
         </div>
       </div>
 
-      <div className="flex gap-6 flex-col xl:flex-row">
+      <div className="flex min-w-0 flex-col gap-5 xl:flex-row xl:gap-6">
         {/* Left: plan list */}
         <div className="w-full xl:w-80 shrink-0">
           <div className="flex items-center gap-2 mb-3">
@@ -116,7 +116,7 @@ export function LessonPlanReview() {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as 'all' | PlanStatus)}
-              className="flex-1 rounded-lg border border-slate-200 px-2 py-1.5 text-xs"
+              className="min-h-10 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
             >
               <option value="all">All Statuses</option>
               <option value="submitted">Submitted (pending AI)</option>
@@ -135,7 +135,7 @@ export function LessonPlanReview() {
                 key={p.id}
                 onClick={() => setSelectedPlanId(p.id)}
                 className={cn(
-                  'w-full flex items-center gap-3 p-4 text-left hover:bg-slate-50 transition-colors',
+                  'w-full flex items-center gap-3 p-4 text-left hover:bg-slate-50 transition-colors sm:p-4',
                   selectedPlanId === p.id && 'bg-indigo-50'
                 )}
               >
@@ -185,24 +185,24 @@ export function LessonPlanReview() {
 
             {/* Printable region */}
             <div className="space-y-6">
-              <div className="bg-white rounded-2xl border border-slate-200 p-6">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <h2 className="text-xl font-bold text-slate-900">{plan.title}</h2>
-                    <p className="text-sm text-slate-500 mt-1">
+              <div className="rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+                <div className="flex min-w-0 flex-col gap-4 sm:flex-row sm:flex-wrap sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <h2 className="break-words text-lg font-bold text-slate-900 sm:text-xl">{plan.title}</h2>
+                    <p className="mt-1 text-sm leading-6 text-slate-500">
                       {(plans?.find((p) => p.id === plan.id)?.teacher_name) || 'Unknown teacher'} · {plan.class_name} ·{' '}
                       <span className="font-medium text-slate-600">{describePlanWeek(plan.week_label, yearStart)}</span> ·{' '}
                       {plan.period_count} periods/day
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className={cn('px-3 py-1.5 rounded-full text-xs font-semibold', STATUS_CHIP[plan.status])}>
+                  <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
+                    <span className={cn('w-fit rounded-full px-3 py-1.5 text-xs font-semibold', STATUS_CHIP[plan.status])}>
                       {plan.status === 'ai_failed' ? 'AI failed' : plan.status.replace('_', ' ')}
                     </span>
                     <PDFDownloadLink
                       document={<LessonPlanPdfDocument plan={plan} periods={planWithPeriods.periods} review={review} />}
                       fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
-                      className="no-print flex items-center gap-2 px-4 py-2 rounded-xl bg-white border border-slate-200 text-sm font-medium text-slate-700 hover:bg-slate-50 transition-colors"
+                      className="no-print flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 sm:w-auto"
                     >
                       {({ loading }) => (
                         <>
@@ -236,8 +236,8 @@ export function LessonPlanReview() {
             </div>
 
             {/* Decision panel — always usable */}
-            <div className="no-print sticky bottom-0 bg-white border border-slate-200 rounded-t-2xl shadow-[0_-4px_12px_rgba(0,0,0,0.05)] p-6 space-y-4 z-10">
-              <div className="flex flex-wrap items-center gap-3">
+            <div className="no-print z-10 space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6 lg:sticky lg:bottom-4 lg:rounded-2xl lg:shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
+              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
                 <h2 className="text-lg font-bold text-slate-900">Supervisor Decision</h2>
                 {waitingOnAi && !aiLikelyStuck && (
                   <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">
@@ -262,21 +262,21 @@ export function LessonPlanReview() {
                 onChange={(e) => setComment(e.target.value)}
                 placeholder="Add your comments for the teacher (optional, but recommended when requesting revisions)"
                 rows={3}
-                className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none"
+                className="w-full resize-none rounded-xl border border-slate-300 px-3 py-3 text-sm leading-6 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200"
               />
 
-              <div className="flex flex-wrap gap-3">
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 <button
                   onClick={handleApprove}
                   disabled={pending}
-                  className="flex-1 min-w-[160px] py-2.5 rounded-xl bg-emerald-600 text-white font-medium text-sm hover:bg-emerald-700 disabled:opacity-50 transition-colors"
+                  className="min-h-12 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
                 >
                   {approveMut.isPending ? 'Approving…' : 'Approve'}
                 </button>
                 <button
                   onClick={handleReject}
                   disabled={pending}
-                  className="flex-1 min-w-[160px] py-2.5 rounded-xl bg-rose-600 text-white font-medium text-sm hover:bg-rose-700 disabled:opacity-50 transition-colors"
+                  className="min-h-12 rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-rose-700 disabled:opacity-50"
                 >
                   {rejectMut.isPending ? 'Sending…' : 'Reject'}
                 </button>
@@ -287,7 +287,7 @@ export function LessonPlanReview() {
                 <button
                   onClick={handleRequestRevision}
                   disabled={pending || plan.status === 'revision_requested'}
-                  className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl bg-amber-500 text-white font-medium text-sm hover:bg-amber-600 disabled:opacity-50 transition-colors"
+                  className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-amber-600 disabled:opacity-50"
                 >
                   <Unlock className="w-4 h-4" />
                   {plan.status === 'revision_requested'

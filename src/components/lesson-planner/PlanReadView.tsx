@@ -61,7 +61,7 @@ export function PlanReadView({
               <button
                 type="button"
                 onClick={() => toggleDay(day)}
-                className="w-full flex items-center gap-3 px-5 py-3 bg-slate-50 hover:bg-slate-100 transition-colors"
+                className="flex min-h-12 w-full flex-wrap items-center gap-3 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100 sm:px-5"
               >
                 <ChevronDown className={cn(
                   'w-4 h-4 text-slate-400 shrink-0 transition-transform',
@@ -69,7 +69,7 @@ export function PlanReadView({
                 )} />
                 <h3 className="text-base font-bold text-slate-900 text-left">{day}</h3>
                 {weekDates?.[di] && <span className="text-sm text-slate-500">{weekDates[di]}</span>}
-                <span className="ml-auto text-xs font-medium text-slate-500">
+                <span className="w-full pl-7 text-xs font-medium text-slate-500 sm:ml-auto sm:w-auto sm:pl-0">
                   {plannedCount} of {periodCount} periods planned
                 </span>
               </button>
@@ -77,7 +77,7 @@ export function PlanReadView({
               <header className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 bg-slate-50 border-b border-slate-200">
                 <h3 className="text-base font-bold text-slate-900">{day}</h3>
                 {weekDates?.[di] && <span className="text-sm text-slate-500">{weekDates[di]}</span>}
-                <span className="ml-auto text-xs font-medium text-slate-500">
+                <span className="w-full text-xs font-medium text-slate-500 sm:ml-auto sm:w-auto">
                   {plannedCount} of {periodCount} periods planned
                 </span>
               </header>
@@ -88,7 +88,7 @@ export function PlanReadView({
                 {dayPeriods.map((cell, pi) => {
                   const isFree = !cell || cell.isFree || cell.subject === '__FREE__';
                   return (
-                    <div key={pi} className="avoid-break flex gap-4 px-5 py-4">
+                    <div key={pi} className="avoid-break flex gap-3 px-4 py-4 sm:gap-4 sm:px-5">
                       <div className="shrink-0 w-14">
                         <div className={cn(
                           'w-11 h-11 rounded-xl flex flex-col items-center justify-center text-xs font-bold',

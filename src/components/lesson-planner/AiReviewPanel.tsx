@@ -52,16 +52,16 @@ export function AiReviewPanel({
   // ── AI failed ────────────────────────────────────────────────
   if (status === 'ai_failed') {
     return (
-      <div className="bg-white rounded-2xl border-2 border-rose-200 p-6 space-y-4">
-        <div className="flex items-center gap-3">
+      <div className="space-y-4 rounded-2xl border-2 border-rose-200 bg-white p-4 sm:p-6">
+        <div className="flex flex-wrap items-center gap-3">
           <div className="p-2 rounded-xl bg-rose-100 text-rose-700">
             <AlertTriangle className="w-5 h-5" />
           </div>
-          <div>
+          <div className="min-w-0 flex-1">
             <h2 className="text-lg font-bold text-slate-900">AI review failed</h2>
             <p className="text-xs text-rose-600 font-medium">The plan was NOT reviewed by the AI</p>
           </div>
-          <span className="ml-auto px-3 py-1 rounded-full text-xs font-bold bg-rose-100 text-rose-700">Failed</span>
+          <span className="rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700 sm:ml-auto">Failed</span>
         </div>
         <p className="text-sm text-slate-600">
           {audience === 'supervisor'
@@ -99,18 +99,18 @@ export function AiReviewPanel({
     if (status === 'draft') return null;
     return (
       <div className={cn(
-        'bg-white rounded-2xl border-2 p-6 space-y-3',
+        'space-y-3 rounded-2xl border-2 bg-white p-4 sm:p-6',
         stale ? 'border-amber-200' : 'border-blue-200'
       )}>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3">
           <div className={cn('p-2 rounded-xl', stale ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700')}>
             {stale ? <Clock className="w-5 h-5" /> : <Loader2 className="w-5 h-5 animate-spin" />}
           </div>
-          <h2 className="text-lg font-bold text-slate-900">
+          <h2 className="min-w-0 flex-1 text-lg font-bold text-slate-900">
             {stale ? 'AI review is taking longer than usual' : 'AI review in progress'}
           </h2>
           <span className={cn(
-            'ml-auto px-3 py-1 rounded-full text-xs font-bold',
+            'rounded-full px-3 py-1 text-xs font-bold sm:ml-auto',
             stale ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700 animate-pulse'
           )}>
             {waited > 0 ? `Waiting ${waited} min` : 'Waiting…'}
@@ -143,25 +143,25 @@ export function AiReviewPanel({
 
   // ── Review ready ─────────────────────────────────────────────
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-6 space-y-4">
-      <div className="flex items-center gap-3">
+    <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-4 sm:p-6">
+      <div className="flex flex-wrap items-center gap-3">
         <div className="p-2 rounded-xl bg-emerald-100 text-emerald-700">
           <Sparkles className="w-5 h-5" />
         </div>
-        <h2 className="text-lg font-bold text-slate-900">AI Review</h2>
-        <span className={cn('ml-auto px-3 py-1 rounded-full text-xs font-bold', scoreTone(review.percentage))}>
+        <h2 className="min-w-0 flex-1 text-lg font-bold text-slate-900">AI Review</h2>
+        <span className={cn('rounded-full px-3 py-1 text-xs font-bold sm:ml-auto', scoreTone(review.percentage))}>
           {review.percentage}% · {review.performance_level}
         </span>
       </div>
 
       <p className="text-sm text-slate-600 leading-relaxed">{review.executive_summary}</p>
 
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
         {Object.entries(review.scores).map(([key, val]: [string, any]) => (
           <div key={key} className="bg-slate-50 rounded-xl p-3">
             <p className="text-xs text-slate-500 capitalize mb-1">{key.replace(/_/g, ' ')}</p>
             <p className="text-lg font-bold text-slate-900">{val.score}/5</p>
-            <p className="text-xs text-slate-400 mt-1">{val.explanation}</p>
+            <p className="mt-1 break-words text-xs leading-5 text-slate-500">{val.explanation}</p>
           </div>
         ))}
       </div>

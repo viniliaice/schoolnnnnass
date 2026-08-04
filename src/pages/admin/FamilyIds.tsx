@@ -87,6 +87,7 @@ export function FamilyIds() {
   const [withLookup, setWithLookup] = useState(true);
   const [printFilter, setPrintFilter] = useState('all');
   const [helpOpen, setHelpOpen] = useState(true);
+  const [leftOpen, setLeftOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -642,27 +643,48 @@ export function FamilyIds() {
       </section>
 
       {/* Marked as left */}
-      <section className="mb-6 rounded-2xl border border-rose-200 bg-rose-50 p-5">
-        <h2 className="mb-1 text-base font-semibold text-rose-900">Marked as left — {leftStudents.length}</h2>
-        <p className="mb-3 text-sm text-rose-700">No family ID, no gate card. Restore if they come back.</p>
-        {leftStudents.length === 0 ? (
-          <p className="text-sm text-slate-500">No students marked as left.</p>
-        ) : (
-          <ul className="divide-y divide-rose-200">
-            {leftStudents.map(s => (
-              <li key={s.id} className="flex items-center justify-between gap-3 py-2 text-sm">
-                <span>{s.name} <span className="text-rose-700/70">· {s.className}</span></span>
-                {canWrite && (
-                  <button
-                    onClick={() => handleMarkLeft(s, false)}
-                    className="shrink-0 rounded-lg border border-rose-300 bg-white px-3 py-1 text-xs font-semibold text-rose-700 hover:bg-rose-100"
-                  >
-                    Restore
-                  </button>
-                )}
-              </li>
-            ))}
-          </ul>
+      <section className="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-colors">
+        <button
+          type="button"
+          onClick={() => setLeftOpen(open => !open)}
+          className="flex w-full items-center gap-3 px-5 py-4 text-left transition hover:bg-slate-50"
+          aria-expanded={leftOpen}
+        >
+          <ChevronDown className={cn(
+            'h-5 w-5 shrink-0 text-slate-400 transition-transform duration-200 ease-out',
+            leftOpen && 'rotate-180'
+          )} />
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-bold text-slate-900">Marked as left</h2>
+            <p className="mt-0.5 text-sm text-slate-500">No family ID, no gate card. Restore if they come back.</p>
+          </div>
+          <span className="shrink-0 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700">
+            {leftStudents.length}
+          </span>
+        </button>
+
+        {leftOpen && (
+          <div className="border-t border-slate-100 bg-slate-50/50 px-5 py-4">
+            {leftStudents.length === 0 ? (
+              <p className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">No students marked as left.</p>
+            ) : (
+              <ul className="divide-y divide-slate-100 overflow-hidden rounded-xl border border-slate-200 bg-white">
+                {leftStudents.map(s => (
+                  <li key={s.id} className="flex flex-col gap-3 px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+                    <span className="font-medium text-slate-800">{s.name} <span className="font-normal text-slate-500">· {s.className}</span></span>
+                    {canWrite && (
+                      <button
+                        onClick={() => handleMarkLeft(s, false)}
+                        className="min-h-10 shrink-0 rounded-xl border border-slate-300 bg-white px-4 py-2 text-xs font-bold text-slate-700 transition hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700"
+                      >
+                        Restore
+                      </button>
+                    )}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         )}
       </section>
 
