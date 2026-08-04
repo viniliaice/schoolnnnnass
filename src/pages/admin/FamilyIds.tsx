@@ -29,6 +29,7 @@ import { cn } from '../../utils/cn';
 import type { Student } from '../../types';
 
 const TRANSPORT_OPTIONS = ['WALKER', 'CAR'] as const;
+const FAMILY_ID_PROGRESS_TARGET = 200;
 
 const BUCKET_LABELS: Array<[ImportBucket, string]> = [
   ['nb', 'Walkers (NB / 0)'],
@@ -74,7 +75,6 @@ export function FamilyIds() {
   const { session } = useRole();
   const canWrite = !!session && canGenerateFamilyIds(session.role);
   const [students, setStudents] = useState<Student[]>([]);
-  const [parentNames, setParentNames] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [importText, setImportText] = useState('');
   const [importedRows, setImportedRows] = useState<TransportImportRow[]>([]);
@@ -95,14 +95,6 @@ export function FamilyIds() {
     try {
       const loaded = await getStudents();
       setStudents(loaded);
-      const parentIds = loaded.map(s => s.parentId).filter((p): p is string => !!p);
-      if (parentIds.length > 0) {
-        try {
-          setParentNames(await getParentNames(parentIds));
-        } catch (err) {
-          console.error('[family-ids] parent names fetch failed', err);
-        }
-      }
     } catch (err) {
       addToast({ type: 'error', title: 'Failed to load students', description: err instanceof Error ? err.message : undefined });
     } finally {
@@ -116,6 +108,11 @@ export function FamilyIds() {
   const unattached = useMemo(() => findUnattached(students), [students]);
   const leftStudents = useMemo(() => findLeftStudents(students), [students]);
   const families = useMemo(() => Array.from(groups.entries()), [groups]);
+  const familyProgress = useMemo(() => {
+    const current = families.length;
+    const percent = Math.min(100, Math.round((current / FAMILY_ID_PROGRESS_TARGET) * 100));
+    return { current, target: FAMILY_ID_PROGRESS_TARGET, percent };
+  }, [families.length]);
   /** Print-batch filter: families whose (first) student matches the transport bucket. */
   const filteredFamilies = useMemo(() => {
     if (printFilter === 'all') return families;
@@ -378,12 +375,13 @@ export function FamilyIds() {
       </section>
 
       {/* Stats row (IA: stats first) */}
-      <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="Families" value={families.length} />
         <StatCard label="Students" value={students.length} />
         <StatCard label="Unattached" value={unattached.length} tone={unattached.length ? 'warn' : 'ok'} />
         <StatCard label="Ambiguous" value={importSummary?.ambiguous ?? 0} tone={importSummary?.ambiguous ? 'warn' : 'ok'} />
       </div>
+      <FamilyProgressBar current={familyProgress.current} target={familyProgress.target} percent={familyProgress.percent} />
 
       {/* Generate */}
       <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
@@ -708,7 +706,7 @@ export function FamilyIds() {
         {filteredFamilies.length === 0 && families.length > 0 && (
           <p className="text-sm text-slate-500">No families match this group.</p>
         )}
-        <AsyncPrintLink families={filteredFamilies} layout={layout} withLookup={withLookup} parentNames={parentNames} />
+        <AsyncPrintLink families={filteredFamilies} layout={layout} withLookup={withLookup} />
       </section>
     </div>
   );
@@ -723,8 +721,28 @@ function StatCard({ label, value, tone }: { label: string; value: number; tone?:
   );
 }
 
-/** Builds QR data URLs then renders the download link (loading → ready states). */
-function AsyncPrintLink({ families, layout, withLookup, parentNames }: { families: [string, Student[]][]; layout: CardLayout; withLookup: boolean; parentNames: Map<string, string> }) {
+function FamilyProgressBar({ current, target, percent }: { current: number; target: number; percent: number }) {
+  return (
+    <section className="mb-6 rounded-2xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-white p-4 shadow-sm" aria-label="Family ID progress">
+      <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h2 className="text-sm font-bold text-emerald-950">Family ID progress</h2>
+          <p className="text-xs text-emerald-700">Target: print and verify {target} family IDs.</p>
+        </div>
+        <div className="text-right">
+          <div className="text-lg font-black tabular-nums text-emerald-900">{current} of {target}</div>
+          <div className="text-xs font-semibold text-emerald-700">{percent}% complete</div>
+        </div>
+      </div>
+      <div className="h-3 overflow-hidden rounded-full bg-emerald-100" role="progressbar" aria-valuenow={Math.min(current, target)} aria-valuemin={0} aria-valuemax={target} aria-label={`${current} of ${target} family IDs`}>
+        <div className="h-full rounded-full bg-emerald-700 transition-all duration-500" style={{ width: `${percent}%` }} />
+      </div>
+    </section>
+  );
+}
+
+/** Lazily builds the family-card PDF only when staff preview/download. */
+function AsyncPrintLink({ families, layout, withLookup }: { families: [string, Student[]][]; layout: CardLayout; withLookup: boolean }) {
   const [data, setData] = useState<Awaited<ReturnType<typeof buildFamilyCardData>> | null>(null);
   const [error, setError] = useState(false);
   const [preparing, setPreparing] = useState(false);
@@ -736,19 +754,30 @@ function AsyncPrintLink({ families, layout, withLookup, parentNames }: { familie
   const cancelledRef = useRef(false);
 
   useEffect(() => {
-    let cancelled = false;
+    cancelledRef.current = true;
     setData(null);
     setError(false);
     pdfBlobRef.current = null;
-    buildFamilyCardData(new Map(families), parentNames)
-      .then(d => { if (!cancelled) setData(d); })
-      .catch(() => { if (!cancelled) setError(true); });
-    return () => { cancelled = true; };
-  }, [families, parentNames]);
+  }, [families]);
+
+  useEffect(() => {
+    pdfBlobRef.current = null;
+  }, [layout, withLookup]);
 
   useEffect(() => () => {
     if (previewUrl) URL.revokeObjectURL(previewUrl);
   }, [previewUrl]);
+
+  const getCardData = async () => {
+    if (data) return data;
+    const parentIds = families
+      .flatMap(([, kids]) => kids.map(k => k.parentId))
+      .filter((id): id is string => !!id);
+    const names = await getParentNames(parentIds);
+    const built = await buildFamilyCardData(new Map(families), names);
+    if (!cancelledRef.current) setData(built);
+    return built;
+  };
 
   const buildPdf = async (fams: FamilyCardData[]) => {
     const blob = await pdf(
@@ -780,11 +809,12 @@ function AsyncPrintLink({ families, layout, withLookup, parentNames }: { familie
   };
 
   const handlePreview = async () => {
-    if (previewing || !data || families.length === 0) return;
+    if (previewing || preparing || families.length === 0) return;
     setPreviewing(true);
     cancelledRef.current = false;
     try {
-      if (!pdfBlobRef.current) pdfBlobRef.current = await buildPdf(data);
+      const cardData = await getCardData();
+      if (!pdfBlobRef.current) pdfBlobRef.current = await buildPdf(cardData);
       if (cancelledRef.current) return;
       openPreview(pdfBlobRef.current, false);
     } catch {
@@ -795,11 +825,12 @@ function AsyncPrintLink({ families, layout, withLookup, parentNames }: { familie
   };
 
   const handlePrepare = async () => {
-    if (preparing || !data || families.length === 0) return;
+    if (preparing || previewing || families.length === 0) return;
     setPreparing(true);
     cancelledRef.current = false;
     try {
-      if (!pdfBlobRef.current) pdfBlobRef.current = await buildPdf(data);
+      const cardData = await getCardData();
+      if (!pdfBlobRef.current) pdfBlobRef.current = await buildPdf(cardData);
       if (cancelledRef.current) return; // stopped — discard the blob
       const url = URL.createObjectURL(pdfBlobRef.current);
       const a = document.createElement('a');
@@ -820,15 +851,14 @@ function AsyncPrintLink({ families, layout, withLookup, parentNames }: { familie
   };
 
   if (error) return <p className="text-sm text-red-600">Could not build the PDF. Try again.</p>;
-  if (families.length > 0 && !data) return <p className="text-sm text-slate-400">Preparing data…</p>;
-  const hasReal = families.length > 0 && !!data;
+  const hasReal = families.length > 0;
 
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={handleSamplePreview}
-          disabled={previewing}
+          disabled={previewing || preparing}
           className="rounded-xl bg-indigo-700 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-indigo-800 disabled:cursor-not-allowed disabled:opacity-50"
         >
           {previewing ? 'Preparing sample…' : '👁 Sample — front & back'}
@@ -837,14 +867,14 @@ function AsyncPrintLink({ families, layout, withLookup, parentNames }: { familie
           <>
             <button
               onClick={handlePreview}
-              disabled={previewing}
+              disabled={previewing || preparing}
               className="rounded-xl bg-slate-700 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {previewing ? 'Preparing preview…' : '👁 Preview'}
             </button>
             <button
               onClick={handlePrepare}
-              disabled={preparing}
+              disabled={preparing || previewing}
               className="rounded-xl bg-emerald-800 px-5 py-3 text-sm font-bold text-white shadow-sm transition hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-50"
             >
               {preparing ? 'Preparing…' : `⬇ Download ${layout} cards PDF`}
