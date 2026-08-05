@@ -33,9 +33,7 @@ export async function regeneratePeriodAiReviews(planId: string): Promise<LessonP
     supabase
       .from('lesson_plan_periods')
       .select('*')
-      .eq('plan_id', planId)
-      .order('day')
-      .order('period_number'),
+      .eq('plan_id', planId),
     supabase
       .from('unit_plans')
       .select('*'),
@@ -44,7 +42,7 @@ export async function regeneratePeriodAiReviews(planId: string): Promise<LessonP
   if (periodsResult.error) throw periodsResult.error;
   if (unitsResult.error) throw unitsResult.error;
 
-  const periods = (periodsResult.data || []) as LessonPlanPeriod[];
+  const periods = ((periodsResult.data || []) as LessonPlanPeriod[]).sort((a, b) => periodOrder(a) - periodOrder(b));
   const units = (unitsResult.data || []) as UnitPlan[];
 
   const rows = periods

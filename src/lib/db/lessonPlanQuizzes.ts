@@ -40,11 +40,10 @@ export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]>
   const { data: periodsData, error: periodsError } = await supabase
     .from('lesson_plan_periods')
     .select('*')
-    .eq('plan_id', planId)
-    .order('day')
-    .order('period_number');
+    .eq('plan_id', planId);
   if (periodsError) throw periodsError;
-  const periods = (periodsData || []) as LessonPlanPeriod[];
+  const dayOrder: Record<string, number> = { Saturday: 1, Sunday: 2, Monday: 3, Tuesday: 4, Wednesday: 5, Thursday: 6, Friday: 7 };
+  const periods = ((periodsData || []) as LessonPlanPeriod[]).sort((a, b) => ((dayOrder[a.day] ?? 99) * 10 + a.period_number) - ((dayOrder[b.day] ?? 99) * 10 + b.period_number));
 
   await supabase.from('quizzes').delete().eq('lesson_plan_id', planId).eq('auto_generated', true);
 
