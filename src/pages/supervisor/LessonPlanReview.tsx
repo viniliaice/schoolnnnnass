@@ -127,21 +127,35 @@ export function LessonPlanReview() {
 
   const handleGenerateQuizzes = useCallback(async () => {
     if (!selectedPlanId) return;
-    await generateQuizzesMut.mutateAsync(selectedPlanId);
-    setQuizzesOpen(true);
-  }, [generateQuizzesMut, selectedPlanId]);
+    try {
+      await generateQuizzesMut.mutateAsync(selectedPlanId);
+      setQuizzesOpen(true);
+      addToast({ type: 'success', title: 'Quizzes generated' });
+    } catch (err) {
+      addToast({ type: 'error', title: 'Failed to generate quizzes', description: err instanceof Error ? err.message : undefined });
+    }
+  }, [addToast, generateQuizzesMut, selectedPlanId]);
 
   const handleGenerateMissingAssets = useCallback(async () => {
     if (!selectedPlanId) return;
-    await regeneratePeriodReviewMut.mutateAsync(selectedPlanId);
-    await generateQuizzesMut.mutateAsync(selectedPlanId);
-    setQuizzesOpen(true);
-  }, [generateQuizzesMut, regeneratePeriodReviewMut, selectedPlanId]);
+    try {
+      await regeneratePeriodReviewMut.mutateAsync(selectedPlanId);
+      await generateQuizzesMut.mutateAsync(selectedPlanId);
+      setQuizzesOpen(true);
+      addToast({ type: 'success', title: 'AI review and quizzes generated' });
+    } catch (err) {
+      addToast({ type: 'error', title: 'Failed to generate review assets', description: err instanceof Error ? err.message : undefined });
+    }
+  }, [addToast, generateQuizzesMut, regeneratePeriodReviewMut, selectedPlanId]);
 
   const handleAddQuizToBank = useCallback(async (quizId: string) => {
     if (!selectedPlanId) return;
-    const result = await addQuizToBankMut.mutateAsync({ quizId, planId: selectedPlanId });
-    addToast({ type: 'success', title: result === 'already_added' ? 'Already added to quiz bank' : 'Added to quiz bank' });
+    try {
+      const result = await addQuizToBankMut.mutateAsync({ quizId, planId: selectedPlanId });
+      addToast({ type: 'success', title: result === 'already_added' ? 'Already added to quiz bank' : 'Added to quiz bank' });
+    } catch (err) {
+      addToast({ type: 'error', title: 'Failed to add quiz to bank', description: err instanceof Error ? err.message : undefined });
+    }
   }, [addQuizToBankMut, addToast, selectedPlanId]);
 
   const handleAddCommentLine = useCallback((line: string) => {
