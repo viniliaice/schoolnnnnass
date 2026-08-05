@@ -2,17 +2,7 @@ import { supabase } from '../supabase';
 import { getQuizWithQuestions } from './quizzes';
 import type { LessonPlan, LessonPlanPeriod, Quiz, QuizQuestion } from '../../types';
 
-interface GeneratedQuestion {
-  question: string;
-  options: string[];
-  correctIndex: number;
-  explanation?: string;
-}
-
-interface GeneratedQuiz {
-  title: string;
-  questions: GeneratedQuestion[];
-}
+import { QUIZ_GENERATION_DEFAULTS, validateGeneratedResponse, type GeneratedQuestion, type GeneratedQuiz } from '../quizGenerationValidation';
 
 function id(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -22,129 +12,61 @@ function unique<T>(items: T[]): T[] {
   return [...new Set(items)];
 }
 
-function strip(value: string | null | undefined): string {
-  return (value || '').replace(/\s+/g, ' ').trim();
+function optionLabel(index: number): string {
+  return String.fromCharCode(65 + index);
 }
 
-function gradeFromClass(className: string): string {
-  return className.match(/(?:Grade|Year)\s*\d+/i)?.[0] || className;
+async function fetchContext(planId: string) {
+  const { data, error } = await supabase.from('lesson_plans').select('*').eq('id', planId).single();
+  if (error || !data) throw error || new Error('Plan not found');
+  const plan = data as LessonPlan;
+
+  const [{ data: periodsData, error: periodsError }, { data: unitsData, error: unitsError }] = await Promise.all([
+    supabase.from('lesson_plan_periods').select('*').eq('plan_id', planId),
+    supabase.from('unit_plans').select('*').eq('class_name', plan.class_name),
+  ]);
+  if (periodsError) throw periodsError;
+  if (unitsError) throw unitsError;
+
+  const dayOrder: Record<string, number> = { Saturday: 1, Sunday: 2, Monday: 3, Tuesday: 4, Wednesday: 5, Thursday: 6, Friday: 7 };
+  const periods = ((periodsData || []) as LessonPlanPeriod[]).sort((a, b) => ((dayOrder[a.day] ?? 99) * 10 + a.period_number) - ((dayOrder[b.day] ?? 99) * 10 + b.period_number));
+  return { plan, periods, unitPlans: unitsData || [] };
 }
 
-function activityText(period: LessonPlanPeriod): string {
-  const details = (period.details || []).map((d) => [d.activity, d.resource, d.place].filter(Boolean).join(' using ')).filter(Boolean);
-  return strip(details.join('; ') || period.activities || 'class practice');
-}
-
-function validateGeneratedQuiz(input: GeneratedQuiz): GeneratedQuiz {
-  if (!input.title?.trim()) throw new Error('Generated quiz is missing a title');
-  if (!Array.isArray(input.questions) || input.questions.length < 3 || input.questions.length > 5) {
-    throw new Error('Generated quiz must contain 3–5 questions');
-  }
-  const seen = new Set<string>();
-  input.questions.forEach((q, index) => {
-    const normalized = strip(q.question).toLowerCase();
-    if (!normalized || seen.has(normalized)) throw new Error(`Generated quiz has duplicate/empty question at ${index + 1}`);
-    seen.add(normalized);
-    if (!Array.isArray(q.options) || q.options.length !== 4) throw new Error(`Question ${index + 1} must have exactly 4 options`);
-    if (new Set(q.options.map((o) => strip(o).toLowerCase())).size !== 4) throw new Error(`Question ${index + 1} options are not distinct`);
-    if (!Number.isInteger(q.correctIndex) || q.correctIndex < 0 || q.correctIndex > 3) throw new Error(`Question ${index + 1} has invalid correctIndex`);
+async function generateWithLLM(plan: LessonPlan, subject: string, subjectPeriods: LessonPlanPeriod[], unitPlans: unknown[]): Promise<GeneratedQuiz[]> {
+  const { data, error } = await supabase.functions.invoke('generate-lesson-quizzes', {
+    body: {
+      plan,
+      subject,
+      periods: subjectPeriods,
+      unit_plans: unitPlans,
+      quiz_count: QUIZ_GENERATION_DEFAULTS.quizCount,
+      questions_per_quiz: QUIZ_GENERATION_DEFAULTS.questionsPerQuiz,
+      direct_answer_min: QUIZ_GENERATION_DEFAULTS.directAnswerMinPerQuiz,
+    },
   });
-  return input;
+  if (error) throw error;
+  return validateGeneratedResponse(data);
 }
 
-function buildStructuredQuiz(plan: LessonPlan, subject: string, subjectPeriods: LessonPlanPeriod[], quizIndex: number): GeneratedQuiz {
-  const grade = gradeFromClass(plan.class_name);
-  const focus = subjectPeriods[(quizIndex - 1) % subjectPeriods.length];
-  const topic = strip(focus.topic) || 'the lesson topic';
-  const objective = strip(focus.objective) || `understand ${topic}`;
-  const activity = activityText(focus);
-  const questions: GeneratedQuestion[] = [
-    {
-      question: `In ${grade}, which task best demonstrates the objective: "${objective}"?`,
-      options: [
-        `Solving a new ${topic} example and explaining the steps`,
-        `Copying the ${topic} title from the board`,
-        `Reading silently without showing an answer`,
-        `Waiting for the teacher to solve every example`,
-      ],
-      correctIndex: 0,
-      explanation: `The correct option requires students to apply and explain the stated objective.`,
-    },
-    {
-      question: `During ${activity}, what should the teacher check to confirm students understand ${topic}?`,
-      options: [
-        `Students can show the method and justify the answer`,
-        `Students finish quickly without showing work`,
-        `Students only repeat the page number`,
-        `Students avoid using the lesson vocabulary`,
-      ],
-      correctIndex: 0,
-      explanation: `Evidence of method and justification is aligned to the lesson objective.`,
-    },
-    {
-      question: `Which question would best connect this period's activity to the unit objective for ${subject}?`,
-      options: [
-        `How does this example help us master ${topic}?`,
-        `Who has the neatest notebook today?`,
-        `What color is the worksheet?`,
-        `Can we skip the independent practice?`,
-      ],
-      correctIndex: 0,
-      explanation: `It asks students to connect the activity directly to the learning goal.`,
-    },
-  ];
-
-  if (subjectPeriods.length > 1) {
-    const second = subjectPeriods[1];
-    questions.push({
-      question: `How should students use feedback from ${strip(second.topic) || 'the next period'} to improve their understanding?`,
-      options: [
-        `Correct one mistake and explain the improved strategy`,
-        `Erase all work without discussing it`,
-        `Ignore partner or teacher comments`,
-        `Memorize the answer without understanding it`,
-      ],
-      correctIndex: 0,
-      explanation: `Using feedback to correct and explain promotes mastery.`,
-    });
-  }
-
-  if (subjectPeriods.length > 2) {
-    const third = subjectPeriods[2];
-    questions.push({
-      question: `Which exit-ticket prompt best assesses ${strip(third.topic) || topic}?`,
-      options: [
-        `Solve one new problem and write one sentence explaining the strategy`,
-        `Write today's date only`,
-        `Copy the objective exactly`,
-        `Circle whether the lesson was fun`,
-      ],
-      correctIndex: 0,
-      explanation: `A new problem plus explanation checks both skill and understanding.`,
-    });
-  }
-
-  return validateGeneratedQuiz({
-    title: `${plan.title} — ${subject} Quiz ${quizIndex}`,
-    questions,
-  });
-}
-
-async function createGeneratedQuestion(plan: LessonPlan, quizId: string, q: GeneratedQuestion, orderIndex: number) {
+async function insertGeneratedQuestion(plan: LessonPlan, quizId: string, subject: string, q: GeneratedQuestion) {
   const questionId = id('q');
-  const options = q.options.map((text, index) => ({ label: String.fromCharCode(65 + index), text }));
-  const correctAnswer = String.fromCharCode(65 + q.correctIndex);
+  const isMcq = q.type === 'multiple_choice';
+  const options = isMcq ? q.options!.map((text, index) => ({ label: optionLabel(index), text })) : null;
+  const correctAnswer = isMcq ? optionLabel(q.correctIndex!) : null;
   const row = {
     id: questionId,
     prompt: q.question,
-    type: 'multiple_choice',
+    type: q.type,
     options,
     correctAnswer,
-    rubric: q.explanation ?? null,
+    rubric: isMcq ? (q.explanation ?? null) : q.rubric!,
     teacherId: plan.teacher_id,
     createdAt: new Date().toISOString(),
     source_lesson_plan_id: plan.id,
     source_quiz_id: quizId,
+    source_subject_id: subject,
+    source_class_name: plan.class_name,
     source_auto_generated: true,
   };
   const { error } = await supabase.from('questions').insert(row);
@@ -152,79 +74,67 @@ async function createGeneratedQuestion(plan: LessonPlan, quizId: string, q: Gene
   return { questionId, points: 1 };
 }
 
+async function saveGeneratedQuiz(plan: LessonPlan, subject: string, generated: GeneratedQuiz): Promise<Quiz> {
+  const quizId = id('quiz');
+  const openDate = new Date().toISOString().slice(0, 10);
+  const dueDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+  const quizRow = {
+    id: quizId,
+    className: plan.class_name,
+    subject,
+    title: generated.title,
+    description: `AI-generated from lesson plan ${plan.week_label}.`,
+    openDate,
+    dueDate,
+    timeLimit: 10,
+    questionOrder: 'created' as const,
+    teacherId: plan.teacher_id,
+    status: 'draft' as const,
+    createdAt: new Date().toISOString(),
+    lesson_plan_id: plan.id,
+    auto_generated: true,
+  };
+  const { error: quizErr } = await supabase.from('quizzes').insert(quizRow);
+  if (quizErr) throw quizErr;
+
+  const refs = [];
+  for (const question of generated.questions) refs.push(await insertGeneratedQuestion(plan, quizId, subject, question));
+
+  const { data: questions, error: qErr } = await supabase.from('questions').select('*').in('id', refs.map((r) => r.questionId));
+  if (qErr) throw qErr;
+  const questionMap = new Map((questions || []).map((q) => [q.id, q]));
+  const junctionRows = refs.map((ref, i) => {
+    const src = questionMap.get(ref.questionId) as any;
+    return {
+      id: id('qq'),
+      quizId,
+      questionId: ref.questionId,
+      orderIndex: i,
+      points: 1,
+      promptSnapshot: src.prompt,
+      optionsSnapshot: src.type === 'multiple_choice' ? src.options : null,
+      correctAnswerSnapshot: src.correctAnswer,
+      typeSnapshot: src.type,
+    };
+  });
+  const { error: jErr } = await supabase.from('quiz_questions').insert(junctionRows);
+  if (jErr) throw jErr;
+  return quizRow as Quiz;
+}
+
 export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]> {
-  const { data, error } = await supabase.from('lesson_plans').select('*').eq('id', planId).single();
-  if (error || !data) throw error || new Error('Plan not found');
-  const plan = data as LessonPlan;
-
-  const { data: periodsData, error: periodsError } = await supabase.from('lesson_plan_periods').select('*').eq('plan_id', planId);
-  if (periodsError) throw periodsError;
-  const dayOrder: Record<string, number> = { Saturday: 1, Sunday: 2, Monday: 3, Tuesday: 4, Wednesday: 5, Thursday: 6, Friday: 7 };
-  const periods = ((periodsData || []) as LessonPlanPeriod[]).sort((a, b) => ((dayOrder[a.day] ?? 99) * 10 + a.period_number) - ((dayOrder[b.day] ?? 99) * 10 + b.period_number));
-
+  const { plan, periods, unitPlans } = await fetchContext(planId);
   await supabase.from('quizzes').delete().eq('lesson_plan_id', planId).eq('auto_generated', true);
   await supabase.from('questions').delete().eq('source_lesson_plan_id', planId).eq('source_auto_generated', true);
 
   const subjects = unique(periods.filter((p) => !p.is_free && p.subject && p.subject !== '__FREE__').map((p) => p.subject!));
   const created: Quiz[] = [];
-  const openDate = new Date().toISOString().slice(0, 10);
-  const dueDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
 
   for (const subject of subjects) {
     const subjectPeriods = periods.filter((p) => p.subject === subject && !p.is_free);
     if (!subjectPeriods.length) continue;
-
-    for (let quizIndex = 1; quizIndex <= 3; quizIndex += 1) {
-      const generated = buildStructuredQuiz(plan, subject, subjectPeriods, quizIndex);
-      const quizId = id('quiz');
-      const quizRow = {
-        id: quizId,
-        className: plan.class_name,
-        subject,
-        title: generated.title,
-        description: `Auto-generated from lesson plan ${plan.week_label}.`,
-        openDate,
-        dueDate,
-        timeLimit: 10,
-        questionOrder: 'created' as const,
-        teacherId: plan.teacher_id,
-        status: 'draft' as const,
-        createdAt: new Date().toISOString(),
-        lesson_plan_id: planId,
-        auto_generated: true,
-      };
-      const { error: quizErr } = await supabase.from('quizzes').insert(quizRow);
-      if (quizErr) throw quizErr;
-      const quiz = quizRow as Quiz;
-
-      const refs = [];
-      for (let i = 0; i < generated.questions.length; i += 1) {
-        refs.push(await createGeneratedQuestion(plan, quiz.id, generated.questions[i], i));
-      }
-
-      // createQuiz with an empty ref list cannot create junction rows, so insert
-      // snapshots after question creation.
-      const { data: questions, error: qErr } = await supabase.from('questions').select('*').in('id', refs.map((r) => r.questionId));
-      if (qErr) throw qErr;
-      const questionMap = new Map((questions || []).map((q) => [q.id, q]));
-      const junctionRows = refs.map((ref, i) => {
-        const src = questionMap.get(ref.questionId) as any;
-        return {
-          id: id('qq'),
-          quizId: quiz.id,
-          questionId: ref.questionId,
-          orderIndex: i,
-          points: 1,
-          promptSnapshot: src.prompt,
-          optionsSnapshot: src.options,
-          correctAnswerSnapshot: src.correctAnswer,
-          typeSnapshot: src.type,
-        };
-      });
-      const { error: jErr } = await supabase.from('quiz_questions').insert(junctionRows);
-      if (jErr) throw jErr;
-      created.push(quiz);
-    }
+    const generatedQuizzes = await generateWithLLM(plan, subject, subjectPeriods, unitPlans);
+    for (const generated of generatedQuizzes) created.push(await saveGeneratedQuiz(plan, subject, generated));
   }
 
   return created;
@@ -273,20 +183,36 @@ export async function addGeneratedQuizToBank(quizId: string): Promise<'added' | 
     .limit(1);
   if (existing?.length) return 'already_added';
 
-  const rows = questions.map((q) => ({
-    id: id('qbank'),
-    prompt: q.promptSnapshot,
-    type: q.typeSnapshot,
-    options: q.optionsSnapshot ?? null,
-    correctAnswer: q.correctAnswerSnapshot ?? null,
-    rubric: null,
-    teacherId: quiz.teacherId,
-    createdAt: new Date().toISOString(),
-    source_lesson_plan_id: quiz.lesson_plan_id ?? null,
-    source_quiz_id: quizId,
-    source_auto_generated: false,
-  }));
+  const { data: sourceQuestions, error: sourceErr } = await supabase
+    .from('questions')
+    .select('*')
+    .in('id', questions.map((q) => q.questionId));
+  if (sourceErr) throw sourceErr;
+  const sourceMap = new Map((sourceQuestions || []).map((q: any) => [q.id, q]));
+
+  const rows = questions.map((q) => {
+    const source = sourceMap.get(q.questionId) as any;
+    return {
+      id: id('qbank'),
+      prompt: q.promptSnapshot,
+      type: q.typeSnapshot,
+      options: q.typeSnapshot === 'multiple_choice' ? (q.optionsSnapshot ?? null) : null,
+      correctAnswer: q.correctAnswerSnapshot ?? null,
+      rubric: q.typeSnapshot === 'direct_answer' ? (source?.rubric || 'Correct response must address the full prompt using accurate lesson vocabulary, a clear method, and evidence from the objective.') : (source?.rubric ?? null),
+      teacherId: quiz.teacherId,
+      createdAt: new Date().toISOString(),
+      source_lesson_plan_id: quiz.lesson_plan_id ?? null,
+      source_quiz_id: quizId,
+      source_subject_id: quiz.subject,
+      source_class_name: quiz.className,
+      source_auto_generated: false,
+    };
+  });
+
   const { error } = await supabase.from('questions').insert(rows);
-  if (error) throw error;
+  if (error) {
+    if ((error as any).code === '23505') return 'already_added';
+    throw error;
+  }
   return 'added';
 }

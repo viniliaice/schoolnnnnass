@@ -91,3 +91,5 @@ CREATE INDEX IF NOT EXISTS idx_questions_source_quiz ON questions(source_quiz_id
 CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_teacher_source_quiz_prompt_bank
   ON questions("teacherId", source_quiz_id, prompt)
   WHERE source_quiz_id IS NOT NULL AND source_auto_generated = false;
+ALTER TABLE questions ADD COLUMN IF NOT EXISTS source_subject_id TEXT REFERENCES subjects(id) ON DELETE SET NULL;
+ALTER TABLE questions ADD COLUMN IF NOT EXISTS source_class_name TEXT;

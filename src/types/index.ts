@@ -394,6 +394,8 @@ export interface Question {
   createdAt: string;
   source_lesson_plan_id?: string | null;
   source_quiz_id?: string | null;
+  source_subject_id?: string | null;
+  source_class_name?: string | null;
   source_auto_generated?: boolean | null;
 }
 
