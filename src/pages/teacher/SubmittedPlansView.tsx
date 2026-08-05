@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { useTeacherPlans, usePlanWithPeriods } from '../../lib/hooks/useLessonPlans';
+import { useTeacherPlans, usePlanWithPeriods, usePeriodAiReviews } from '../../lib/hooks/useLessonPlans';
 import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
 import { LessonPlanPeriod, PlanStatus, Subject, DAYS_OF_WEEK, isPlanEditable } from '../../types';
 import {
@@ -215,6 +215,7 @@ function PlanDetail({
   onEditPlan?: (planId: string) => void;
 }) {
   const { data, isLoading } = usePlanWithPeriods(planId);
+  const { data: periodAiReviews = [] } = usePeriodAiReviews(planId);
   const { data: unitPlans = [] } = useUnitPlansByClass(data?.plan.class_name ?? null);
 
   if (isLoading || !data) {
@@ -251,7 +252,7 @@ function PlanDetail({
             </button>
           )}
           <ExportLessonPlanPdfButton
-            document={<LessonPlanPdfDocument plan={plan} periods={periods} unitPlans={unitPlans} subjects={subjects} />}
+            document={<LessonPlanPdfDocument plan={plan} periods={periods} unitPlans={unitPlans} subjects={subjects} periodAiReviews={periodAiReviews} />}
             fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
             className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
           />

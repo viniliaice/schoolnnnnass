@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  useSupervisorPlans, usePlanWithPeriods, useReview,
-  useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout,
+  useSupervisorPlans, usePlanWithPeriods, useReview, usePeriodAiReviews, useLessonPlanQuizPreviews,
+  useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout, useRegeneratePeriodAiReviews,
 } from '../../lib/hooks/useLessonPlans';
 import { LessonPlanPeriod, PlanStatus } from '../../types';
-import { ClipboardCheck, ChevronRight, Filter, AlertTriangle, Loader2, Unlock, CalendarRange } from 'lucide-react';
+import { ClipboardCheck, ChevronRight, Filter, AlertTriangle, Loader2, Unlock, CalendarRange, RotateCcw, HelpCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
 import { ExportLessonPlanPdfButton } from '../../components/lesson-planner/ExportLessonPlanPdfButton';
@@ -44,16 +44,20 @@ export function LessonPlanReview() {
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | PlanStatus>('all');
+  const [quizzesOpen, setQuizzesOpen] = useState(false);
 
   const { data: plans } = useSupervisorPlans();
   const { data: planWithPeriods } = usePlanWithPeriods(selectedPlanId || undefined);
   const { data: review } = useReview(selectedPlanId || undefined);
+  const { data: periodAiReviews = [] } = usePeriodAiReviews(selectedPlanId || undefined);
+  const { data: quizPreviews = [] } = useLessonPlanQuizPreviews(selectedPlanId || undefined);
   // Guarantees a stuck plan flips to ai_failed instead of waiting forever (#4).
   useAiReviewTimeout(planWithPeriods?.plan);
   const approveMut = useApprovePlan();
   const rejectMut = useRejectPlan();
   const retryMut = useRetryAIReview();
   const revisionMut = useRequestRevision();
+  const regeneratePeriodReviewMut = useRegeneratePeriodAiReviews();
   const [yearStart, setYearStart] = useState<string | null>(null);
   const plan = planWithPeriods?.plan;
   const { data: unitPlans = [] } = useUnitPlansByClass(plan?.class_name ?? null);
@@ -109,6 +113,21 @@ export function LessonPlanReview() {
     if (!selectedPlanId || !planWithPeriods) return;
     await retryMut.mutateAsync({ planId: selectedPlanId, periods: retryPeriods });
   }, [planWithPeriods, retryMut, retryPeriods, selectedPlanId]);
+
+  const handleRegeneratePeriodReview = useCallback(async () => {
+    if (!selectedPlanId) return;
+    await regeneratePeriodReviewMut.mutateAsync(selectedPlanId);
+  }, [regeneratePeriodReviewMut, selectedPlanId]);
+
+  const handleAddCommentLine = useCallback((line: string) => {
+    const clean = line.trim();
+    if (!clean) return;
+    setComment((current) => {
+      const lines = current.split('\n').map((entry) => entry.trim()).filter(Boolean);
+      if (lines.includes(clean)) return current;
+      return current.trim() ? `${current.trim()}\n${clean}` : clean;
+    });
+  }, []);
 
   const pending = approveMut.isPending || rejectMut.isPending || revisionMut.isPending;
   const aiFailed = plan?.status === 'ai_failed';
@@ -219,8 +238,17 @@ export function LessonPlanReview() {
                     <span className={cn('w-fit rounded-full px-3 py-1.5 text-xs font-semibold', STATUS_CHIP[plan.status])}>
                       {plan.status === 'ai_failed' ? 'AI failed' : plan.status.replace('_', ' ')}
                     </span>
+                    <button
+                      type="button"
+                      onClick={handleRegeneratePeriodReview}
+                      disabled={regeneratePeriodReviewMut.isPending}
+                      className="no-print flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
+                    >
+                      {regeneratePeriodReviewMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                      {regeneratePeriodReviewMut.isPending ? 'Regenerating…' : 'Regenerate AI Review'}
+                    </button>
                     <ExportLessonPlanPdfButton
-                      document={<LessonPlanPdfDocument plan={plan} periods={planWithPeriods.periods} review={review} unitPlans={unitPlans} subjects={subjects} />}
+                      document={<LessonPlanPdfDocument plan={plan} periods={planWithPeriods.periods} review={review} unitPlans={unitPlans} subjects={subjects} periodAiReviews={periodAiReviews} />}
                       fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
                       className="no-print flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-semibold text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
                     />
@@ -228,13 +256,48 @@ export function LessonPlanReview() {
                 </div>
               </div>
 
+              <section className="no-print overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+                <button
+                  type="button"
+                  onClick={() => setQuizzesOpen(open => !open)}
+                  className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left transition hover:bg-slate-50"
+                >
+                  <span className="flex items-center gap-2 font-bold text-slate-900">
+                    <HelpCircle className="h-5 w-5 text-indigo-600" /> Quizzes ({quizPreviews.length})
+                  </span>
+                  <ChevronRight className={cn('h-4 w-4 text-slate-400 transition-transform', quizzesOpen && 'rotate-90')} />
+                </button>
+                {quizzesOpen && (
+                  <div className="space-y-3 border-t border-slate-100 p-5">
+                    {quizPreviews.length === 0 ? (
+                      <p className="text-sm text-slate-500">No auto-generated quizzes saved for this lesson plan yet.</p>
+                    ) : quizPreviews.map(({ quiz, questions }) => (
+                      <details key={quiz.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                        <summary className="cursor-pointer text-sm font-bold text-slate-800">
+                          {quiz.title} · {questions.length} questions
+                        </summary>
+                        <ol className="mt-3 space-y-2 text-sm text-slate-700">
+                          {questions.map((question, index) => (
+                            <li key={question.id} className="rounded-lg bg-white p-3">
+                              <span className="font-bold">{index + 1}.</span> {question.promptSnapshot}
+                            </li>
+                          ))}
+                        </ol>
+                      </details>
+                    ))}
+                  </div>
+                )}
+              </section>
+
               <PlanReadView
                 periods={readPeriods}
                 periodCount={plan.period_count}
                 planClassName={plan.class_name}
                 subjects={subjects}
                 unitPlans={unitPlans}
+                periodAiReviews={periodAiReviews}
                 showAiReview
+                onAddCommentLine={handleAddCommentLine}
                 collapsible
                 defaultCollapsed
               />

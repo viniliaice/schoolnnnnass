@@ -1,6 +1,6 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
-import { DAYS_OF_WEEK, LessonPlan, LessonPlanPeriod, AIReview, PeriodActivity, UnitPlan, Subject } from '../../types';
-import { reviewPeriodInstruction, summarizeDay } from '../../lib/lessonPlanReview';
+import { DAYS_OF_WEEK, LessonPlan, LessonPlanPeriod, AIReview, PeriodActivity, UnitPlan, Subject, LessonPeriodAIReview } from '../../types';
+import { summarizeDay } from '../../lib/lessonPlanReview';
 
 const INK = '#0f172a';
 const MUTED = '#64748b';
@@ -13,6 +13,28 @@ const BLUE_DARK = '#1e3a8a';
 // "Unknown font format" crashes in PDF export. If a custom font is added later,
 // register a local .ttf only and keep this built-in fallback.
 const FONT_FAMILY = 'Helvetica';
+
+function assertFinitePdfNumber(label: string, value: unknown) {
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new Error(`${label} is not finite: ${String(value)}`);
+  }
+  if (typeof value === 'number' && Math.abs(value) > 10_000) {
+    throw new Error(`${label} is suspiciously large: ${value}`);
+  }
+  if (typeof value === 'string' && /%$/.test(value.trim())) {
+    throw new Error(`${label} uses an unsafe percentage value: ${value}`);
+  }
+}
+
+function safeWidth(label: string, value: number, min = 0, max = 430): number {
+  try {
+    assertFinitePdfNumber(label, value);
+    return Math.max(min, Math.min(max, value));
+  } catch (err) {
+    console.error('[LessonPlanPdf] invalid dynamic width', { label, value, err });
+    return min;
+  }
+}
 
 const styles = StyleSheet.create({
   page: {
@@ -142,27 +164,52 @@ const styles = StyleSheet.create({
   improvementText: { fontSize: 9, color: '#92400e', marginTop: 2, lineHeight: 1.4 },
 });
 
+function auditLessonPlanPdfStyles() {
+  try {
+    Object.entries(styles).forEach(([styleName, styleValue]) => {
+      Object.entries(styleValue as Record<string, unknown>).forEach(([key, value]) => {
+        if (key === 'gap') throw new Error(`${styleName}.${key}: gap is not allowed in LessonPlanPdfDocument`);
+        assertFinitePdfNumber(`${styleName}.${key}`, value);
+      });
+    });
+  } catch (err) {
+    console.error('[LessonPlanPdf] unsafe static style value', err);
+    throw err;
+  }
+}
+
+auditLessonPlanPdfStyles();
+
 interface LessonPlanPdfDocumentProps {
   plan: LessonPlan;
   periods: LessonPlanPeriod[];
   review?: AIReview | null;
   unitPlans?: UnitPlan[];
   subjects?: Subject[];
+  periodAiReviews?: LessonPeriodAIReview[];
 }
 
 function formatStatus(status: string): string {
   return status.replace(/_/g, ' ');
 }
 
-function alignmentStyle(status: string) {
-  if (status === 'full') return [styles.coachBox, styles.coachFull];
-  if (status === 'partial') return [styles.coachBox, styles.coachPartial];
-  if (status === 'none') return [styles.coachBox, styles.coachNone];
+function alignmentStyle(status: LessonPeriodAIReview['alignment_status'] | undefined) {
+  if (status === 'fully_aligned') return [styles.coachBox, styles.coachFull];
+  if (status === 'partially_aligned') return [styles.coachBox, styles.coachPartial];
+  if (status === 'not_aligned') return [styles.coachBox, styles.coachNone];
   return [styles.coachBox, styles.coachUnknown];
 }
 
-function pdfAlignmentLabel(label: string): string {
-  return label.replace(/[✅⚠️❌]/g, '').trim();
+function pdfAlignmentLabel(status: LessonPeriodAIReview['alignment_status'] | undefined): string {
+  if (status === 'fully_aligned') return 'Fully Aligned';
+  if (status === 'partially_aligned') return 'Partially Aligned';
+  if (status === 'not_aligned') return 'Not Aligned';
+  return 'AI Review Pending';
+}
+
+const DAY_ORDER: Record<string, number> = { Saturday: 1, Sunday: 2, Monday: 3, Tuesday: 4, Wednesday: 5, Thursday: 6, Friday: 7 };
+function reviewOrder(period: Pick<LessonPlanPeriod, 'day' | 'period_number'>): number {
+  return (DAY_ORDER[period.day] ?? 99) * 10 + period.period_number;
 }
 
 function inferSubjectFromUnitName(value: string): string | null {
@@ -193,9 +240,8 @@ function activityLines(period: LessonPlanPeriod): string[] {
   return period.activities ? [period.activities] : [];
 }
 
-function PeriodBlock({ period, unitPlans, subjects }: { period: LessonPlanPeriod; unitPlans: UnitPlan[]; subjects?: Subject[] }) {
+function PeriodBlock({ period, unitPlans, subjects, periodReview }: { period: LessonPlanPeriod; unitPlans: UnitPlan[]; subjects?: Subject[]; periodReview?: LessonPeriodAIReview }) {
   const isFree = !!period.is_free || period.subject === '__FREE__';
-  const coach = reviewPeriodInstruction(period, unitPlans);
   const activities = activityLines(period);
 
   return (
@@ -229,17 +275,17 @@ function PeriodBlock({ period, unitPlans, subjects }: { period: LessonPlanPeriod
 
       {isFree && <Text style={styles.freeText}>No instructional activities scheduled.</Text>}
 
-      <View style={alignmentStyle(coach.alignmentStatus)}>
-        <Text style={styles.coachTitle}>AI Review: {pdfAlignmentLabel(coach.alignmentLabel)}</Text>
-        <Text style={styles.coachBody}>{coach.aiReview}</Text>
-        <Text style={styles.coachReason}>{coach.alignmentReason}</Text>
-        {coach.alignmentStatus !== 'full' && coach.alignmentStatus !== 'unknown' && (
-          <Text style={styles.coachGap}>Alignment gap: {coach.alignmentGap}</Text>
+      <View style={alignmentStyle(periodReview?.alignment_status)}>
+        <Text style={styles.coachTitle}>AI Review: {pdfAlignmentLabel(periodReview?.alignment_status)}</Text>
+        <Text style={styles.coachBody}>{periodReview?.review_text || 'No saved period AI review yet. Supervisors can regenerate the AI review for this plan.'}</Text>
+        {periodReview?.alignment_reason && <Text style={styles.coachReason}>{periodReview.alignment_reason}</Text>}
+        {periodReview?.alignment_status !== 'fully_aligned' && periodReview?.alignment_gap && (
+          <Text style={styles.coachGap}>Alignment gap: {periodReview.alignment_gap}</Text>
         )}
-        {coach.suggestedActivities.length > 0 && (
+        {!!periodReview?.suggested_activities?.length && (
           <View style={styles.suggestionBox}>
             <Text style={styles.suggestionTitle}>Suggested Activities</Text>
-            {coach.suggestedActivities.map((activity, index) => (
+            {periodReview.suggested_activities.map((activity, index) => (
               <Text key={activity} style={styles.suggestionItem}>{index + 1}. {activity}</Text>
             ))}
           </View>
@@ -249,7 +295,7 @@ function PeriodBlock({ period, unitPlans, subjects }: { period: LessonPlanPeriod
   );
 }
 
-function DaySection({ day, periods, periodCount, unitPlans, subjects }: { day: string; periods: LessonPlanPeriod[]; periodCount: number; unitPlans: UnitPlan[]; subjects?: Subject[] }) {
+function DaySection({ day, periods, periodCount, unitPlans, subjects, periodAiReviews }: { day: string; periods: LessonPlanPeriod[]; periodCount: number; unitPlans: UnitPlan[]; subjects?: Subject[]; periodAiReviews: LessonPeriodAIReview[] }) {
   const dayPeriods = Array.from({ length: periodCount }, (_, pi) =>
     periods.find((p) => p.day === day && p.period_number === pi + 1) ?? ({
       id: `${day}-${pi + 1}-missing`,
@@ -284,15 +330,23 @@ function DaySection({ day, periods, periodCount, unitPlans, subjects }: { day: s
           <Text style={styles.statPill}>{summary.total} total periods</Text>
         </View>
         <View style={styles.progressTrack}>
-          <View style={[styles.progressFill, { width: Math.max(1, Math.min(430, summary.percent * 4.3)) }]} />
+          <View style={[styles.progressFill, { width: safeWidth(`${day}.progressWidth`, summary.percent * 4.3, 1, 430) }]} />
         </View>
       </View>
-      {dayPeriods.map((period) => <PeriodBlock key={`${period.day}-${period.period_number}`} period={period} unitPlans={unitPlans} subjects={subjects} />)}
+      {dayPeriods.map((period) => (
+        <PeriodBlock
+          key={`${period.day}-${period.period_number}`}
+          period={period}
+          unitPlans={unitPlans}
+          subjects={subjects}
+          periodReview={periodAiReviews.find((review) => review.period_order === reviewOrder(period))}
+        />
+      ))}
     </View>
   );
 }
 
-export function LessonPlanPdfDocument({ plan, periods, review, unitPlans = [], subjects }: LessonPlanPdfDocumentProps) {
+export function LessonPlanPdfDocument({ plan, periods, review, unitPlans = [], subjects, periodAiReviews = [] }: LessonPlanPdfDocumentProps) {
   return (
     <Document title={`${plan.title} — ${plan.class_name} ${plan.week_label}`}>
       <Page size="A4" style={styles.page} wrap>
@@ -319,7 +373,7 @@ export function LessonPlanPdfDocument({ plan, periods, review, unitPlans = [], s
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Weekly Lesson Plan</Text>
           {DAYS_OF_WEEK.map((day) => (
-            <DaySection key={day} day={day} periods={periods} periodCount={plan.period_count} unitPlans={unitPlans} subjects={subjects} />
+            <DaySection key={day} day={day} periods={periods} periodCount={plan.period_count} unitPlans={unitPlans} subjects={subjects} periodAiReviews={periodAiReviews} />
           ))}
         </View>
 

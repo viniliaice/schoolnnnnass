@@ -19,6 +19,8 @@ import {
   fetchAiReviewLogs,
   AI_REVIEW_TIMEOUT_MINUTES,
 } from '../db/lessonPlans';
+import { fetchPeriodAiReviews, regeneratePeriodAiReviews } from '../db/lessonPeriodAiReviews';
+import { fetchLessonPlanQuizPreviews } from '../db/lessonPlanQuizzes';
 import { supabase } from '../supabase';
 import type { LessonPlan, LessonPlanPeriod, PeriodActivity, AIReview, DayOfWeek, ReviewResponse, SavePeriodsPayload } from '../../types';
 
@@ -250,6 +252,55 @@ export function useReview(planId: string | undefined) {
   });
 }
 
+// ─── Per-period AI reviews ────────────────────────────────────────
+export function usePeriodAiReviews(planId: string | undefined) {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    if (!planId) return;
+    const channel = supabase
+      .channel(`lesson-period-ai-reviews:${planId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'lesson_period_ai_reviews', filter: `plan_id=eq.${planId}` },
+        () => qc.invalidateQueries({ queryKey: ['lessonPeriodAiReviews', planId] })
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [planId, qc]);
+
+  return useQuery({
+    queryKey: ['lessonPeriodAiReviews', planId],
+    queryFn: () => fetchPeriodAiReviews(planId!),
+    enabled: !!planId,
+    staleTime: Infinity,
+    gcTime: 1000 * 60 * 10,
+  });
+}
+
+export function useRegeneratePeriodAiReviews() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (planId: string) => regeneratePeriodAiReviews(planId),
+    onSuccess: (_data, planId) => {
+      qc.invalidateQueries({ queryKey: ['lessonPeriodAiReviews', planId] });
+    },
+  });
+}
+
+// ─── Auto-generated lesson quizzes ───────────────────────────────
+export function useLessonPlanQuizPreviews(planId: string | undefined) {
+  return useQuery({
+    queryKey: ['lessonPlanQuizzes', planId],
+    queryFn: () => fetchLessonPlanQuizPreviews(planId!),
+    enabled: !!planId,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 10,
+  });
+}
+
 // ─── Mutations ────────────────────────────────────────────────────
 
 export function useCreatePlan() {
@@ -297,6 +348,8 @@ export function useSubmitForReview() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['aiReview', data.plan_id] });
+      qc.invalidateQueries({ queryKey: ['lessonPeriodAiReviews', data.plan_id] });
+      qc.invalidateQueries({ queryKey: ['lessonPlanQuizzes', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['lessonPlans'] });
     },
   });
@@ -367,6 +420,8 @@ export function useRetryAIReview() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['aiReview', data.plan_id] });
+      qc.invalidateQueries({ queryKey: ['lessonPeriodAiReviews', data.plan_id] });
+      qc.invalidateQueries({ queryKey: ['lessonPlanQuizzes', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['lessonPlans'] });
     },
   });

@@ -1,8 +1,8 @@
 import { useState } from 'react';
-import { DayOfWeek, DAYS_OF_WEEK, PeriodActivity, Subject, UnitPlan, LessonPlanPeriod } from '../../types';
+import { DayOfWeek, DAYS_OF_WEEK, PeriodActivity, Subject, UnitPlan, LessonPeriodAIReview } from '../../types';
 import { cn } from '../../utils/cn';
-import { ChevronDown } from 'lucide-react';
-import { reviewPeriodInstruction, summarizeDay } from '../../lib/lessonPlanReview';
+import { ChevronDown, Plus } from 'lucide-react';
+import { summarizeDay } from '../../lib/lessonPlanReview';
 
 export interface ReadPeriod {
   day: DayOfWeek;
@@ -23,7 +23,9 @@ interface PlanReadViewProps {
   planClassName: string;
   weekDates?: string[];
   unitPlans?: UnitPlan[];
+  periodAiReviews?: LessonPeriodAIReview[];
   showAiReview?: boolean;
+  onAddCommentLine?: (line: string) => void;
   /** When true, each day section is an accordion panel — collapsed by default. */
   collapsible?: boolean;
   /** Used only when collapsible is true. Defaults to true. */
@@ -50,57 +52,76 @@ function subjectName(subjects: Subject[] | undefined, value: string, unitPlans: 
   return value.startsWith('subject-') ? 'Subject' : value;
 }
 
-function toLessonPeriod(period: ReadPeriod): LessonPlanPeriod {
-  return {
-    id: `${period.day}-${period.period_number}`,
-    plan_id: '',
-    day: period.day,
-    period_number: period.period_number,
-    subject: period.subject,
-    class_name: period.className,
-    is_free: period.isFree,
-    topic: period.topic,
-    objective: period.objective,
-    activities: period.details.map((detail) => detail.activity).join('\n'),
-    slide_number: period.slide_number,
-    details: period.details,
-    sort_order: period.period_number,
-    created_at: '',
-    updated_at: '',
-  };
+const DAY_ORDER: Record<string, number> = { Saturday: 1, Sunday: 2, Monday: 3, Tuesday: 4, Wednesday: 5, Thursday: 6, Friday: 7 };
+
+function reviewOrder(period: Pick<ReadPeriod, 'day' | 'period_number'>): number {
+  return (DAY_ORDER[period.day] ?? 99) * 10 + period.period_number;
 }
 
-function AiReviewBox({ period, unitPlans }: { period: ReadPeriod; unitPlans: UnitPlan[] }) {
-  const review = reviewPeriodInstruction(toLessonPeriod(period), unitPlans);
-  const tone = review.alignmentStatus === 'full'
+function alignmentLabel(status: LessonPeriodAIReview['alignment_status']): string {
+  if (status === 'fully_aligned') return '✅ Fully Aligned';
+  if (status === 'partially_aligned') return '⚠️ Partially Aligned';
+  return '❌ Not Aligned';
+}
+
+function AddLineButton({ line, onAdd }: { line: string; onAdd?: (line: string) => void }) {
+  if (!onAdd) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => onAdd(line)}
+      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/90 text-slate-600 shadow-sm transition hover:bg-indigo-600 hover:text-white"
+      title="Add to supervisor comment"
+      aria-label="Add this line to supervisor comment"
+    >
+      <Plus className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
+function AiReviewBox({ review, onAddCommentLine }: { review?: LessonPeriodAIReview; onAddCommentLine?: (line: string) => void }) {
+  if (!review) {
+    return (
+      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+        No saved period AI review yet. Supervisors can use Regenerate AI Review to create it.
+      </div>
+    );
+  }
+
+  const tone = review.alignment_status === 'fully_aligned'
     ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-    : review.alignmentStatus === 'partial'
+    : review.alignment_status === 'partially_aligned'
       ? 'border-amber-200 bg-amber-50 text-amber-800'
-      : review.alignmentStatus === 'none'
-        ? 'border-rose-200 bg-rose-50 text-rose-800'
-        : 'border-slate-200 bg-slate-50 text-slate-600';
+      : 'border-rose-200 bg-rose-50 text-rose-800';
+
+  const suggestions = review.suggested_activities ?? [];
 
   return (
     <div className={cn('mt-3 rounded-xl border p-3', tone)}>
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <span className="text-xs font-bold uppercase tracking-wide">AI Review</span>
-        <span className="rounded-full bg-white/80 px-2 py-0.5 text-xs font-bold shadow-sm">{review.alignmentLabel}</span>
+        <span className="rounded-full bg-white/80 px-2 py-0.5 text-xs font-bold shadow-sm">{alignmentLabel(review.alignment_status)}</span>
       </div>
-      <p className="text-sm leading-6">{review.aiReview}</p>
-      <p className="mt-1 text-xs leading-5 opacity-80">{review.alignmentReason}</p>
-      {review.alignmentStatus !== 'full' && review.alignmentStatus !== 'unknown' && (
-        <p className="mt-2 rounded-lg bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-slate-700 shadow-sm">
-          Alignment gap: {review.alignmentGap}
-        </p>
+      <div className="flex items-start gap-2">
+        <p className="flex-1 text-sm leading-6">{review.review_text}</p>
+        <AddLineButton line={review.review_text} onAdd={onAddCommentLine} />
+      </div>
+      {review.alignment_reason && <p className="mt-1 text-xs leading-5 opacity-80">{review.alignment_reason}</p>}
+      {review.alignment_status !== 'fully_aligned' && review.alignment_gap && (
+        <div className="mt-2 flex items-start gap-2 rounded-lg bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-slate-700 shadow-sm">
+          <p className="flex-1">Alignment gap: {review.alignment_gap}</p>
+          <AddLineButton line={`Alignment gap: ${review.alignment_gap}`} onAdd={onAddCommentLine} />
+        </div>
       )}
-      {review.suggestedActivities.length > 0 && (
+      {suggestions.length > 0 && (
         <div className="mt-3 rounded-lg bg-white/75 p-3 text-slate-800 shadow-sm">
           <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-600">Suggested Activities</p>
           <ol className="list-none space-y-1.5 text-sm leading-6">
-            {review.suggestedActivities.map((activity, index) => (
+            {suggestions.map((activity, index) => (
               <li key={activity} className="flex gap-2">
                 <span className="font-bold text-slate-500">{index + 1}.</span>
-                <span>{activity}</span>
+                <span className="flex-1">{activity}</span>
+                <AddLineButton line={activity} onAdd={onAddCommentLine} />
               </li>
             ))}
           </ol>
@@ -116,7 +137,7 @@ function AiReviewBox({ period, unitPlans }: { period: ReadPeriod; unitPlans: Uni
  * than the compact editing grid) and it flows well onto a PDF page.
  */
 export function PlanReadView({
-  periods, periodCount, subjects, planClassName, weekDates, unitPlans = [], showAiReview = false,
+  periods, periodCount, subjects, planClassName, weekDates, unitPlans = [], periodAiReviews = [], showAiReview = false, onAddCommentLine,
   collapsible = false, defaultCollapsed = true,
 }: PlanReadViewProps) {
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
@@ -252,7 +273,12 @@ export function PlanReadView({
                             </ol>
                           )}
 
-                          {showAiReview && <AiReviewBox period={cell!} unitPlans={unitPlans} />}
+                          {showAiReview && (
+                            <AiReviewBox
+                              review={periodAiReviews.find((review) => review.period_order === reviewOrder(cell!))}
+                              onAddCommentLine={onAddCommentLine}
+                            />
+                          )}
                         </div>
                       )}
                     </div>

@@ -1,4 +1,4 @@
-import { useCallback, useState, type ReactElement } from 'react';
+import { Children, isValidElement, useCallback, useState, type ReactElement, type ReactNode } from 'react';
 import { pdf } from '@react-pdf/renderer';
 import { Download, Loader2, AlertTriangle } from 'lucide-react';
 
@@ -20,6 +20,47 @@ function downloadBlob(blob: Blob, fileName: string) {
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+function styleEntries(style: unknown): Array<Record<string, unknown>> {
+  if (!style) return [];
+  if (Array.isArray(style)) return style.flatMap(styleEntries);
+  if (typeof style === 'object') return [style as Record<string, unknown>];
+  return [];
+}
+
+function assertSafePdfStyleValue(path: string, key: string, value: unknown) {
+  if (key === 'gap') {
+    throw new Error(`${path}.${key}: react-pdf gap is not supported in this document; use margins instead.`);
+  }
+  if (typeof value === 'number' && !Number.isFinite(value)) {
+    throw new Error(`${path}.${key}: non-finite number ${String(value)}`);
+  }
+  if (typeof value === 'number' && Math.abs(value) > 10_000) {
+    throw new Error(`${path}.${key}: suspiciously large number ${value}`);
+  }
+  if (typeof value === 'string' && /%$/.test(value.trim())) {
+    throw new Error(`${path}.${key}: percentage value "${value}" is unsafe in LessonPlanPdfDocument; use bounded points.`);
+  }
+}
+
+function validatePdfRenderTree(node: ReactNode, path = 'Document') {
+  Children.toArray(node).forEach((child, index) => {
+    if (!isValidElement(child)) return;
+    const typeName = typeof child.type === 'string'
+      ? child.type
+      : ((child.type as { displayName?: string; name?: string }).displayName || (child.type as { name?: string }).name || 'Anonymous');
+    const childPath = `${path}/${typeName}[${index}]`;
+    const props = child.props as { style?: unknown; children?: ReactNode };
+
+    styleEntries(props.style).forEach((style, styleIndex) => {
+      Object.entries(style).forEach(([key, value]) => {
+        assertSafePdfStyleValue(`${childPath}.style[${styleIndex}]`, key, value);
+      });
+    });
+
+    validatePdfRenderTree(props.children, childPath);
+  });
+}
+
 export function ExportLessonPlanPdfButton({ document, fileName, className }: ExportLessonPlanPdfButtonProps) {
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,6 +73,14 @@ export function ExportLessonPlanPdfButton({ document, fileName, className }: Exp
     try {
       // Yield one frame so the loading state paints before heavy PDF layout work starts.
       await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+      try {
+        validatePdfRenderTree(document);
+      } catch (treeError) {
+        console.error('[LessonPlanPdf] unsafe render tree value before PDF layout:', treeError);
+        throw treeError;
+      }
+
       const blob = await pdf(document as Parameters<typeof pdf>[0]).toBlob();
       downloadBlob(blob, fileName);
     } catch (err) {
