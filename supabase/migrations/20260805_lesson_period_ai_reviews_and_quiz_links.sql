@@ -82,3 +82,12 @@ CREATE POLICY "supervisor_manage_period_ai_reviews" ON lesson_period_ai_reviews
 ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS lesson_plan_id TEXT REFERENCES lesson_plans(id) ON DELETE SET NULL;
 ALTER TABLE quizzes ADD COLUMN IF NOT EXISTS auto_generated BOOLEAN NOT NULL DEFAULT false;
 CREATE INDEX IF NOT EXISTS idx_quizzes_lesson_plan ON quizzes(lesson_plan_id);
+
+-- Source tracking for generated questions and idempotent "Add to Quiz Bank".
+ALTER TABLE questions ADD COLUMN IF NOT EXISTS source_lesson_plan_id TEXT REFERENCES lesson_plans(id) ON DELETE SET NULL;
+ALTER TABLE questions ADD COLUMN IF NOT EXISTS source_quiz_id TEXT REFERENCES quizzes(id) ON DELETE SET NULL;
+ALTER TABLE questions ADD COLUMN IF NOT EXISTS source_auto_generated BOOLEAN NOT NULL DEFAULT false;
+CREATE INDEX IF NOT EXISTS idx_questions_source_quiz ON questions(source_quiz_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_teacher_source_quiz_prompt_bank
+  ON questions("teacherId", source_quiz_id, prompt)
+  WHERE source_quiz_id IS NOT NULL AND source_auto_generated = false;

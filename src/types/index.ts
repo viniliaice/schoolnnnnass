@@ -392,6 +392,9 @@ export interface Question {
   rubric?: string | null;
   teacherId: string;
   createdAt: string;
+  source_lesson_plan_id?: string | null;
+  source_quiz_id?: string | null;
+  source_auto_generated?: boolean | null;
 }
 
 export interface Quiz {

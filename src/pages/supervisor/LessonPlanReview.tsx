@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   useSupervisorPlans, usePlanWithPeriods, useReview, usePeriodAiReviews, useLessonPlanQuizPreviews,
-  useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout, useRegeneratePeriodAiReviews, useGenerateLessonPlanQuizzes,
+  useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout, useRegeneratePeriodAiReviews, useGenerateLessonPlanQuizzes, useAddGeneratedQuizToBank,
 } from '../../lib/hooks/useLessonPlans';
 import { LessonPlanPeriod, PlanStatus } from '../../types';
 import { ClipboardCheck, ChevronRight, Filter, AlertTriangle, Loader2, Unlock, CalendarRange, RotateCcw, HelpCircle } from 'lucide-react';
@@ -16,6 +16,7 @@ import { describePlanWeek } from '../../utils/weekDates';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
 import { getSubjects } from '../../lib/db/subjects';
 import { useI18n } from '../../lib/i18n/AppLanguageContext';
+import { useToast } from '../../context/ToastContext';
 
 function toReadPeriods(periods: LessonPlanPeriod[]): ReadPeriod[] {
   return periods.map((p) => ({
@@ -47,6 +48,7 @@ export function LessonPlanReview() {
   const [statusFilter, setStatusFilter] = useState<'all' | PlanStatus>('all');
   const [quizzesOpen, setQuizzesOpen] = useState(false);
   const { t } = useI18n();
+  const { addToast } = useToast();
 
   const { data: plans } = useSupervisorPlans();
   const { data: planWithPeriods } = usePlanWithPeriods(selectedPlanId || undefined);
@@ -61,6 +63,7 @@ export function LessonPlanReview() {
   const revisionMut = useRequestRevision();
   const regeneratePeriodReviewMut = useRegeneratePeriodAiReviews();
   const generateQuizzesMut = useGenerateLessonPlanQuizzes();
+  const addQuizToBankMut = useAddGeneratedQuizToBank();
   const [yearStart, setYearStart] = useState<string | null>(null);
   const plan = planWithPeriods?.plan;
   const { data: unitPlans = [] } = useUnitPlansByClass(plan?.class_name ?? null);
@@ -134,6 +137,12 @@ export function LessonPlanReview() {
     await generateQuizzesMut.mutateAsync(selectedPlanId);
     setQuizzesOpen(true);
   }, [generateQuizzesMut, regeneratePeriodReviewMut, selectedPlanId]);
+
+  const handleAddQuizToBank = useCallback(async (quizId: string) => {
+    if (!selectedPlanId) return;
+    const result = await addQuizToBankMut.mutateAsync({ quizId, planId: selectedPlanId });
+    addToast({ type: 'success', title: result === 'already_added' ? 'Already added to quiz bank' : 'Added to quiz bank' });
+  }, [addQuizToBankMut, addToast, selectedPlanId]);
 
   const handleAddCommentLine = useCallback((line: string) => {
     const clean = line.trim();
@@ -309,15 +318,34 @@ export function LessonPlanReview() {
                           {generateQuizzesMut.isPending ? t('lessonReview.generatingQuizzes') : t('lessonReview.generateQuizzes')}
                         </button>
                       </div>
-                    ) : quizPreviews.map(({ quiz, questions }) => (
+                    ) : quizPreviews.map(({ quiz, questions, addedToBank }) => (
                       <details key={quiz.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                         <summary className="cursor-pointer text-sm font-bold text-slate-800">
                           {quiz.title} · {questions.length} questions
                         </summary>
+                        <div className="mt-3 flex justify-end">
+                          <button
+                            type="button"
+                            onClick={() => handleAddQuizToBank(quiz.id)}
+                            disabled={addedToBank || addQuizToBankMut.isPending}
+                            className="rounded-xl bg-emerald-600 px-4 py-2 text-xs font-bold text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+                          >
+                            {addedToBank ? 'Added' : addQuizToBankMut.isPending ? 'Adding…' : 'Add to Quiz Bank'}
+                          </button>
+                        </div>
                         <ol className="mt-3 space-y-2 text-sm text-slate-700">
                           {questions.map((question, index) => (
                             <li key={question.id} className="rounded-lg bg-white p-3">
-                              <span className="font-bold">{index + 1}.</span> {question.promptSnapshot}
+                              <p><span className="font-bold">{index + 1}.</span> {question.promptSnapshot}</p>
+                              {question.optionsSnapshot?.length ? (
+                                <ul className="mt-2 grid gap-1 text-xs text-slate-600 sm:grid-cols-2">
+                                  {question.optionsSnapshot.map((option) => (
+                                    <li key={option.label} className={cn('rounded-md border px-2 py-1', question.correctAnswerSnapshot === option.label ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-slate-200 bg-slate-50')}>
+                                      <span className="font-bold">{option.label}.</span> {option.text}
+                                    </li>
+                                  ))}
+                                </ul>
+                              ) : null}
                             </li>
                           ))}
                         </ol>
