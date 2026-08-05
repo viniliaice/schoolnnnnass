@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   useSupervisorPlans, usePlanWithPeriods, useReview, usePeriodAiReviews, useLessonPlanQuizPreviews,
-  useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout, useRegeneratePeriodAiReviews,
+  useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout, useRegeneratePeriodAiReviews, useGenerateLessonPlanQuizzes,
 } from '../../lib/hooks/useLessonPlans';
 import { LessonPlanPeriod, PlanStatus } from '../../types';
 import { ClipboardCheck, ChevronRight, Filter, AlertTriangle, Loader2, Unlock, CalendarRange, RotateCcw, HelpCircle } from 'lucide-react';
@@ -60,6 +60,7 @@ export function LessonPlanReview() {
   const retryMut = useRetryAIReview();
   const revisionMut = useRequestRevision();
   const regeneratePeriodReviewMut = useRegeneratePeriodAiReviews();
+  const generateQuizzesMut = useGenerateLessonPlanQuizzes();
   const [yearStart, setYearStart] = useState<string | null>(null);
   const plan = planWithPeriods?.plan;
   const { data: unitPlans = [] } = useUnitPlansByClass(plan?.class_name ?? null);
@@ -120,6 +121,19 @@ export function LessonPlanReview() {
     if (!selectedPlanId) return;
     await regeneratePeriodReviewMut.mutateAsync(selectedPlanId);
   }, [regeneratePeriodReviewMut, selectedPlanId]);
+
+  const handleGenerateQuizzes = useCallback(async () => {
+    if (!selectedPlanId) return;
+    await generateQuizzesMut.mutateAsync(selectedPlanId);
+    setQuizzesOpen(true);
+  }, [generateQuizzesMut, selectedPlanId]);
+
+  const handleGenerateMissingAssets = useCallback(async () => {
+    if (!selectedPlanId) return;
+    await regeneratePeriodReviewMut.mutateAsync(selectedPlanId);
+    await generateQuizzesMut.mutateAsync(selectedPlanId);
+    setQuizzesOpen(true);
+  }, [generateQuizzesMut, regeneratePeriodReviewMut, selectedPlanId]);
 
   const handleAddCommentLine = useCallback((line: string) => {
     const clean = line.trim();
@@ -240,6 +254,17 @@ export function LessonPlanReview() {
                     <span className={cn('w-fit rounded-full px-3 py-1.5 text-xs font-semibold', STATUS_CHIP[plan.status])}>
                       {plan.status === 'ai_failed' ? 'AI failed' : plan.status.replace('_', ' ')}
                     </span>
+                    {(periodAiReviews.length === 0 || quizPreviews.length === 0) && (
+                      <button
+                        type="button"
+                        onClick={handleGenerateMissingAssets}
+                        disabled={regeneratePeriodReviewMut.isPending || generateQuizzesMut.isPending}
+                        className="no-print flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
+                      >
+                        {(regeneratePeriodReviewMut.isPending || generateQuizzesMut.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                        {(regeneratePeriodReviewMut.isPending || generateQuizzesMut.isPending) ? t('lessonReview.generatingNow') : t('lessonReview.generateNow')}
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={handleRegeneratePeriodReview}
@@ -272,7 +297,18 @@ export function LessonPlanReview() {
                 {quizzesOpen && (
                   <div className="space-y-3 border-t border-slate-100 p-5">
                     {quizPreviews.length === 0 ? (
-                      <p className="text-sm text-slate-500">{t('lessonReview.noQuizzes')}</p>
+                      <div className="flex flex-col gap-3 rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-sm text-slate-500">{t('lessonReview.noQuizzes')}</p>
+                        <button
+                          type="button"
+                          onClick={handleGenerateQuizzes}
+                          disabled={generateQuizzesMut.isPending}
+                          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70"
+                        >
+                          {generateQuizzesMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                          {generateQuizzesMut.isPending ? t('lessonReview.generatingQuizzes') : t('lessonReview.generateQuizzes')}
+                        </button>
+                      </div>
                     ) : quizPreviews.map(({ quiz, questions }) => (
                       <details key={quiz.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                         <summary className="cursor-pointer text-sm font-bold text-slate-800">

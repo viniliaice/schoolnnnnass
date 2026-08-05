@@ -20,7 +20,7 @@ import {
   AI_REVIEW_TIMEOUT_MINUTES,
 } from '../db/lessonPlans';
 import { fetchPeriodAiReviews, regeneratePeriodAiReviews } from '../db/lessonPeriodAiReviews';
-import { fetchLessonPlanQuizPreviews } from '../db/lessonPlanQuizzes';
+import { fetchLessonPlanQuizPreviews, generateLessonPlanQuizzes } from '../db/lessonPlanQuizzes';
 import { supabase } from '../supabase';
 import type { LessonPlan, LessonPlanPeriod, PeriodActivity, AIReview, DayOfWeek, ReviewResponse, SavePeriodsPayload } from '../../types';
 
@@ -298,6 +298,16 @@ export function useLessonPlanQuizPreviews(planId: string | undefined) {
     enabled: !!planId,
     staleTime: 1000 * 60 * 5,
     gcTime: 1000 * 60 * 10,
+  });
+}
+
+export function useGenerateLessonPlanQuizzes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (planId: string) => generateLessonPlanQuizzes(planId),
+    onSuccess: (_data, planId) => {
+      qc.invalidateQueries({ queryKey: ['lessonPlanQuizzes', planId] });
+    },
   });
 }
 
