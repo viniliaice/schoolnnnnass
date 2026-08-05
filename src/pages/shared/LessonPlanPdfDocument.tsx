@@ -165,9 +165,24 @@ function pdfAlignmentLabel(label: string): string {
   return label.replace(/[✅⚠️❌]/g, '').trim();
 }
 
-function subjectName(subjects: Subject[] | undefined, value: string | null | undefined): string {
+function inferSubjectFromUnitName(value: string): string | null {
+  const text = value.toLowerCase();
+  if (/math|addition|subtraction|multiplication|division|numeracy/.test(text)) return 'Mathematics';
+  if (/english|literacy|reading|writing|grammar|language/.test(text)) return 'English';
+  if (/science|biology|chemistry|physics|environment/.test(text)) return 'Science';
+  if (/arabic|quran|qur/.test(text)) return 'Arabic';
+  if (/social|history|geography|civic|somali|islamic/.test(text)) return 'Social Studies';
+  return null;
+}
+
+function subjectName(subjects: Subject[] | undefined, value: string | null | undefined, unitPlans: UnitPlan[] = []): string {
   if (!value) return 'Subject —';
-  return subjects?.find((subject) => subject.id === value)?.name || value;
+  const match = subjects?.find((subject) => subject.id === value);
+  if (match) return match.name;
+  const unitMatch = unitPlans.find((unit) => unit.subject_id === value);
+  const inferred = unitMatch ? inferSubjectFromUnitName(`${unitMatch.name} ${unitMatch.objectives}`) : null;
+  if (inferred) return inferred;
+  return value.startsWith('subject-') ? 'Subject' : value;
 }
 
 function activityLines(period: LessonPlanPeriod): string[] {
@@ -193,7 +208,7 @@ function PeriodBlock({ period, unitPlans, subjects }: { period: LessonPlanPeriod
       {!isFree && (
         <>
           <View style={styles.tagRow}>
-            <Text style={styles.tag}>{subjectName(subjects, period.subject)}</Text>
+            <Text style={styles.tag}>{subjectName(subjects, period.subject, unitPlans)}</Text>
             <Text style={styles.tag}>Class {period.class_name || '—'}</Text>
             {period.slide_number && <Text style={styles.tag}>Page {period.slide_number}</Text>}
           </View>

@@ -30,9 +30,24 @@ interface PlanReadViewProps {
   defaultCollapsed?: boolean;
 }
 
-function subjectName(subjects: Subject[] | undefined, value: string): string {
+function inferSubjectFromUnitName(value: string): string | null {
+  const text = value.toLowerCase();
+  if (/math|addition|subtraction|multiplication|division|numeracy/.test(text)) return 'Mathematics';
+  if (/english|literacy|reading|writing|grammar|language/.test(text)) return 'English';
+  if (/science|biology|chemistry|physics|environment/.test(text)) return 'Science';
+  if (/arabic|quran|qur/.test(text)) return 'Arabic';
+  if (/social|history|geography|civic|somali|islamic/.test(text)) return 'Social Studies';
+  return null;
+}
+
+function subjectName(subjects: Subject[] | undefined, value: string, unitPlans: UnitPlan[] = []): string {
   if (!value) return '—';
-  return subjects?.find((s) => s.id === value)?.name || value;
+  const match = subjects?.find((s) => s.id === value);
+  if (match) return match.name;
+  const unitMatch = unitPlans.find((unit) => unit.subject_id === value);
+  const inferred = unitMatch ? inferSubjectFromUnitName(`${unitMatch.name} ${unitMatch.objectives}`) : null;
+  if (inferred) return inferred;
+  return value.startsWith('subject-') ? 'Subject' : value;
 }
 
 function toLessonPeriod(period: ReadPeriod): LessonPlanPeriod {
@@ -189,7 +204,7 @@ export function PlanReadView({
                         <div className="flex-1 min-w-0 space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-semibold">
-                              {subjectName(subjects, cell!.subject)}
+                              {subjectName(subjects, cell!.subject, unitPlans)}
                             </span>
                             <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium">
                               {cell!.className || planClassName || '—'}
