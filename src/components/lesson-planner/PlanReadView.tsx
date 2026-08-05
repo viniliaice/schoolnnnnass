@@ -64,6 +64,12 @@ function alignmentLabel(status: LessonPeriodAIReview['alignment_status']): strin
   return '❌ Not Aligned';
 }
 
+function revisionLabel(status: LessonPeriodAIReview['revision_status'] | undefined): string {
+  if (status === 'included') return 'Revision: ✓ included';
+  if (status === 'missing') return 'Revision: ⚠ missing';
+  return 'Revision: —';
+}
+
 function AddLineButton({ line, onAdd }: { line: string; onAdd?: (line: string) => void }) {
   if (!onAdd) return null;
   return (
@@ -101,12 +107,17 @@ function AiReviewBox({ review, onAddCommentLine }: { review?: LessonPeriodAIRevi
       <div className="mb-1 flex flex-wrap items-center gap-2">
         <span className="text-xs font-bold uppercase tracking-wide">AI Review</span>
         <span className="rounded-full bg-white/80 px-2 py-0.5 text-xs font-bold shadow-sm">{alignmentLabel(review.alignment_status)}</span>
+        <span className={cn(
+          'rounded-full bg-white/80 px-2 py-0.5 text-xs font-bold shadow-sm',
+          review.revision_status === 'missing' ? 'text-rose-700' : review.revision_status === 'included' ? 'text-emerald-700' : 'text-slate-500'
+        )}>{revisionLabel(review.revision_status)}</span>
       </div>
       <div className="flex items-start gap-2">
         <p className="flex-1 text-sm leading-6">{review.review_text}</p>
         <AddLineButton line={review.review_text} onAdd={onAddCommentLine} />
       </div>
       {review.alignment_reason && <p className="mt-1 text-xs leading-5 opacity-80">{review.alignment_reason}</p>}
+      {review.revision_reason && <p className="mt-1 text-xs leading-5 opacity-80">{review.revision_reason}</p>}
       {review.alignment_status !== 'fully_aligned' && review.alignment_gap && (
         <div className="mt-2 flex items-start gap-2 rounded-lg bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-slate-700 shadow-sm">
           <p className="flex-1">Alignment gap: {review.alignment_gap}</p>

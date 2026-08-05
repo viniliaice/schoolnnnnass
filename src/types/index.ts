@@ -672,6 +672,8 @@ export interface LessonPeriodAIReview {
   review_text: string;
   alignment_reason?: string | null;
   alignment_gap?: string | null;
+  revision_status?: 'included' | 'missing' | 'not_applicable';
+  revision_reason?: string | null;
   suggested_activities?: string[] | null;
   unit_plan_id?: string | null;
   created_at: string;

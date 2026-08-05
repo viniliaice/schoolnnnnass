@@ -207,6 +207,12 @@ function pdfAlignmentLabel(status: LessonPeriodAIReview['alignment_status'] | un
   return 'AI Review Pending';
 }
 
+function pdfRevisionLabel(status: LessonPeriodAIReview['revision_status'] | undefined): string {
+  if (status === 'included') return 'Revision included';
+  if (status === 'missing') return 'Revision missing';
+  return 'Revision not applicable';
+}
+
 const DAY_ORDER: Record<string, number> = { Saturday: 1, Sunday: 2, Monday: 3, Tuesday: 4, Wednesday: 5, Thursday: 6, Friday: 7 };
 function reviewOrder(period: Pick<LessonPlanPeriod, 'day' | 'period_number'>): number {
   return (DAY_ORDER[period.day] ?? 99) * 10 + period.period_number;
@@ -276,9 +282,10 @@ function PeriodBlock({ period, unitPlans, subjects, periodReview }: { period: Le
       {isFree && <Text style={styles.freeText}>No instructional activities scheduled.</Text>}
 
       <View style={alignmentStyle(periodReview?.alignment_status)}>
-        <Text style={styles.coachTitle}>AI Review: {pdfAlignmentLabel(periodReview?.alignment_status)}</Text>
+        <Text style={styles.coachTitle}>AI Review: {pdfAlignmentLabel(periodReview?.alignment_status)} · {pdfRevisionLabel(periodReview?.revision_status)}</Text>
         <Text style={styles.coachBody}>{periodReview?.review_text || 'No saved period AI review yet. Supervisors can regenerate the AI review for this plan.'}</Text>
         {periodReview?.alignment_reason && <Text style={styles.coachReason}>{periodReview.alignment_reason}</Text>}
+        {periodReview?.revision_reason && <Text style={styles.coachReason}>{periodReview.revision_reason}</Text>}
         {periodReview?.alignment_status !== 'fully_aligned' && periodReview?.alignment_gap && (
           <Text style={styles.coachGap}>Alignment gap: {periodReview.alignment_gap}</Text>
         )}

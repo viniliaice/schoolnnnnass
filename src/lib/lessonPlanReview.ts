@@ -1,4 +1,5 @@
 import type { LessonPlanPeriod, UnitPlan } from '../types';
+import { weekNumberFromLabel } from '../utils/weekDates';
 
 export type AlignmentStatus = 'full' | 'partial' | 'none' | 'unknown';
 
@@ -10,6 +11,8 @@ export interface PeriodInstructionalReview {
   aiReview: string;
   suggestedActivities: string[];
   matchedUnit?: UnitPlan;
+  revisionStatus: 'included' | 'missing' | 'not_applicable';
+  revisionReason: string;
 }
 
 export interface DayPlanningSummary {
@@ -144,16 +147,18 @@ export function summarizeDay(periods: Array<Pick<LessonPlanPeriod, 'is_free' | '
   return { planned, free, total, percent: Math.round((planned / total) * 100) };
 }
 
-export function findMatchingUnitPlan(period: LessonPlanPeriod, unitPlans: UnitPlan[] = []): UnitPlan | undefined {
+export function findMatchingUnitPlan(period: LessonPlanPeriod, unitPlans: UnitPlan[] = [], weekLabel?: string): UnitPlan | undefined {
   const subject = (period.subject ?? '').trim();
   const className = (period.class_name ?? '').trim();
   const periodGrade = gradeKey(className);
   const topicWords = words(period.topic);
+  const weekNumber = weekNumberFromLabel(weekLabel);
 
   const candidates = unitPlans.filter((unit) => {
     const subjectMatches = !subject || unit.subject_id === subject;
     const classMatches = !className || unit.class_name === className || gradeKey(unit.class_name) === periodGrade;
-    return subjectMatches && classMatches;
+    const weekMatches = weekNumber === null || (weekNumber >= unit.week_number_start && weekNumber <= unit.week_number_end);
+    return subjectMatches && classMatches && weekMatches;
   });
 
   if (!candidates.length) return undefined;
@@ -161,12 +166,34 @@ export function findMatchingUnitPlan(period: LessonPlanPeriod, unitPlans: UnitPl
   return candidates
     .map((unit) => {
       const unitWords = words(`${unit.name} ${unit.objectives}`);
-      return { unit, score: overlapCount(topicWords, unitWords) };
+      const topicScore = overlapCount(topicWords, unitWords);
+      const weekBonus = weekNumber !== null && weekNumber >= unit.week_number_start && weekNumber <= unit.week_number_end ? 2 : 0;
+      return { unit, score: topicScore + weekBonus };
     })
     .sort((a, b) => b.score - a.score)[0]?.unit;
 }
 
-export function reviewPeriodInstruction(period: LessonPlanPeriod, unitPlans: UnitPlan[] = []): PeriodInstructionalReview {
+export interface PeriodReviewContext {
+  weekLabel?: string;
+  previousSameDay?: Pick<LessonPlanPeriod, 'topic' | 'objective' | 'activities'> | null;
+}
+
+function revisionCheck(period: LessonPlanPeriod, previous?: Pick<LessonPlanPeriod, 'topic' | 'objective' | 'activities'> | null): { status: 'included' | 'missing' | 'not_applicable'; reason: string } {
+  if (!previous || !previous.topic?.trim()) {
+    return { status: 'not_applicable', reason: 'No same-day period was found in the previous week, so revision is not required.' };
+  }
+  const previousWords = words(`${previous.topic} ${previous.objective ?? ''}`);
+  const currentRevisionText = `${period.activities ?? ''} ${(period.details ?? []).map(d => d.activity).join(' ')} ${period.topic ?? ''} ${period.objective ?? ''}`;
+  const currentWords = words(currentRevisionText);
+  const revisionLanguage = /revision|review|recap|warm\s*up|prior|previous|last week|reinforce|practice/i.test(currentRevisionText);
+  const overlap = overlapCount(previousWords, currentWords);
+  if (revisionLanguage || overlap >= Math.min(2, previousWords.length || 2)) {
+    return { status: 'included', reason: `Includes revision/reinforcement of last week's ${period.day} topic: ${previous.topic}.` };
+  }
+  return { status: 'missing', reason: `Previous ${period.day} topic was "${previous.topic}", but this period does not include a clear recap, warm-up, or reinforcement activity.` };
+}
+
+export function reviewPeriodInstruction(period: LessonPlanPeriod, unitPlans: UnitPlan[] = [], context: PeriodReviewContext = {}): PeriodInstructionalReview {
   if (period.is_free || period.subject === '__FREE__') {
     return {
       alignmentStatus: 'unknown',
@@ -175,15 +202,20 @@ export function reviewPeriodInstruction(period: LessonPlanPeriod, unitPlans: Uni
       alignmentGap: 'None — free period.',
       aiReview: 'This is marked as a free period, so no instructional coaching review is required.',
       suggestedActivities: [],
+      revisionStatus: 'not_applicable',
+      revisionReason: 'No instructional revision check is needed for a free period.',
     };
   }
 
   const measurableObjective = objectiveIsMeasurable(period.objective);
   const supportedByActivities = activitiesSupportObjective(period);
-  const matchedUnit = findMatchingUnitPlan(period, unitPlans);
+  const matchedUnit = findMatchingUnitPlan(period, unitPlans, context.weekLabel);
+  const revision = revisionCheck(period, context.previousSameDay);
   const topicWords = words(period.topic);
   const unitWords = words(`${matchedUnit?.name ?? ''} ${matchedUnit?.objectives ?? ''}`);
-  const topicAligned = !!matchedUnit && (topicWords.length === 0 || overlapCount(topicWords, unitWords) > 0);
+  const topicOverlap = overlapCount(topicWords, unitWords);
+  const topicAligned = !!matchedUnit && topicWords.length > 0 && topicOverlap >= Math.min(2, topicWords.length);
+  const topicAdjacent = !!matchedUnit && topicWords.length > 0 && topicOverlap > 0;
 
   let alignmentStatus: AlignmentStatus = 'none';
   let alignmentLabel = '❌ Not Aligned';
@@ -195,16 +227,21 @@ export function reviewPeriodInstruction(period: LessonPlanPeriod, unitPlans: Uni
     alignmentLabel = '✅ Fully Aligned';
     alignmentReason = `Matches "${matchedUnit.name}" and the objective, topic, and activities support the unit direction.`;
     alignmentGap = 'No alignment gap found.';
+  } else if (matchedUnit && !topicAdjacent) {
+    alignmentStatus = 'none';
+    alignmentLabel = '❌ Not Aligned';
+    alignmentGap = `the lesson topic "${period.topic}" is not found in the scheduled Unit Plan objectives for week ${context.weekLabel ?? 'this plan'}`;
+    alignmentReason = `Matches the class/subject/week range for "${matchedUnit.name}", but the period topic does not match the unit plan topic/objectives.`;
   } else if (matchedUnit) {
     alignmentStatus = 'partial';
     alignmentLabel = '⚠️ Partially Aligned';
     const gaps = [
-      !topicAligned && 'the lesson topic is not clearly represented in the Unit Plan objectives',
+      !topicAligned && 'the lesson topic is only loosely represented in the Unit Plan objectives',
       !measurableObjective && 'the objective is not measurable enough to verify mastery',
       !supportedByActivities && 'the activities do not directly practise or assess the stated objective',
     ].filter(Boolean) as string[];
     alignmentGap = gaps.join('; ') || 'some lesson evidence is incomplete.';
-    alignmentReason = `Matches "${matchedUnit.name}", but ${alignmentGap}.`;
+    alignmentReason = `Matches "${matchedUnit.name}" for the scheduled week range, but ${alignmentGap}.`;
   }
 
   const objectiveSentence = measurableObjective
@@ -217,13 +254,21 @@ export function reviewPeriodInstruction(period: LessonPlanPeriod, unitPlans: Uni
     ? `The lesson ${alignmentStatus === 'full' ? 'follows' : 'partly follows'} the Unit Plan "${matchedUnit.name}".`
     : 'A matching Unit Plan was not found, so alignment should be confirmed before approval.';
 
+  const revisionSentence = revision.status === 'included'
+    ? 'The lesson includes appropriate weekly revision.'
+    : revision.status === 'missing'
+      ? 'Weekly revision is missing and should be added.'
+      : 'No prior same-day lesson was available, so the weekly revision check is not applicable.';
+
   return {
     alignmentStatus,
     alignmentLabel,
     alignmentReason,
     alignmentGap,
-    aiReview: `${objectiveSentence}, and ${activitySentence}. ${unitSentence}`,
-    suggestedActivities: alignmentStatus === 'full' ? [] : buildSuggestedActivities(period, matchedUnit),
+    aiReview: `${objectiveSentence}, and ${activitySentence}. ${unitSentence} ${revisionSentence}`,
+    suggestedActivities: alignmentStatus === 'full' && revision.status !== 'missing' ? [] : buildSuggestedActivities(period, matchedUnit),
     matchedUnit,
+    revisionStatus: revision.status,
+    revisionReason: revision.reason,
   };
 }

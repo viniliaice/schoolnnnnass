@@ -93,3 +93,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_questions_teacher_source_quiz_prompt_bank
   WHERE source_quiz_id IS NOT NULL AND source_auto_generated = false;
 ALTER TABLE questions ADD COLUMN IF NOT EXISTS source_subject_id TEXT REFERENCES subjects(id) ON DELETE SET NULL;
 ALTER TABLE questions ADD COLUMN IF NOT EXISTS source_class_name TEXT;
+
+-- Weekly revision tracking for period-level AI review.
+ALTER TABLE lesson_period_ai_reviews
+  ADD COLUMN IF NOT EXISTS revision_status TEXT NOT NULL DEFAULT 'not_applicable'
+    CHECK (revision_status IN ('included', 'missing', 'not_applicable'));
+ALTER TABLE lesson_period_ai_reviews
+  ADD COLUMN IF NOT EXISTS revision_reason TEXT;
