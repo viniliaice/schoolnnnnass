@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
+import { useI18n } from '../../lib/i18n/AppLanguageContext';
 import logo from '../../../assets/logo.png';
 
 interface NavItem {
@@ -118,6 +119,7 @@ interface SidebarProps {
 
 export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
   const { session, logout } = useRole();
+  const { t } = useI18n();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   if (!session) return null;
@@ -140,7 +142,7 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
           <img src={logo} alt="MBK International School" className="w-20 h-20 object-contain" />
           <h1 className="text-sm font-bold text-white tracking-tight text-center">MBK International School</h1>
           <span className={cn("text-xs px-2 py-0.5 rounded-full font-medium", roleBadgeColors[session.role])}>
-            {session.role.charAt(0).toUpperCase() + session.role.slice(1)}
+            {t(`role.${session.role}`, session.role.charAt(0).toUpperCase() + session.role.slice(1))}
           </span>
         </div>
       </div>
@@ -154,12 +156,12 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
             </div>
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-white truncate">{session.userName}</p>
-              <p className="text-xs text-white/60">Active Session</p>
+              <p className="text-xs text-white/60">{t('session.active')}</p>
             </div>
             <button
               onClick={logout}
               className="shrink-0 w-8 h-8 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/10 transition-all"
-              title="Sign Out"
+              title={t('session.signOut')}
             >
               <LogOut className="w-4 h-4" />
             </button>
@@ -188,7 +190,7 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
               )}
             >
               <item.icon className="w-5 h-5 shrink-0" />
-              <span className="flex-1 text-left">{item.label}</span>
+              <span className="flex-1 text-left">{t(`nav.${item.label}`, item.label)}</span>
               {isActive && <ChevronRight className="w-4 h-4 opacity-60" />}
             </button>
           );

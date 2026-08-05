@@ -7,6 +7,7 @@ import { applyStoredAppearance } from './components/ui/ThemeSwitcher';
 import { LoginPage } from './components/landing/LoginPage';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { queryClient } from './lib/queryClient';
+import { I18nProvider } from './lib/i18n/AppLanguageContext';
 
 // Admin Pages
 import { AdminDashboard } from './pages/admin/AdminDashboard';
@@ -199,10 +200,12 @@ export default function App() {
   return (
     <QueryClientProvider client={queryClient}>
       <ToastProvider>
-        <RoleProvider>
-          <AppContent />
-          <ToastContainer />
-        </RoleProvider>
+        <I18nProvider>
+          <RoleProvider>
+            <AppContent />
+            <ToastContainer />
+          </RoleProvider>
+        </I18nProvider>
       </ToastProvider>
     </QueryClientProvider>
   );

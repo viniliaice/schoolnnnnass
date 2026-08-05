@@ -15,6 +15,7 @@ import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
 import { describePlanWeek } from '../../utils/weekDates';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
 import { getSubjects } from '../../lib/db/subjects';
+import { useI18n } from '../../lib/i18n/AppLanguageContext';
 
 function toReadPeriods(periods: LessonPlanPeriod[]): ReadPeriod[] {
   return periods.map((p) => ({
@@ -45,6 +46,7 @@ export function LessonPlanReview() {
   const [comment, setComment] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | PlanStatus>('all');
   const [quizzesOpen, setQuizzesOpen] = useState(false);
+  const { t } = useI18n();
 
   const { data: plans } = useSupervisorPlans();
   const { data: planWithPeriods } = usePlanWithPeriods(selectedPlanId || undefined);
@@ -142,8 +144,8 @@ export function LessonPlanReview() {
           <ClipboardCheck className="w-6 h-6" />
         </div>
         <div className="min-w-0">
-          <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">Lesson Plan Review</h1>
-          <p className="mt-1 text-sm leading-5 text-slate-500">Read the plan, check the AI score, then approve or request revisions.</p>
+          <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">{t('lessonReview.title')}</h1>
+          <p className="mt-1 text-sm leading-5 text-slate-500">{t('lessonReview.subtitle')}</p>
         </div>
       </div>
 
@@ -245,7 +247,7 @@ export function LessonPlanReview() {
                       className="no-print flex min-h-11 w-full items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
                     >
                       {regeneratePeriodReviewMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-                      {regeneratePeriodReviewMut.isPending ? 'Regenerating…' : 'Regenerate AI Review'}
+                      {regeneratePeriodReviewMut.isPending ? t('lessonReview.regenerating') : t('lessonReview.regenerate')}
                     </button>
                     <ExportLessonPlanPdfButton
                       document={<LessonPlanPdfDocument plan={plan} periods={planWithPeriods.periods} review={review} unitPlans={unitPlans} subjects={subjects} periodAiReviews={periodAiReviews} />}
@@ -263,14 +265,14 @@ export function LessonPlanReview() {
                   className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left transition hover:bg-slate-50"
                 >
                   <span className="flex items-center gap-2 font-bold text-slate-900">
-                    <HelpCircle className="h-5 w-5 text-indigo-600" /> Quizzes ({quizPreviews.length})
+                    <HelpCircle className="h-5 w-5 text-indigo-600" /> {t('lessonReview.quizzes')} ({quizPreviews.length})
                   </span>
                   <ChevronRight className={cn('h-4 w-4 text-slate-400 transition-transform', quizzesOpen && 'rotate-90')} />
                 </button>
                 {quizzesOpen && (
                   <div className="space-y-3 border-t border-slate-100 p-5">
                     {quizPreviews.length === 0 ? (
-                      <p className="text-sm text-slate-500">No auto-generated quizzes saved for this lesson plan yet.</p>
+                      <p className="text-sm text-slate-500">{t('lessonReview.noQuizzes')}</p>
                     ) : quizPreviews.map(({ quiz, questions }) => (
                       <details key={quiz.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
                         <summary className="cursor-pointer text-sm font-bold text-slate-800">
@@ -317,7 +319,7 @@ export function LessonPlanReview() {
             {/* Decision panel — always usable */}
             <div className="no-print z-10 space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6 lg:sticky lg:bottom-4 lg:rounded-2xl lg:shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
               <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
-                <h2 className="text-lg font-bold text-slate-900">Supervisor Decision</h2>
+                <h2 className="text-lg font-bold text-slate-900">{t('lessonReview.supervisorDecision')}</h2>
                 {waitingOnAi && !aiLikelyStuck && (
                   <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">
                     <Loader2 className="w-3 h-3 animate-spin" /> AI review still running
@@ -339,7 +341,7 @@ export function LessonPlanReview() {
               <textarea
                 value={comment}
                 onChange={(e) => setComment(e.target.value)}
-                placeholder="Add your comments for the teacher (optional, but recommended when requesting revisions)"
+                placeholder={t('lessonReview.commentPlaceholder')}
                 rows={3}
                 className="w-full resize-none rounded-xl border border-slate-300 px-3 py-3 text-sm leading-6 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200"
               />
@@ -350,14 +352,14 @@ export function LessonPlanReview() {
                   disabled={pending}
                   className="min-h-12 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
                 >
-                  {approveMut.isPending ? 'Approving…' : 'Approve'}
+                  {approveMut.isPending ? 'Approving…' : t('lessonReview.approve')}
                 </button>
                 <button
                   onClick={handleReject}
                   disabled={pending}
                   className="min-h-12 rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-rose-700 disabled:opacity-50"
                 >
-                  {rejectMut.isPending ? 'Sending…' : 'Reject'}
+                  {rejectMut.isPending ? 'Sending…' : t('lessonReview.reject')}
                 </button>
               </div>
 
@@ -373,7 +375,7 @@ export function LessonPlanReview() {
                     ? 'Already unlocked for editing'
                     : revisionMut.isPending
                       ? 'Unlocking…'
-                      : 'Request Revisions (unlock for editing)'}
+                      : t('lessonReview.requestRevisions')}
                 </button>
                 <p className="text-xs text-slate-500 mt-2">
                   Sends the plan back to the teacher and re-enables their edit controls. Any comment above is
