@@ -29,18 +29,52 @@ ALTER TABLE lesson_period_ai_reviews ENABLE ROW LEVEL SECURITY;
 
 DROP POLICY IF EXISTS "admin_all_period_ai_reviews" ON lesson_period_ai_reviews;
 CREATE POLICY "admin_all_period_ai_reviews" ON lesson_period_ai_reviews
-  FOR ALL USING (true);
+  FOR ALL USING (
+    EXISTS (
+      SELECT 1
+      FROM profiles p
+      WHERE p.auth_id = auth.uid()
+        AND p.role = 'admin'
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1
+      FROM profiles p
+      WHERE p.auth_id = auth.uid()
+        AND p.role = 'admin'
+    )
+  );
 
 DROP POLICY IF EXISTS "teacher_select_own_period_ai_reviews" ON lesson_period_ai_reviews;
 CREATE POLICY "teacher_select_own_period_ai_reviews" ON lesson_period_ai_reviews
   FOR SELECT USING (
-    EXISTS (SELECT 1 FROM lesson_plans WHERE id = plan_id AND teacher_id = auth.uid())
+    EXISTS (
+      SELECT 1
+      FROM lesson_plans lp
+      JOIN profiles p ON p.id = lp.teacher_id
+      WHERE lp.id = lesson_period_ai_reviews.plan_id
+        AND p.auth_id = auth.uid()
+    )
   );
 
 DROP POLICY IF EXISTS "supervisor_manage_period_ai_reviews" ON lesson_period_ai_reviews;
 CREATE POLICY "supervisor_manage_period_ai_reviews" ON lesson_period_ai_reviews
   FOR ALL USING (
-    EXISTS (SELECT 1 FROM profiles WHERE id = auth.uid() AND role IN ('supervisor', 'admin'))
+    EXISTS (
+      SELECT 1
+      FROM profiles p
+      WHERE p.auth_id = auth.uid()
+        AND p.role IN ('supervisor', 'admin')
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1
+      FROM profiles p
+      WHERE p.auth_id = auth.uid()
+        AND p.role IN ('supervisor', 'admin')
+    )
   );
 
 -- Link quizzes generated from a lesson plan to the source plan so the review
