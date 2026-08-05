@@ -33,6 +33,29 @@ async function fetchContext(planId: string) {
   return { plan, periods, unitPlans: unitsData || [] };
 }
 
+async function edgeFunctionErrorMessage(error: unknown): Promise<string> {
+  const maybeError = error as { message?: string; context?: unknown };
+  const base = maybeError?.message || 'Quiz generation function failed';
+  const context = maybeError?.context;
+
+  if (context instanceof Response) {
+    try {
+      const body = await context.clone().json();
+      const detail = [body?.error, body?.code, body?.provider, body?.model].filter(Boolean).join(' · ');
+      return detail ? `${base}: ${detail}` : base;
+    } catch {
+      try {
+        const text = await context.clone().text();
+        return text ? `${base}: ${text}` : base;
+      } catch {
+        return base;
+      }
+    }
+  }
+
+  return base;
+}
+
 async function generateWithLLM(plan: LessonPlan, subject: string, subjectPeriods: LessonPlanPeriod[], unitPlans: unknown[]): Promise<GeneratedQuiz[]> {
   const { data, error } = await supabase.functions.invoke('generate-lesson-quizzes', {
     body: {
@@ -45,8 +68,12 @@ async function generateWithLLM(plan: LessonPlan, subject: string, subjectPeriods
       direct_answer_min: QUIZ_GENERATION_DEFAULTS.directAnswerMinPerQuiz,
     },
   });
-  if (error) throw error;
-  return validateGeneratedResponse(data);
+  if (error) throw new Error(await edgeFunctionErrorMessage(error));
+  try {
+    return validateGeneratedResponse(data);
+  } catch (err) {
+    throw new Error(`Quiz generation returned invalid structured output: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 async function insertGeneratedQuestion(plan: LessonPlan, quizId: string, subject: string, q: GeneratedQuestion) {

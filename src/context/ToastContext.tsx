@@ -17,11 +17,14 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     const newToast: ToastMessage = { ...toast, id };
     console.log('[Toast]', toast.type, toast.title, toast.description);
     setToasts(prev => [...prev, newToast]);
-    if (toast.type !== 'loading') {
-      setTimeout(() => {
-        setToasts(prev => prev.filter(t => t.id !== id));
-      }, 4000);
-    }
+    // Keep errors visible until manually dismissed. Teachers/supervisors need
+    // enough time to read operational failures such as AI/quiz generation errors.
+    if (toast.type === 'loading' || toast.type === 'error') return;
+
+    const timeoutMs = toast.type === 'warning' ? 10000 : 5000;
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id));
+    }, timeoutMs);
   }, []);
 
   const removeToast = useCallback((id: string) => {

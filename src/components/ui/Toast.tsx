@@ -31,21 +31,29 @@ export function ToastContainer() {
   if (toasts.length === 0) return null;
 
   return (
-    <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 max-w-sm w-full">
+    <div
+      className="fixed inset-x-3 top-[calc(env(safe-area-inset-top)+0.75rem)] z-[9999] flex max-h-[calc(100dvh-1.5rem-env(safe-area-inset-top)-env(safe-area-inset-bottom))] flex-col gap-2 overflow-y-auto sm:left-auto sm:right-4 sm:top-[calc(env(safe-area-inset-top)+1rem)] sm:w-full sm:max-w-sm"
+      aria-live="assertive"
+      aria-relevant="additions"
+    >
       {toasts.map(toast => {
         const Icon = icons[toast.type];
         return (
           <div
             key={toast.id}
-            className={`flex items-start gap-3 p-4 rounded-xl border shadow-lg animate-[slideIn_0.3s_ease-out] ${colors[toast.type]}`}
+            className={`flex w-full items-start gap-3 rounded-xl border p-4 shadow-xl animate-[slideIn_0.3s_ease-out] ${colors[toast.type]}`}
           >
-            <Icon className={`w-5 h-5 mt-0.5 flex-shrink-0 ${iconColors[toast.type]} ${toast.type === 'loading' ? 'animate-spin' : ''}`} />
-            <div className="flex-1 min-w-0">
-              <p className="font-semibold text-sm">{toast.title}</p>
-              {toast.description && <p className="text-xs mt-0.5 opacity-80">{toast.description}</p>}
+            <Icon className={`mt-0.5 h-5 w-5 flex-shrink-0 ${iconColors[toast.type]} ${toast.type === 'loading' ? 'animate-spin' : ''}`} />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-semibold leading-5">{toast.title}</p>
+              {toast.description && <p className="mt-1 max-h-40 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-5 opacity-90">{toast.description}</p>}
             </div>
-            <button onClick={() => removeToast(toast.id)} className="flex-shrink-0 opacity-60 hover:opacity-100 transition-opacity">
-              <X className="w-4 h-4" />
+            <button
+              onClick={() => removeToast(toast.id)}
+              className="flex-shrink-0 rounded-lg p-1 opacity-60 transition-opacity hover:bg-black/5 hover:opacity-100"
+              aria-label="Dismiss notification"
+            >
+              <X className="h-4 w-4" />
             </button>
           </div>
         );

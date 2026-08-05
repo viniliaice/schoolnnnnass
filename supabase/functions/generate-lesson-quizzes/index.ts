@@ -29,6 +29,11 @@ function corsResponse(body: unknown, init?: ResponseInit): Response {
   });
 }
 
+function errorMessage(err: unknown): string {
+  if (err instanceof Error) return `${err.name}: ${err.message}`;
+  return String(err);
+}
+
 function buildPrompt(payload: GeneratePayload): string {
   return `Generate lesson-plan quizzes as strict JSON only.
 
@@ -73,6 +78,7 @@ function parseJson(content: string) {
 }
 
 async function callLLM(prompt: string, apiKey: string, signal: AbortSignal, url = NVIDIA_API_URL, model = NVIDIA_MODEL) {
+  console.log('[generate-lesson-quizzes] provider request', { provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen', model, promptChars: prompt.length });
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
@@ -89,7 +95,11 @@ async function callLLM(prompt: string, apiKey: string, signal: AbortSignal, url 
     }),
     signal,
   });
-  if (!response.ok) throw new Error(`${model} API error: ${response.status} ${await response.text()}`);
+  if (!response.ok) {
+    const body = await response.text();
+    console.error('[generate-lesson-quizzes] provider error', { provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen', model, status: response.status, body });
+    throw new Error(`${model} API error: ${response.status} ${body}`);
+  }
   const body = await response.json();
   const content = body.choices?.[0]?.message?.content;
   if (!content) throw new Error('Empty LLM response');
@@ -97,13 +107,15 @@ async function callLLM(prompt: string, apiKey: string, signal: AbortSignal, url 
 }
 
 serve(async (req: Request) => {
+  const startedAt = Date.now();
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (req.method !== 'POST') return corsResponse({ error: 'Method not allowed' }, { status: 405 });
 
   try {
     const payload: GeneratePayload = await req.json();
     if (!payload.plan || !payload.subject || !Array.isArray(payload.periods)) {
-      return corsResponse({ error: 'Invalid payload' }, { status: 400 });
+      console.error('[generate-lesson-quizzes] invalid payload', { hasPlan: !!payload.plan, subject: payload.subject, periodsIsArray: Array.isArray(payload.periods) });
+      return corsResponse({ error: 'Invalid payload', code: 'INVALID_PAYLOAD' }, { status: 400 });
     }
 
     const prompt = buildPrompt(payload);
@@ -117,11 +129,15 @@ serve(async (req: Request) => {
       try {
         const result = await callLLM(prompt, nvidiaKey, controller.signal);
         clearTimeout(timeout);
+        console.log('[generate-lesson-quizzes] success', { provider: 'nvidia', ms: Date.now() - startedAt });
         return corsResponse(result);
       } catch (err) {
         clearTimeout(timeout);
         lastError = err;
+        console.error('[generate-lesson-quizzes] nvidia failed', { error: errorMessage(err) });
       }
+    } else {
+      console.error('[generate-lesson-quizzes] NVIDIA_API_KEY missing');
     }
 
     if (zenKey) {
@@ -130,15 +146,22 @@ serve(async (req: Request) => {
       try {
         const result = await callLLM(prompt, zenKey, controller.signal, ZEN_API_URL, ZEN_MODEL);
         clearTimeout(timeout);
+        console.log('[generate-lesson-quizzes] success', { provider: 'zen', ms: Date.now() - startedAt });
         return corsResponse(result);
       } catch (err) {
         clearTimeout(timeout);
         lastError = err;
+        console.error('[generate-lesson-quizzes] zen failed', { error: errorMessage(err) });
       }
+    } else {
+      console.error('[generate-lesson-quizzes] ZEN_API_KEY missing');
     }
 
-    return corsResponse({ error: lastError instanceof Error ? lastError.message : 'No quiz generation provider configured' }, { status: 502 });
+    const detail = lastError instanceof Error ? lastError.message : 'No quiz generation provider configured';
+    console.error('[generate-lesson-quizzes] failed all providers', { error: detail, ms: Date.now() - startedAt });
+    return corsResponse({ error: detail, code: 'QUIZ_GENERATION_FAILED' }, { status: 502 });
   } catch (err) {
-    return corsResponse({ error: err instanceof Error ? err.message : 'Internal error' }, { status: 500 });
+    console.error('[generate-lesson-quizzes] internal error', { error: errorMessage(err), ms: Date.now() - startedAt });
+    return corsResponse({ error: err instanceof Error ? err.message : 'Internal error', code: 'INTERNAL_ERROR' }, { status: 500 });
   }
 });
