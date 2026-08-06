@@ -2,7 +2,7 @@ import { supabase } from '../supabase';
 import { getQuizWithQuestions } from './quizzes';
 import type { LessonPlan, LessonPlanPeriod, Quiz, QuizQuestion } from '../../types';
 
-import { QUIZ_GENERATION_DEFAULTS, validateGeneratedResponse, type GeneratedQuestion, type GeneratedQuiz } from '../quizGenerationValidation';
+import { QUIZ_GENERATION_DEFAULTS, validateGeneratedResponse, findOffendingQuestions, type GeneratedQuestion, type GeneratedQuiz } from '../quizGenerationValidation';
 
 function id(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -42,7 +42,8 @@ async function edgeFunctionErrorMessage(error: unknown): Promise<string> {
     try {
       const body = await context.clone().json();
       const detail = [body?.error, body?.code, body?.provider, body?.model].filter(Boolean).join(' · ');
-      return detail ? `${base}: ${detail}` : base;
+      const excerpt = body?.raw_excerpt ? `\nRaw excerpt: ${String(body.raw_excerpt).slice(0, 800)}` : '';
+      return detail ? `${base}: ${detail}${excerpt}` : base + excerpt;
     } catch {
       try {
         const text = await context.clone().text();
@@ -56,24 +57,79 @@ async function edgeFunctionErrorMessage(error: unknown): Promise<string> {
   return base;
 }
 
+const VALIDATION_RETRY_LIMIT = 2;
+
 async function generateWithLLM(plan: LessonPlan, subject: string, subjectPeriods: LessonPlanPeriod[], unitPlans: unknown[]): Promise<GeneratedQuiz[]> {
-  const { data, error } = await supabase.functions.invoke('generate-lesson-quizzes', {
-    body: {
-      plan,
-      subject,
-      periods: subjectPeriods,
-      unit_plans: unitPlans,
-      quiz_count: QUIZ_GENERATION_DEFAULTS.quizCount,
-      questions_per_quiz: QUIZ_GENERATION_DEFAULTS.questionsPerQuiz,
-      direct_answer_min: QUIZ_GENERATION_DEFAULTS.directAnswerMinPerQuiz,
-    },
-  });
-  if (error) throw new Error(await edgeFunctionErrorMessage(error));
-  try {
-    return validateGeneratedResponse(data);
-  } catch (err) {
-    throw new Error(`Quiz generation returned invalid structured output: ${err instanceof Error ? err.message : String(err)}`);
+  let lastRawData: unknown = null;
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt <= VALIDATION_RETRY_LIMIT; attempt++) {
+    const { data, error } = await supabase.functions.invoke('generate-lesson-quizzes', {
+      body: {
+        plan,
+        subject,
+        periods: subjectPeriods,
+        unit_plans: unitPlans,
+        quiz_count: QUIZ_GENERATION_DEFAULTS.quizCount,
+        questions_per_quiz: QUIZ_GENERATION_DEFAULTS.questionsPerQuiz,
+        direct_answer_min: QUIZ_GENERATION_DEFAULTS.directAnswerMinPerQuiz,
+      },
+    });
+    if (error) {
+      // Provider/transport failure — don't retry validation loop here; let caller decide.
+      // But log raw for diagnostics if available.
+      const msg = await edgeFunctionErrorMessage(error);
+      console.error('[lessonPlanQuizzes] edge function invoke failed', { subject, attempt: attempt + 1, error: msg, raw: (error as any)?.context });
+      throw new Error(msg);
+    }
+
+    lastRawData = data;
+
+    try {
+      const validated = validateGeneratedResponse(data);
+      if (attempt > 0) console.log('[lessonPlanQuizzes] validation passed after retry', { subject, attempt: attempt + 1 });
+      return validated;
+    } catch (err) {
+      lastError = err;
+      const msg = err instanceof Error ? err.message : String(err);
+      const offending = findOffendingQuestions(data);
+      const isDistinctError = /options are not distinct/i.test(msg);
+      console.error('[lessonPlanQuizzes] validation failed', {
+        subject,
+        attempt: attempt + 1,
+        error: msg,
+        offending,
+        rawExcerpt: JSON.stringify(data)?.slice(0, 3000),
+      });
+
+      // Targeted repair step: if only a single question has duplicate options,
+      // the edge function already attempted a repair. Client still retries whole
+      // generation once more before surfacing. The edge's repair covers the
+      // single-question case; client just re-invokes.
+      // For targeted client-side repair visibility, we log the offending indices
+      // so edge logs can correlate.
+
+      if (attempt === VALIDATION_RETRY_LIMIT) {
+        console.error('[lessonPlanQuizzes] validation failed final — logging full raw response', {
+          subject,
+          error: msg,
+          offending,
+          rawFull: JSON.stringify(data)?.slice(0, 8000),
+        });
+        const friendly = `Quiz generation produced duplicate answer options (${msg}). The model was retried ${VALIDATION_RETRY_LIMIT} times and still returned duplicate options for question(s): ${offending.map(o => `quiz ${o.quizIndex + 1} Q${o.questionIndex + 1}`).join(', ') || 'unknown'}. Please try again — the next generation often succeeds, or contact support if it persists. Raw preview: ${JSON.stringify(data)?.slice(0, 600)}`;
+        throw new Error(isDistinctError ? friendly : `Quiz generation returned invalid structured output: ${msg}. Raw preview: ${JSON.stringify(data)?.slice(0, 800)}`);
+      }
+
+      // Bounded retry: wait briefly then re-invoke whole generation.
+      // Edge will again attempt its own repair internally.
+      const backoff = 500 * (attempt + 1);
+      console.log('[lessonPlanQuizzes] retrying whole generation', { subject, nextAttempt: attempt + 2, backoff });
+      await new Promise((r) => setTimeout(r, backoff));
+    }
   }
+
+  // Unreachable but type-safe
+  throw new Error(`Quiz generation returned invalid structured output: ${lastError instanceof Error ? lastError.message : String(lastError)}. Raw: ${JSON.stringify(lastRawData)?.slice(0, 1000)}`);
 }
 
 function buildQuestionRow(plan: LessonPlan, quizId: string, subject: string, q: GeneratedQuestion) {
@@ -182,6 +238,8 @@ export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]>
     return quizRows;
   } catch (err) {
     await cleanupGeneratedQuizzes(planId);
+    // Log full error with raw for diagnostics (requirement 6)
+    console.error('[generateLessonPlanQuizzes] final failure', { planId, error: err instanceof Error ? err.message : String(err) });
     throw err;
   }
 }

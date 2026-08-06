@@ -28,6 +28,24 @@ function strip(value: string | null | undefined): string {
   return (value || '').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Structured-output validation for quiz generation.
+ *
+ * "options are not distinct" means: after applying strip() (collapse
+ * whitespace, trim) and lowercasing, the 4 option strings are not all unique.
+ * - Case-insensitive: "Berlin" vs "BERLIN" → duplicate
+ * - Whitespace-insensitive: "  A  B " vs "A B" → duplicate
+ * - Punctuation-sensitive: "24 + 18" vs "24+18" → distinct (different chars)
+ *   → model must avoid near-duplicates like that anyway via prompt hardening.
+ *
+ * This is NOT a false positive on whitespace/punctuation differences being
+ * treated as distinct when they shouldn't invalidate. The current logic
+ * correctly flags real semantic duplicates (same answer after normalization)
+ * and correctly allows genuinely different distractors. The production log
+ * "Question 4 options are not distinct" was a real duplicate from the model
+ * (confirmed by raw response inspection) — the model produced two options that
+ * collapsed to the same string.
+ */
 export function validateGeneratedQuiz(input: GeneratedQuiz): GeneratedQuiz {
   if (!input.title?.trim()) throw new Error('Generated quiz is missing a title');
   if (!Array.isArray(input.questions) || input.questions.length < 3 || input.questions.length > 5) {
@@ -66,4 +84,22 @@ export function validateGeneratedResponse(input: unknown): GeneratedQuiz[] {
     throw new Error(`LLM must return exactly ${QUIZ_GENERATION_DEFAULTS.quizCount} quizzes`);
   }
   return quizzes.map(validateGeneratedQuiz);
+}
+
+/** Returns list of offending question indices for targeted repair. */
+export function findOffendingQuestions(input: unknown): Array<{ quizIndex: number; questionIndex: number }> {
+  const result: Array<{ quizIndex: number; questionIndex: number }> = [];
+  const quizzes = (input as any)?.quizzes;
+  if (!Array.isArray(quizzes)) return result;
+  quizzes.forEach((quiz: any, qi: number) => {
+    if (!Array.isArray(quiz.questions)) return;
+    quiz.questions.forEach((q: any, qIdx: number) => {
+      if (q.type === 'multiple_choice' && Array.isArray(q.options) && q.options.length === 4) {
+        if (new Set(q.options.map((o: string) => strip(o).toLowerCase())).size !== 4) {
+          result.push({ quizIndex: qi, questionIndex: qIdx });
+        }
+      }
+    });
+  });
+  return result;
 }

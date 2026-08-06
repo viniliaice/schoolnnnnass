@@ -47,6 +47,7 @@ export function LessonPlanReview() {
   const [comment, setComment] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | PlanStatus>('all');
   const [quizzesOpen, setQuizzesOpen] = useState(false);
+  const [quizError, setQuizError] = useState<string | null>(null);
   const { t } = useI18n();
   const { addToast } = useToast();
 
@@ -127,24 +128,33 @@ export function LessonPlanReview() {
 
   const handleGenerateQuizzes = useCallback(async () => {
     if (!selectedPlanId) return;
+    setQuizError(null);
     try {
       await generateQuizzesMut.mutateAsync(selectedPlanId);
       setQuizzesOpen(true);
       addToast({ type: 'success', title: 'Quizzes generated' });
     } catch (err) {
-      addToast({ type: 'error', title: 'Failed to generate quizzes', description: err instanceof Error ? err.message : undefined });
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      // Inline banner is the primary surface — toast is secondary (may render off-screen on small viewports)
+      setQuizError(msg);
+      console.error('[LessonPlanReview] generate quizzes failed — full raw logged above', { error: msg });
+      addToast({ type: 'error', title: 'Failed to generate quizzes', description: msg.slice(0, 400) });
     }
   }, [addToast, generateQuizzesMut, selectedPlanId]);
 
   const handleGenerateMissingAssets = useCallback(async () => {
     if (!selectedPlanId) return;
+    setQuizError(null);
     try {
       await regeneratePeriodReviewMut.mutateAsync(selectedPlanId);
       await generateQuizzesMut.mutateAsync(selectedPlanId);
       setQuizzesOpen(true);
       addToast({ type: 'success', title: 'AI review and quizzes generated' });
     } catch (err) {
-      addToast({ type: 'error', title: 'Failed to generate review assets', description: err instanceof Error ? err.message : undefined });
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      setQuizError(msg);
+      console.error('[LessonPlanReview] generate missing assets failed', { error: msg });
+      addToast({ type: 'error', title: 'Failed to generate review assets', description: msg.slice(0, 400) });
     }
   }, [addToast, generateQuizzesMut, regeneratePeriodReviewMut, selectedPlanId]);
 
@@ -305,6 +315,36 @@ export function LessonPlanReview() {
                   </div>
                 </div>
               </div>
+
+              {/* Inline quiz generation error — always visible, not just a toast */}
+              {quizError && (
+                <div className="no-print rounded-2xl border-2 border-rose-300 bg-rose-50 p-4 flex items-start gap-3" role="alert" aria-live="assertive">
+                  <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0 mt-0.5" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-sm font-bold text-rose-900">Quiz generation failed</p>
+                    <p className="text-sm text-rose-800 mt-1 break-words whitespace-pre-wrap">{quizError}</p>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={handleGenerateQuizzes}
+                        disabled={generateQuizzesMut.isPending}
+                        className="inline-flex items-center gap-2 rounded-xl bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-60"
+                      >
+                        {generateQuizzesMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                        Try again
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setQuizError(null)}
+                        className="inline-flex items-center gap-2 rounded-xl bg-white border border-rose-200 px-4 py-2 text-sm font-semibold text-rose-700 hover:bg-rose-50"
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                    <p className="text-xs text-rose-700/80 mt-2">If this keeps failing, the model returned duplicate answer options. The system already retried automatically — a second manual retry often succeeds.</p>
+                  </div>
+                </div>
+              )}
 
               <section className="no-print overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
                 <button
