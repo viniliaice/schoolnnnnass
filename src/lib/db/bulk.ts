@@ -1,4 +1,5 @@
 import { supabase } from '../supabase';
+import { createUser } from './profiles';
 import { ClassSubject, Exam, Student, User } from '../../types';
 
 export async function bulkCreateUsers(dataList: Omit<User, 'id' | 'createdAt'>[]): Promise<User[]> {
@@ -7,27 +8,15 @@ export async function bulkCreateUsers(dataList: Omit<User, 'id' | 'createdAt'>[]
 
   for (const data of dataList) {
     try {
-      const { password, ...rest } = data;
-      if (!password) throw new Error('Password is required');
-
-      const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: data.email,
-        password,
-      });
-      if (authError) throw authError;
-      if (!authData.user) throw new Error('Failed to create auth user');
-
-      const id = `${data.role}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-
-      const { data: profile, error: profileError } = await supabase
-        .from('profiles')
-        .insert({ id, ...rest, auth_id: authData.user.id, createdAt: new Date().toISOString() })
-        .select()
-        .single();
-      if (profileError) throw profileError;
+      // Use the same protected creation path as Manage Users. Calling
+      // supabase.auth.signUp() directly swaps the shared browser session to the
+      // newly-created teacher/parent and RoleContext starts loading that user as
+      // the current session. createUser() pins profile creation to the original
+      // admin JWT and restores/guards the admin session.
+      const profile = await createUser(data);
       created.push(profile as User);
     } catch (err) {
-      errors.push(`${data.email}: ${String(err)}`);
+      errors.push(`${data.email}: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
@@ -155,37 +144,16 @@ export async function bulkCreateTeachersWithAssignments(
         continue;
       }
 
-      // Create new teacher profile
-      const teacherId = `teacher-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-
-      // Create auth user
-      console.log('[bulkCreateTeachersWithAssignments] Creating auth user for:', entry.email);
-      const { data: authData, error: authError } = await supabase.auth.signUp({
+      console.log('[bulkCreateTeachersWithAssignments] Creating teacher through admin-pinned createUser for:', entry.email);
+      const profileData = await createUser({
+        name: entry.name,
         email: entry.email,
         password: entry.password,
-      });
-      console.log('[bulkCreateTeachersWithAssignments] Auth signup result:', { authData, authError });
-      if (authError) throw authError;
-
-      console.log('[bulkCreateTeachersWithAssignments] Creating profile for:', entry.name);
-      const { data: profileData, error: profileError } = await supabase
-        .from('profiles')
-        .insert({
-          id: teacherId,
-          name: entry.name,
-          email: entry.email,
-          role: 'teacher',
-          assignedClasses: entry.assignedClasses,
-          assignedSubjects: entry.assignedSubjects,
-          auth_id: authData.user?.id,
-          createdAt: new Date().toISOString(),
-        })
-        .select()
-        .single();
-      if (profileError) {
-        console.error('[bulkCreateTeachersWithAssignments] Profile insert error:', profileError);
-        throw profileError;
-      }
+        role: 'teacher',
+        assignedClasses: entry.assignedClasses,
+        assignedSubjects: entry.assignedSubjects,
+      } as Omit<User, 'id' | 'createdAt'>);
+      const teacherId = profileData.id;
       console.log('[bulkCreateTeachersWithAssignments] Profile created:', profileData);
       teachers.push(profileData as User);
 
@@ -231,7 +199,7 @@ export async function bulkCreateTeachersWithAssignments(
       }
     } catch (err) {
       console.warn('[bulkCreateTeachersWithAssignments] Error processing', entry.name, entry.email, ':', err);
-      skippedTeachers.push(`${entry.name} (${entry.email}) — ${String(err)}`);
+      skippedTeachers.push(`${entry.name} (${entry.email}) — ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
