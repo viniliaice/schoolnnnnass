@@ -4,7 +4,16 @@ const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const NVIDIA_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b';
 const ZEN_API_URL = 'https://opencode.ai/zen/v1/chat/completions';
 const ZEN_MODEL = 'deepseek-v4-flash-free';
-const AI_ATTEMPT_TIMEOUT_MS = 60_000;
+const AI_ATTEMPT_TIMEOUT_MS = 70_000; // matches generate-lesson-review
+
+/**
+ * Overall wall-clock budget for a single request. Without this, the worst case
+ * (VALIDATION retries x two-provider fallback x per-attempt timeout) could run
+ * for minutes, past the client-side AI_REVIEW_TIMEOUT_MINUTES (3 min) watchdog.
+ * Every provider attempt and repair call is capped to the remaining budget, so
+ * one request can never run longer than this.
+ */
+const WALL_CLOCK_BUDGET_MS = 120_000;
 
 // Retry / backoff tuning
 const PROVIDER_MAX_RETRIES = 2; // retries on 529/429 before falling back
@@ -36,6 +45,11 @@ export function errorMessage(err: unknown): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Milliseconds left before the overall request budget expires (never negative). */
+function remainingMs(deadline: number): number {
+  return Math.max(0, deadline - Date.now());
 }
 
 export function strip(value: string | null | undefined): string {
@@ -235,8 +249,8 @@ export function buildCompactLessonContext(payload: GeneratePayload): string {
   }
 
   let text = lines.join('\n').trim();
-  if (text.length > 4500) {
-    text = text.slice(0, 4500) + '\n... [truncated for token budget]';
+  if (text.length > 3500) {
+    text = text.slice(0, 3500) + '\n... [truncated for token budget]';
   }
   return text;
 }
@@ -284,9 +298,10 @@ Rules:
 - direct_answer: provide a non-empty rubric. Do NOT include options, correctIndex, or explanation fields.
 - Questions must be specific to the lesson objective/topic/activity and age-appropriate for the grade.
 - No repeated question stems inside a quiz.
+- Keep every explanation/rubric to one short sentence. Output ONLY the fields shown in the schema above — no extra fields.
 - Output only valid JSON, no markdown fences.
 
-Example multiple_choice question (4 distinct options):
+One-shot example — CORRECT (4 pairwise-distinct options):
 {
   "type": "multiple_choice",
   "question": "Muna has 24 pencils and gets 18 more. Which sum should she solve?",
@@ -295,9 +310,21 @@ Example multiple_choice question (4 distinct options):
   "explanation": "We add 24 and 18 to find the total pencils."
 }
 
+One-shot example — INCORRECT (REJECTED: "24 + 18", "24+18", and "24 + 18 " are the same option after trim + lowercase):
+{
+  "type": "multiple_choice",
+  "question": "Muna has 24 pencils and gets 18 more. Which sum should she solve?",
+  "options": ["24 + 18", "24+18", "24 + 18 ", "24 - 18"],
+  "correctIndex": 0
+}
+
 Lesson Context:
 ${buildCompactLessonContext(payload)}`;
 
+  console.log('[generate-lesson-quizzes] prompt built', { promptChars: prompt.length });
+  if (prompt.length > 6000) {
+    console.warn('[generate-lesson-quizzes] prompt exceeds 6000-char target', { promptChars: prompt.length });
+  }
   // Enforce hard maximum of 8000 characters
   if (prompt.length > 8000) {
     return prompt.slice(0, 8000);
@@ -363,7 +390,7 @@ async function callProvider(
       ],
       temperature: 0.7,
       top_p: 0.9,
-      max_tokens: 1800,
+      max_tokens: 4096,
       stream: false,
     }),
     signal,
@@ -379,13 +406,55 @@ async function callProvider(
   }
 
   const body = await response.json();
-  const raw: string = body.choices?.[0]?.message?.content;
-  if (!raw) throw new Error('Empty LLM response');
+  const choice = body?.choices?.[0];
+  const msg = choice?.message ?? choice?.delta ?? {};
+  const raw = (
+    typeof msg.content === 'string'
+      ? msg.content
+      : typeof choice?.text === 'string'
+        ? choice.text
+        : typeof msg.reasoning_content === 'string'
+          ? msg.reasoning_content
+          : ''
+  ).trim();
+
+  if (!raw) {
+    // Some gateways return HTTP 200 with an empty body or an error object instead
+    // of a completion (seen in production as "Empty LLM response" from zen). Log
+    // the real shape so we can diagnose instead of guessing. finish_reason of
+    // "length" would indicate the max_tokens budget was exhausted by reasoning.
+    console.error('[generate-lesson-quizzes] provider returned empty content', {
+      provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
+      model,
+      status: response.status,
+      finishReason: choice?.finish_reason ?? null,
+      bodyKeys: body && typeof body === 'object' ? Object.keys(body) : [],
+      body: JSON.stringify(body).slice(0, 2000),
+    });
+    const err: any = new Error('Empty LLM response');
+    err.status = response.status;
+    err.retriable = true;
+    throw err;
+  }
 
   // Requirement 6: After provider response
   console.log({ responseChars: raw.length });
 
-  const parsed = parseJson(raw);
+  // A model output we cannot parse as JSON is a generation-quality problem, not a
+  // transport error. Return it with parsed:null so the validation retry loop runs
+  // (full re-prompt + repair attempts) and the final error carries the raw text
+  // for the client raw_excerpt, instead of treating it as a provider fallback.
+  let parsed: unknown = null;
+  try {
+    parsed = parseJson(raw);
+  } catch (parseErr) {
+    console.error('[generate-lesson-quizzes] provider returned invalid JSON', {
+      provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
+      model,
+      finishReason: choice?.finish_reason ?? null,
+      rawExcerpt: raw.slice(0, 1500),
+    });
+  }
   return { parsed, raw };
 }
 
@@ -395,11 +464,18 @@ async function callProviderWithRetry(
   url: string,
   model: string,
   timeoutMs: number,
+  deadline: number,
 ): Promise<{ parsed: unknown; raw: string }> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= PROVIDER_MAX_RETRIES; attempt++) {
+    const remaining = remainingMs(deadline);
+    if (remaining <= 0) {
+      const budgetErr: any = new Error('Quiz generation wall-clock budget exceeded');
+      budgetErr.code = 'WALL_CLOCK_BUDGET_EXCEEDED';
+      throw budgetErr;
+    }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
     try {
       const result = await callProvider(prompt, apiKey, controller.signal, url, model);
       clearTimeout(timeout);
@@ -410,7 +486,7 @@ async function callProviderWithRetry(
       lastError = err;
       const status: number | undefined = err?.status;
       const isAbort = err?.name === 'AbortError';
-      const retriable = !isAbort && status !== undefined && isRetriableStatus(status);
+      const retriable = !isAbort && (err?.retriable === true || (status !== undefined && isRetriableStatus(status)));
       console.error('[generate-lesson-quizzes] provider attempt failed', {
         provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
         attempt: attempt + 1,
@@ -432,15 +508,24 @@ async function attemptGenerationWithValidation(
   apiKey: string,
   url: string,
   model: string,
+  deadline: number,
 ): Promise<{ parsed: unknown; raw: string }> {
   let lastParsed: unknown = null;
   let lastRaw: string | null = null;
   let lastValidationError: unknown = null;
 
   for (let attempt = 0; attempt <= VALIDATION_MAX_RETRIES; attempt++) {
+    const remaining = remainingMs(deadline);
+    if (remaining <= 0) {
+      const budgetErr: any = new Error('Quiz generation wall-clock budget exceeded');
+      budgetErr.raw = lastRaw;
+      budgetErr.parsed = lastParsed;
+      budgetErr.code = 'WALL_CLOCK_BUDGET_EXCEEDED';
+      throw budgetErr;
+    }
     let result: { parsed: unknown; raw: string };
     try {
-      result = await callProviderWithRetry(prompt, apiKey, url, model, attempt === 0 ? AI_ATTEMPT_TIMEOUT_MS : REPAIR_TIMEOUT_MS);
+      result = await callProviderWithRetry(prompt, apiKey, url, model, attempt === 0 ? AI_ATTEMPT_TIMEOUT_MS : REPAIR_TIMEOUT_MS, deadline);
     } catch (err) {
       throw err; // provider error bubbles to fallback logic
     }
@@ -469,7 +554,7 @@ async function attemptGenerationWithValidation(
         console.log('[generate-lesson-quizzes] attempting targeted repair', { offending });
         const repairPrompt = buildRepairPrompt(result.parsed, offending);
         try {
-          const repaired = await callProviderWithRetry(repairPrompt, apiKey, url, model, REPAIR_TIMEOUT_MS);
+          const repaired = await callProviderWithRetry(repairPrompt, apiKey, url, model, REPAIR_TIMEOUT_MS, deadline);
           try {
             validate(repaired.parsed);
             console.log('[generate-lesson-quizzes] repair validation passed', { provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen' });
@@ -493,6 +578,7 @@ async function attemptGenerationWithValidation(
         console.error('[generate-lesson-quizzes] validation failed final', {
           provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
           error: errorMessage(validationErr),
+          rawFull: lastRaw ?? null,
           rawExcerpt: lastRaw?.slice(0, 2000),
         });
         const err: any = new Error(`Quiz generation returned invalid structured output: ${errorMessage(validationErr)}`);
@@ -516,6 +602,9 @@ async function attemptGenerationWithValidation(
 
 serve(async (req: Request) => {
   const startedAt = Date.now();
+  // Overall request budget: every provider attempt and repair call is capped to
+  // the remaining time so a single request can't run past the client watchdog.
+  const deadline = startedAt + WALL_CLOCK_BUDGET_MS;
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
   if (req.method !== 'POST') return returnResponse({ error: 'Method not allowed' }, 405);
 
@@ -537,13 +626,13 @@ serve(async (req: Request) => {
 
     if (zenKey) {
       try {
-        const result = await attemptGenerationWithValidation(prompt, zenKey, ZEN_API_URL, ZEN_MODEL);
+        const result = await attemptGenerationWithValidation(prompt, zenKey, ZEN_API_URL, ZEN_MODEL, deadline);
         console.log('[generate-lesson-quizzes] success', { provider: 'zen', ms: Date.now() - startedAt });
         return returnResponse(result.parsed);
       } catch (err: any) {
         lastError = err;
         lastRaw = err?.raw ?? null;
-        console.error('[generate-lesson-quizzes] zen failed final', { error: errorMessage(err), ms: Date.now() - startedAt });
+        console.error('[generate-lesson-quizzes] zen failed final', { error: errorMessage(err), rawExcerpt: lastRaw?.slice(0, 2000) ?? null, ms: Date.now() - startedAt });
       }
     } else {
       console.error('[generate-lesson-quizzes] ZEN_API_KEY missing');
@@ -551,13 +640,13 @@ serve(async (req: Request) => {
 
     if (nvidiaKey) {
       try {
-        const result = await attemptGenerationWithValidation(prompt, nvidiaKey, NVIDIA_API_URL, NVIDIA_MODEL);
+        const result = await attemptGenerationWithValidation(prompt, nvidiaKey, NVIDIA_API_URL, NVIDIA_MODEL, deadline);
         console.log('[generate-lesson-quizzes] success', { provider: 'nvidia', ms: Date.now() - startedAt });
         return returnResponse(result.parsed);
       } catch (err: any) {
         lastError = err;
         lastRaw = err?.raw ?? lastRaw;
-        console.error('[generate-lesson-quizzes] nvidia failed final', { error: errorMessage(err), ms: Date.now() - startedAt });
+        console.error('[generate-lesson-quizzes] nvidia failed final', { error: errorMessage(err), rawExcerpt: lastRaw?.slice(0, 2000) ?? null, ms: Date.now() - startedAt });
       }
     } else {
       console.error('[generate-lesson-quizzes] NVIDIA_API_KEY missing');
@@ -567,6 +656,7 @@ serve(async (req: Request) => {
     console.error('[generate-lesson-quizzes] failed all providers', {
       error: detail,
       ms: Date.now() - startedAt,
+      rawFull: lastRaw ?? null,
       rawExcerpt: lastRaw?.slice(0, 2000) ?? null,
     });
     return returnResponse(

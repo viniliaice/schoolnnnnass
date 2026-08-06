@@ -57,6 +57,33 @@ async function edgeFunctionErrorMessage(error: unknown): Promise<string> {
   return base;
 }
 
+function dbErrorMessage(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  const e = err as { message?: unknown; code?: unknown; details?: unknown; hint?: unknown };
+  const parts = [e.message, e.code ? `code: ${e.code}` : '', e.details, e.hint]
+    .filter((p): p is string => typeof p === 'string' && p.length > 0);
+  return parts.length ? parts.join(' · ') : JSON.stringify(err);
+}
+
+// Period `subject` values are normally subjects.id, but legacy plans and the
+// CSV-import fallback (LessonPlanner.tsx) can store a display name, and admin
+// can delete a subject, leaving stale ids. questions.source_subject_id has an
+// FK to subjects(id), so resolve the stored value to a real id (or NULL).
+function buildSubjectIdResolver(rows: Array<{ id: string; name?: string | null }>): (value: string) => string | null {
+  const byId = new Set(rows.map((r) => r.id));
+  const byName = new Map<string, string>();
+  for (const r of rows) {
+    const n = r.name?.trim().toLowerCase();
+    if (n) byName.set(n, r.id);
+  }
+  return (value) => {
+    const v = (value || '').trim();
+    if (!v) return null;
+    if (byId.has(v)) return v;
+    return byName.get(v.toLowerCase()) ?? null;
+  };
+}
+
 const VALIDATION_RETRY_LIMIT = 2;
 
 async function generateWithLLM(plan: LessonPlan, subject: string, subjectPeriods: LessonPlanPeriod[], unitPlans: unknown[]): Promise<GeneratedQuiz[]> {
@@ -102,12 +129,11 @@ async function generateWithLLM(plan: LessonPlan, subject: string, subjectPeriods
         rawExcerpt: JSON.stringify(data)?.slice(0, 3000),
       });
 
-      // Targeted repair step: if only a single question has duplicate options,
-      // the edge function already attempted a repair. Client still retries whole
-      // generation once more before surfacing. The edge's repair covers the
-      // single-question case; client just re-invokes.
-      // For targeted client-side repair visibility, we log the offending indices
-      // so edge logs can correlate.
+      // The edge function already runs a targeted repair internally: it re-prompts
+      // the provider to regenerate ONLY the offending questions' options and
+      // re-validates, before falling back to a full re-generation. If it still
+      // fails, we retry the whole generation here a bounded number of times; each
+      // re-invoke runs the edge's internal repair again.
 
       if (attempt === VALIDATION_RETRY_LIMIT) {
         console.error('[lessonPlanQuizzes] validation failed final — logging full raw response', {
@@ -132,7 +158,7 @@ async function generateWithLLM(plan: LessonPlan, subject: string, subjectPeriods
   throw new Error(`Quiz generation returned invalid structured output: ${lastError instanceof Error ? lastError.message : String(lastError)}. Raw: ${JSON.stringify(lastRawData)?.slice(0, 1000)}`);
 }
 
-function buildQuestionRow(plan: LessonPlan, quizId: string, subject: string, q: GeneratedQuestion) {
+function buildQuestionRow(plan: LessonPlan, quizId: string, subject: string, q: GeneratedQuestion, resolveSubjectId: (value: string) => string | null) {
   const isMcq = q.type === 'multiple_choice';
   return {
     id: id('q'),
@@ -145,7 +171,7 @@ function buildQuestionRow(plan: LessonPlan, quizId: string, subject: string, q: 
     createdAt: new Date().toISOString(),
     source_lesson_plan_id: plan.id,
     source_quiz_id: quizId,
-    source_subject_id: subject,
+    source_subject_id: resolveSubjectId(subject),
     source_class_name: plan.class_name,
     source_auto_generated: true,
   };
@@ -182,6 +208,10 @@ export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]>
   await cleanupGeneratedQuizzes(planId);
 
   try {
+    const { data: subjectRows, error: subjectsError } = await supabase.from('subjects').select('id, name');
+    if (subjectsError) throw subjectsError;
+    const resolveSubjectId = buildSubjectIdResolver(subjectRows || []);
+
     const subjects = unique(periods.filter((p) => !p.is_free && p.subject && p.subject !== '__FREE__').map((p) => p.subject!));
     const quizRows: Quiz[] = [];
     const questionRows: Array<ReturnType<typeof buildQuestionRow>> = [];
@@ -195,7 +225,7 @@ export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]>
         const quiz = buildQuizRow(plan, subject, generated);
         quizRows.push(quiz);
         generatedByQuiz.set(quiz.id, generated);
-        questionRows.push(...generated.questions.map((question) => buildQuestionRow(plan, quiz.id, subject, question)));
+        questionRows.push(...generated.questions.map((question) => buildQuestionRow(plan, quiz.id, subject, question, resolveSubjectId)));
       }
     }
 
@@ -238,9 +268,11 @@ export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]>
     return quizRows;
   } catch (err) {
     await cleanupGeneratedQuizzes(planId);
-    // Log full error with raw for diagnostics (requirement 6)
-    console.error('[generateLessonPlanQuizzes] final failure', { planId, error: err instanceof Error ? err.message : String(err) });
-    throw err;
+    // Log full error with raw for diagnostics (requirement 6). PostgrestError is
+    // not an Error instance, so String(err) alone yields "[object Object]".
+    const msg = dbErrorMessage(err);
+    console.error('[generateLessonPlanQuizzes] final failure', { planId, error: msg, raw: err });
+    throw new Error(msg);
   }
 }
 
@@ -287,6 +319,9 @@ export async function addGeneratedQuizToBank(quizId: string): Promise<'added' | 
     .limit(1);
   if (existing?.length) return 'already_added';
 
+  const { data: subjectRows } = await supabase.from('subjects').select('id, name');
+  const resolveSubjectId = buildSubjectIdResolver(subjectRows || []);
+
   const { data: sourceQuestions, error: sourceErr } = await supabase
     .from('questions')
     .select('*')
@@ -307,7 +342,7 @@ export async function addGeneratedQuizToBank(quizId: string): Promise<'added' | 
       createdAt: new Date().toISOString(),
       source_lesson_plan_id: quiz.lesson_plan_id ?? null,
       source_quiz_id: quizId,
-      source_subject_id: quiz.subject,
+      source_subject_id: resolveSubjectId(quiz.subject),
       source_class_name: quiz.className,
       source_auto_generated: false,
     };
