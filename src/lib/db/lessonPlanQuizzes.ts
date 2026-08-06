@@ -76,17 +76,14 @@ async function generateWithLLM(plan: LessonPlan, subject: string, subjectPeriods
   }
 }
 
-async function insertGeneratedQuestion(plan: LessonPlan, quizId: string, subject: string, q: GeneratedQuestion) {
-  const questionId = id('q');
+function buildQuestionRow(plan: LessonPlan, quizId: string, subject: string, q: GeneratedQuestion) {
   const isMcq = q.type === 'multiple_choice';
-  const options = isMcq ? q.options!.map((text, index) => ({ label: optionLabel(index), text })) : null;
-  const correctAnswer = isMcq ? optionLabel(q.correctIndex!) : null;
-  const row = {
-    id: questionId,
+  return {
+    id: id('q'),
     prompt: q.question,
     type: q.type,
-    options,
-    correctAnswer,
+    options: isMcq ? q.options!.map((text, index) => ({ label: optionLabel(index), text })) : null,
+    correctAnswer: isMcq ? optionLabel(q.correctIndex!) : null,
     rubric: isMcq ? (q.explanation ?? null) : q.rubric!,
     teacherId: plan.teacher_id,
     createdAt: new Date().toISOString(),
@@ -96,17 +93,13 @@ async function insertGeneratedQuestion(plan: LessonPlan, quizId: string, subject
     source_class_name: plan.class_name,
     source_auto_generated: true,
   };
-  const { error } = await supabase.from('questions').insert(row);
-  if (error) throw error;
-  return { questionId, points: 1 };
 }
 
-async function saveGeneratedQuiz(plan: LessonPlan, subject: string, generated: GeneratedQuiz): Promise<Quiz> {
-  const quizId = id('quiz');
+function buildQuizRow(plan: LessonPlan, subject: string, generated: GeneratedQuiz): Quiz {
   const openDate = new Date().toISOString().slice(0, 10);
   const dueDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const quizRow = {
-    id: quizId,
+  return {
+    id: id('quiz'),
     className: plan.class_name,
     subject,
     title: generated.title,
@@ -114,57 +107,83 @@ async function saveGeneratedQuiz(plan: LessonPlan, subject: string, generated: G
     openDate,
     dueDate,
     timeLimit: 10,
-    questionOrder: 'created' as const,
+    questionOrder: 'created',
     teacherId: plan.teacher_id,
-    status: 'draft' as const,
+    status: 'draft',
     createdAt: new Date().toISOString(),
     lesson_plan_id: plan.id,
     auto_generated: true,
   };
-  const { error: quizErr } = await supabase.from('quizzes').insert(quizRow);
-  if (quizErr) throw quizErr;
+}
 
-  const refs = [];
-  for (const question of generated.questions) refs.push(await insertGeneratedQuestion(plan, quizId, subject, question));
+async function cleanupGeneratedQuizzes(planId: string) {
+  await supabase.from('quizzes').delete().eq('lesson_plan_id', planId).eq('auto_generated', true);
+  await supabase.from('questions').delete().eq('source_lesson_plan_id', planId).eq('source_auto_generated', true);
+}
 
-  const { data: questions, error: qErr } = await supabase.from('questions').select('*').in('id', refs.map((r) => r.questionId));
-  if (qErr) throw qErr;
-  const questionMap = new Map((questions || []).map((q) => [q.id, q]));
-  const junctionRows = refs.map((ref, i) => {
-    const src = questionMap.get(ref.questionId) as any;
-    return {
+export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]> {
+  const { plan, periods, unitPlans } = await fetchContext(planId);
+  await cleanupGeneratedQuizzes(planId);
+
+  try {
+    const subjects = unique(periods.filter((p) => !p.is_free && p.subject && p.subject !== '__FREE__').map((p) => p.subject!));
+    const quizRows: Quiz[] = [];
+    const questionRows: Array<ReturnType<typeof buildQuestionRow>> = [];
+    const generatedByQuiz = new Map<string, GeneratedQuiz>();
+
+    for (const subject of subjects) {
+      const subjectPeriods = periods.filter((p) => p.subject === subject && !p.is_free);
+      if (!subjectPeriods.length) continue;
+      const generatedQuizzes = await generateWithLLM(plan, subject, subjectPeriods, unitPlans);
+      for (const generated of generatedQuizzes) {
+        const quiz = buildQuizRow(plan, subject, generated);
+        quizRows.push(quiz);
+        generatedByQuiz.set(quiz.id, generated);
+        questionRows.push(...generated.questions.map((question) => buildQuestionRow(plan, quiz.id, subject, question)));
+      }
+    }
+
+    if (quizRows.length === 0) return [];
+
+    // Bulk writes are deliberately used here. The previous implementation posted
+    // each question individually, which caused browser REST calls to /questions to
+    // reset mid-run and left a partial single quiz saved for some plans.
+    const { error: quizErr } = await supabase.from('quizzes').insert(quizRows);
+    if (quizErr) throw quizErr;
+
+    const { data: insertedQuestions, error: questionErr } = await supabase
+      .from('questions')
+      .insert(questionRows)
+      .select('*');
+    if (questionErr) throw questionErr;
+
+    const questionOrder = new Map<string, number>();
+    for (const [quizId, generated] of generatedByQuiz.entries()) {
+      generated.questions.forEach((question, index) => {
+        questionOrder.set(`${quizId}::${question.question}`, index);
+      });
+    }
+
+    const junctionRows = (insertedQuestions || []).map((src: any) => ({
       id: id('qq'),
-      quizId,
-      questionId: ref.questionId,
-      orderIndex: i,
+      quizId: src.source_quiz_id,
+      questionId: src.id,
+      orderIndex: questionOrder.get(`${src.source_quiz_id}::${src.prompt}`) ?? 0,
       points: 1,
       promptSnapshot: src.prompt,
       optionsSnapshot: src.type === 'multiple_choice' ? src.options : null,
       correctAnswerSnapshot: src.correctAnswer,
       typeSnapshot: src.type,
-    };
-  });
-  const { error: jErr } = await supabase.from('quiz_questions').insert(junctionRows);
-  if (jErr) throw jErr;
-  return quizRow as Quiz;
-}
+    }));
 
-export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]> {
-  const { plan, periods, unitPlans } = await fetchContext(planId);
-  await supabase.from('quizzes').delete().eq('lesson_plan_id', planId).eq('auto_generated', true);
-  await supabase.from('questions').delete().eq('source_lesson_plan_id', planId).eq('source_auto_generated', true);
+    const { error: junctionErr } = await supabase.from('quiz_questions').insert(junctionRows);
+    if (junctionErr) throw junctionErr;
 
-  const subjects = unique(periods.filter((p) => !p.is_free && p.subject && p.subject !== '__FREE__').map((p) => p.subject!));
-  const created: Quiz[] = [];
-
-  for (const subject of subjects) {
-    const subjectPeriods = periods.filter((p) => p.subject === subject && !p.is_free);
-    if (!subjectPeriods.length) continue;
-    const generatedQuizzes = await generateWithLLM(plan, subject, subjectPeriods, unitPlans);
-    for (const generated of generatedQuizzes) created.push(await saveGeneratedQuiz(plan, subject, generated));
+    return quizRows;
+  } catch (err) {
+    await cleanupGeneratedQuizzes(planId);
+    throw err;
   }
-
-  return created;
 }
 
 export async function fetchLessonPlanQuizPreviews(planId: string): Promise<Array<{ quiz: Quiz; questions: QuizQuestion[]; addedToBank: boolean }>> {
