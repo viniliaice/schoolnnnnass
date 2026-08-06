@@ -384,27 +384,11 @@ serve(async (req: Request) => {
     }
 
     const prompt = buildPrompt(payload);
-    const nvidiaKey = Deno.env.get('NVIDIA_API_KEY');
+    // Provider order: Zen primary (fastest path under 3-min watchdog, ~21s), NVIDIA Nemotron fallback.
     const zenKey = Deno.env.get('ZEN_API_KEY');
+    const nvidiaKey = Deno.env.get('NVIDIA_API_KEY');
     let lastError: unknown;
     let lastRaw: string | null = null;
-
-    if (nvidiaKey) {
-      try {
-        const result = await attemptGenerationWithValidation(prompt, nvidiaKey, NVIDIA_API_URL, NVIDIA_MODEL);
-        console.log('[generate-lesson-quizzes] success', { provider: 'nvidia', ms: Date.now() - startedAt });
-        return corsResponse(result.parsed);
-      } catch (err: any) {
-        lastError = err;
-        lastRaw = err?.raw ?? null;
-        console.error('[generate-lesson-quizzes] nvidia failed final', { error: errorMessage(err), ms: Date.now() - startedAt });
-        // If it's a validation error we already retried + repaired, don't immediately fall back
-        // if the error was retriable provider error we already retried with backoff.
-        // Still fall back to zen for any failure.
-      }
-    } else {
-      console.error('[generate-lesson-quizzes] NVIDIA_API_KEY missing');
-    }
 
     if (zenKey) {
       try {
@@ -413,11 +397,28 @@ serve(async (req: Request) => {
         return corsResponse(result.parsed);
       } catch (err: any) {
         lastError = err;
-        lastRaw = err?.raw ?? lastRaw;
+        lastRaw = err?.raw ?? null;
         console.error('[generate-lesson-quizzes] zen failed final', { error: errorMessage(err), ms: Date.now() - startedAt });
+        // If it's a validation error we already retried + repaired, don't immediately fall back
+        // if the error was retriable provider error we already retried with backoff.
+        // Still fall back to nvidia for any failure.
       }
     } else {
       console.error('[generate-lesson-quizzes] ZEN_API_KEY missing');
+    }
+
+    if (nvidiaKey) {
+      try {
+        const result = await attemptGenerationWithValidation(prompt, nvidiaKey, NVIDIA_API_URL, NVIDIA_MODEL);
+        console.log('[generate-lesson-quizzes] success', { provider: 'nvidia', ms: Date.now() - startedAt });
+        return corsResponse(result.parsed);
+      } catch (err: any) {
+        lastError = err;
+        lastRaw = err?.raw ?? lastRaw;
+        console.error('[generate-lesson-quizzes] nvidia failed final', { error: errorMessage(err), ms: Date.now() - startedAt });
+      }
+    } else {
+      console.error('[generate-lesson-quizzes] NVIDIA_API_KEY missing');
     }
 
     const detail = lastError instanceof Error ? lastError.message : 'No quiz generation provider configured';
