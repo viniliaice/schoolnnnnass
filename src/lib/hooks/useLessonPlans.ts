@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient, type UseQueryOptions } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchPlansByTeacher,
   fetchPlansBySupervisor,
@@ -19,7 +19,35 @@ import {
   fetchAiReviewLogs,
   AI_REVIEW_TIMEOUT_MINUTES,
 } from '../db/lessonPlans';
+import { fetchPeriodAiReviews, regeneratePeriodAiReviews } from '../db/lessonPeriodAiReviews';
+import { addGeneratedQuizToBank, fetchLessonPlanQuizPreviews, generateLessonPlanQuizzes } from '../db/lessonPlanQuizzes';
+import { supabase } from '../supabase';
 import type { LessonPlan, LessonPlanPeriod, PeriodActivity, AIReview, DayOfWeek, ReviewResponse, SavePeriodsPayload } from '../../types';
+
+const DAY_ORDER: Record<string, number> = {
+  Monday: 1,
+  Tuesday: 2,
+  Wednesday: 3,
+  Thursday: 4,
+  Friday: 5,
+  Saturday: 6,
+  Sunday: 7,
+};
+
+function sortPeriods(periods: LessonPlanPeriod[]): LessonPlanPeriod[] {
+  return [...periods].sort((a, b) => {
+    const dayDiff = (DAY_ORDER[a.day] ?? 99) - (DAY_ORDER[b.day] ?? 99);
+    return dayDiff || a.period_number - b.period_number;
+  });
+}
+
+function updatePlanInLists(plans: unknown, updatedPlan: LessonPlan): unknown {
+  if (!Array.isArray(plans)) return plans;
+  return plans.map((plan) => {
+    const item = plan as LessonPlan & Record<string, unknown>;
+    return item.id === updatedPlan.id ? { ...item, ...updatedPlan } : item;
+  });
+}
 
 // ─── Teacher's plans ──────────────────────────────────────────────
 export function useTeacherPlans(teacherId: string | undefined) {
@@ -44,18 +72,68 @@ export function useSupervisorPlans() {
 
 // ─── Single plan with periods ─────────────────────────────────────
 export function usePlanWithPeriods(planId: string | undefined) {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    if (!planId) return;
+
+    const channel = supabase
+      .channel(`lesson-plan-detail:${planId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'lesson_plans', filter: `id=eq.${planId}` },
+        (payload) => {
+          if (payload.eventType === 'DELETE') {
+            qc.setQueryData(['lessonPlan', planId], null);
+            qc.setQueriesData({ queryKey: ['lessonPlans'] }, (plans) => {
+              if (!Array.isArray(plans)) return plans;
+              return plans.filter((plan) => (plan as LessonPlan).id !== planId);
+            });
+            return;
+          }
+
+          const updatedPlan = payload.new as LessonPlan;
+          qc.setQueryData<{ plan: LessonPlan; periods: LessonPlanPeriod[] } | null>(['lessonPlan', planId], (current) => (
+            current ? { ...current, plan: { ...current.plan, ...updatedPlan } } : current
+          ));
+          qc.setQueriesData({ queryKey: ['lessonPlans'] }, (plans) => updatePlanInLists(plans, updatedPlan));
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'lesson_plan_periods', filter: `plan_id=eq.${planId}` },
+        (payload) => {
+          qc.setQueryData<{ plan: LessonPlan; periods: LessonPlanPeriod[] } | null>(['lessonPlan', planId], (current) => {
+            if (!current) return current;
+            if (payload.eventType === 'DELETE') {
+              const deleted = payload.old as Partial<LessonPlanPeriod>;
+              return {
+                ...current,
+                periods: current.periods.filter((period) => period.id !== deleted.id),
+              };
+            }
+
+            const nextPeriod = payload.new as LessonPlanPeriod;
+            const existing = current.periods.filter((period) => period.id !== nextPeriod.id);
+            return { ...current, periods: sortPeriods([...existing, nextPeriod]) };
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [planId, qc]);
+
   return useQuery({
     queryKey: ['lessonPlan', planId],
     queryFn: () => fetchPlanById(planId!),
     enabled: !!planId,
-    staleTime: 1000 * 30,
-    gcTime: 1000 * 60 * 5,
-    // While a plan is waiting on the AI, keep polling so a flip to 'ai_failed'
-    // (or 'in_review') surfaces on screen without a manual refresh.
-    refetchInterval: (query) => {
-      const status = query.state.data?.plan.status;
-      return status === 'submitted' ? 5000 : false;
-    },
+    // The selected plan is loaded once per planId. Further changes are pushed
+    // into the cache by the realtime channel above or by explicit mutations.
+    staleTime: Infinity,
+    gcTime: 1000 * 60 * 10,
   });
 }
 
@@ -66,30 +144,43 @@ export function usePlanWithPeriods(planId: string | undefined) {
  */
 export function useAiReviewTimeout(plan: LessonPlan | null | undefined) {
   const qc = useQueryClient();
+  const planId = plan?.id;
+  const status = plan?.status;
+  const startedAt = plan?.ai_started_at || plan?.updated_at;
+  const teacherId = plan?.teacher_id;
 
   useEffect(() => {
-    if (!plan || plan.status !== 'submitted') return;
+    if (!planId || status !== 'submitted') return;
 
     let cancelled = false;
     const check = async () => {
-      const started = new Date(plan.ai_started_at || plan.updated_at).getTime();
+      const started = new Date(startedAt || '').getTime();
       if (!Number.isFinite(started)) return;
       if (Date.now() - started < AI_REVIEW_TIMEOUT_MINUTES * 60_000) return;
 
-      const expired = await expireStuckAiReviews([plan]);
-      if (!cancelled && expired.length) {
-        qc.invalidateQueries({ queryKey: ['lessonPlan', plan.id] });
-        qc.invalidateQueries({ queryKey: ['lessonPlans'] });
+      const expired = await expireStuckAiReviews([{ id: planId, status, ai_started_at: startedAt, updated_at: startedAt, teacher_id: teacherId } as LessonPlan]);
+      if (!cancelled && expired.includes(planId)) {
+        const reason = `AI review timed out after ${AI_REVIEW_TIMEOUT_MINUTES} minutes with no response.`;
+        qc.setQueryData<{ plan: LessonPlan; periods: LessonPlanPeriod[] } | null>(['lessonPlan', planId], (current) => (
+          current ? { ...current, plan: { ...current.plan, status: 'ai_failed', ai_failure_reason: reason } } : current
+        ));
+        qc.setQueriesData({ queryKey: ['lessonPlans'] }, (plans) => {
+          if (!Array.isArray(plans)) return plans;
+          return plans.map((item) => {
+            const listPlan = item as LessonPlan & Record<string, unknown>;
+            return listPlan.id === planId ? { ...listPlan, status: 'ai_failed', ai_failure_reason: reason } : listPlan;
+          });
+        });
       }
     };
 
-    check();
+    void check();
     const timer = setInterval(check, 15_000);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [plan, qc]);
+  }, [planId, qc, startedAt, status, teacherId]);
 }
 
 /** Look up the plan belonging to one exact week + class (never another week's). */
@@ -125,20 +216,108 @@ export function useRequestRevision() {
 
 // ─── Review for a plan ────────────────────────────────────────────
 export function useReview(planId: string | undefined) {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    if (!planId) return;
+
+    const channel = supabase
+      .channel(`ai-review:${planId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'ai_reviews', filter: `plan_id=eq.${planId}` },
+        (payload) => {
+          if (payload.eventType === 'DELETE') {
+            qc.setQueryData(['aiReview', planId], null);
+            return;
+          }
+          qc.setQueryData(['aiReview', planId], payload.new as AIReview);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [planId, qc]);
+
   return useQuery({
     queryKey: ['aiReview', planId],
     queryFn: () => fetchReviewByPlanId(planId!),
     enabled: !!planId,
-    staleTime: 1000 * 30,
-    gcTime: 1000 * 60 * 5,
-    // Poll until a review exists and is no longer pending. Give up after ~4
-    // minutes so a permanently failed AI call doesn't poll forever.
-    refetchInterval: (query) => {
-      const data = query.state.data;
-      if (data && data.status !== 'pending') return false;
-      const started = query.state.dataUpdatedAt || Date.now();
-      if (Date.now() - started > 1000 * 60 * 4) return false;
-      return 5000;
+    // Fetch once per planId. AI review inserts/updates are delivered via the
+    // realtime channel above; mutations can still invalidate explicitly.
+    staleTime: Infinity,
+    gcTime: 1000 * 60 * 10,
+  });
+}
+
+// ─── Per-period AI reviews ────────────────────────────────────────
+export function usePeriodAiReviews(planId: string | undefined) {
+  const qc = useQueryClient();
+
+  useEffect(() => {
+    if (!planId) return;
+    const channel = supabase
+      .channel(`lesson-period-ai-reviews:${planId}`)
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'lesson_period_ai_reviews', filter: `plan_id=eq.${planId}` },
+        () => qc.invalidateQueries({ queryKey: ['lessonPeriodAiReviews', planId] })
+      )
+      .subscribe();
+    return () => {
+      void supabase.removeChannel(channel);
+    };
+  }, [planId, qc]);
+
+  return useQuery({
+    queryKey: ['lessonPeriodAiReviews', planId],
+    queryFn: () => fetchPeriodAiReviews(planId!),
+    enabled: !!planId,
+    staleTime: Infinity,
+    gcTime: 1000 * 60 * 10,
+  });
+}
+
+export function useRegeneratePeriodAiReviews() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (planId: string) => regeneratePeriodAiReviews(planId),
+    onSuccess: (_data, planId) => {
+      qc.invalidateQueries({ queryKey: ['lessonPeriodAiReviews', planId] });
+    },
+  });
+}
+
+// ─── Auto-generated lesson quizzes ───────────────────────────────
+export function useLessonPlanQuizPreviews(planId: string | undefined) {
+  return useQuery({
+    queryKey: ['lessonPlanQuizzes', planId],
+    queryFn: () => fetchLessonPlanQuizPreviews(planId!),
+    enabled: !!planId,
+    staleTime: 1000 * 60 * 5,
+    gcTime: 1000 * 60 * 10,
+  });
+}
+
+export function useGenerateLessonPlanQuizzes() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (planId: string) => generateLessonPlanQuizzes(planId),
+    onSuccess: (_data, planId) => {
+      qc.invalidateQueries({ queryKey: ['lessonPlanQuizzes', planId] });
+    },
+  });
+}
+
+export function useAddGeneratedQuizToBank() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: ({ quizId }: { quizId: string; planId: string }) => addGeneratedQuizToBank(quizId),
+    onSuccess: (_data, variables) => {
+      qc.invalidateQueries({ queryKey: ['lessonPlanQuizzes', variables.planId] });
+      qc.invalidateQueries({ queryKey: ['questions'] });
     },
   });
 }
@@ -190,6 +369,8 @@ export function useSubmitForReview() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['aiReview', data.plan_id] });
+      qc.invalidateQueries({ queryKey: ['lessonPeriodAiReviews', data.plan_id] });
+      qc.invalidateQueries({ queryKey: ['lessonPlanQuizzes', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['lessonPlans'] });
     },
   });
@@ -260,6 +441,8 @@ export function useRetryAIReview() {
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['aiReview', data.plan_id] });
+      qc.invalidateQueries({ queryKey: ['lessonPeriodAiReviews', data.plan_id] });
+      qc.invalidateQueries({ queryKey: ['lessonPlanQuizzes', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['lessonPlans'] });
     },
   });

@@ -392,6 +392,11 @@ export interface Question {
   rubric?: string | null;
   teacherId: string;
   createdAt: string;
+  source_lesson_plan_id?: string | null;
+  source_quiz_id?: string | null;
+  source_subject_id?: string | null;
+  source_class_name?: string | null;
+  source_auto_generated?: boolean | null;
 }
 
 export interface Quiz {
@@ -407,6 +412,8 @@ export interface Quiz {
   teacherId: string;
   status: 'draft' | 'active' | 'closed';
   createdAt: string;
+  lesson_plan_id?: string | null;
+  auto_generated?: boolean | null;
 }
 
 export interface QuizQuestion {
@@ -654,6 +661,23 @@ export interface AdditionalData {
   input_tokens?: number;
   output_tokens?: number;
   retries?: number;
+}
+
+export interface LessonPeriodAIReview {
+  id: string;
+  plan_id: string;
+  period_id: string | null;
+  period_order: number;
+  alignment_status: 'fully_aligned' | 'partially_aligned' | 'not_aligned';
+  review_text: string;
+  alignment_reason?: string | null;
+  alignment_gap?: string | null;
+  revision_status?: 'included' | 'missing' | 'not_applicable';
+  revision_reason?: string | null;
+  suggested_activities?: string[] | null;
+  unit_plan_id?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface AIReview {

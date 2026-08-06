@@ -1,14 +1,15 @@
 import { useEffect, useMemo, useState } from 'react';
-import { PDFDownloadLink } from '@react-pdf/renderer';
 import { useRole } from '../../context/RoleContext';
-import { useTeacherPlans, usePlanWithPeriods } from '../../lib/hooks/useLessonPlans';
+import { useTeacherPlans, usePlanWithPeriods, usePeriodAiReviews } from '../../lib/hooks/useLessonPlans';
+import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
 import { LessonPlanPeriod, PlanStatus, Subject, DAYS_OF_WEEK, isPlanEditable } from '../../types';
 import {
-  FileText, CheckCircle, Clock, AlertTriangle, XCircle, Download,
+  FileText, CheckCircle, Clock, AlertTriangle, XCircle,
   ChevronLeft, Pencil, Search, FolderOpen, Loader2, Unlock, CalendarRange,
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
+import { ExportLessonPlanPdfButton } from '../../components/lesson-planner/ExportLessonPlanPdfButton';
 import { LessonPlanPdfDocument } from '../shared/LessonPlanPdfDocument';
 import { describePlanWeek } from '../../utils/weekDates';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
@@ -214,6 +215,8 @@ function PlanDetail({
   onEditPlan?: (planId: string) => void;
 }) {
   const { data, isLoading } = usePlanWithPeriods(planId);
+  const { data: periodAiReviews = [] } = usePeriodAiReviews(planId);
+  const { data: unitPlans = [] } = useUnitPlansByClass(data?.plan.class_name ?? null);
 
   if (isLoading || !data) {
     return (
@@ -248,21 +251,11 @@ function PlanDetail({
               <Pencil className="w-4 h-4" /> Edit plan
             </button>
           )}
-          <PDFDownloadLink
-            document={<LessonPlanPdfDocument plan={plan} periods={periods} />}
+          <ExportLessonPlanPdfButton
+            document={<LessonPlanPdfDocument plan={plan} periods={periods} unitPlans={unitPlans} subjects={subjects} periodAiReviews={periodAiReviews} />}
             fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
-            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 transition-colors"
-          >
-            {({ loading, error }) => {
-              if (error) console.error('[PDF] generation error:', error);
-              return (
-                <>
-                  <Download className="w-4 h-4" />
-                  {loading ? 'Preparing PDF…' : 'Export PDF'}
-                </>
-              );
-            }}
-          </PDFDownloadLink>
+            className="flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
+          />
         </div>
       </div>
 

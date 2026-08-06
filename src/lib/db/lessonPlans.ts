@@ -1,4 +1,6 @@
 import { supabase } from '../supabase';
+import { regeneratePeriodAiReviews } from './lessonPeriodAiReviews';
+import { generateLessonPlanQuizzes } from './lessonPlanQuizzes';
 import type { LessonPlan, LessonPlanPeriod, PeriodActivity, AIReview, AiReviewLog, AiReviewOutcome, DayOfWeek, PlanStatus, ReviewResponse, SavePeriodsPayload } from '../../types';
 import { isPlanEditable } from '../../types';
 
@@ -348,6 +350,18 @@ export async function submitForReview(
       .eq('id', planId);
   }
 
+  try {
+    await regeneratePeriodAiReviews(planId);
+  } catch (err) {
+    console.error('[lesson-period-ai-reviews] failed to generate after submit', err);
+  }
+
+  try {
+    await generateLessonPlanQuizzes(planId);
+  } catch (err) {
+    console.error('[lesson-plan-quizzes] failed to generate after submit', err);
+  }
+
   return data as ReviewResponse;
 }
 
@@ -438,6 +452,18 @@ export async function retryAIReview(
   }
 
   await logAiReviewAttempt({ planId, outcome: 'success', latencyMs: Date.now() - callStart });
+
+  try {
+    await regeneratePeriodAiReviews(planId);
+  } catch (err) {
+    console.error('[lesson-period-ai-reviews] failed to regenerate after AI retry', err);
+  }
+
+  try {
+    await generateLessonPlanQuizzes(planId);
+  } catch (err) {
+    console.error('[lesson-plan-quizzes] failed to regenerate after AI retry', err);
+  }
 
   return data as ReviewResponse;
 }

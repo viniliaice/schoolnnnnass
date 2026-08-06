@@ -40,6 +40,31 @@ export function weekNumberFromLabel(label: string | null | undefined): number | 
   return n;
 }
 
+function isoWeeksInYear(year: number): number {
+  const d = new Date(Date.UTC(year, 11, 31));
+  const day = d.getUTCDay() || 7;
+  return day === 4 || (day === 5 && isIsoLeapYear(year)) ? 53 : 52;
+}
+
+function isIsoLeapYear(year: number): boolean {
+  const d = new Date(Date.UTC(year, 0, 1));
+  const day = d.getUTCDay() || 7;
+  return day === 4 || (day === 3 && new Date(Date.UTC(year, 1, 29)).getUTCMonth() === 1);
+}
+
+/** Previous ISO-style week label, e.g. 2026-W01 -> 2025-W52/53. */
+export function previousWeekLabel(label: string | null | undefined): string | null {
+  if (!label) return null;
+  const match = /^(\d{4})-W(\d{1,2})$/i.exec(label.trim());
+  if (!match) return null;
+  const year = Number(match[1]);
+  const week = Number(match[2]);
+  if (!Number.isFinite(year) || !Number.isFinite(week) || week < 1) return null;
+  if (week > 1) return `${year}-W${String(week - 1).padStart(2, '0')}`;
+  const prevYear = year - 1;
+  return `${prevYear}-W${String(isoWeeksInYear(prevYear)).padStart(2, '0')}`;
+}
+
 /** Which 1-based week number contains `date`? Clamped to >= 1. */
 export function weekNumberForDate(academicYearStart: string | Date, date: string | Date = new Date()): number {
   const start = atMidnight(academicYearStart);

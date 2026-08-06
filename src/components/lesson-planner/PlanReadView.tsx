@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { DayOfWeek, DAYS_OF_WEEK, PeriodActivity, Subject } from '../../types';
+import { DayOfWeek, DAYS_OF_WEEK, PeriodActivity, Subject, UnitPlan, LessonPeriodAIReview } from '../../types';
 import { cn } from '../../utils/cn';
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Plus } from 'lucide-react';
+import { summarizeDay } from '../../lib/lessonPlanReview';
 
 export interface ReadPeriod {
   day: DayOfWeek;
@@ -21,15 +22,124 @@ interface PlanReadViewProps {
   subjects?: Subject[];
   planClassName: string;
   weekDates?: string[];
+  unitPlans?: UnitPlan[];
+  periodAiReviews?: LessonPeriodAIReview[];
+  showAiReview?: boolean;
+  onAddCommentLine?: (line: string) => void;
   /** When true, each day section is an accordion panel — collapsed by default. */
   collapsible?: boolean;
   /** Used only when collapsible is true. Defaults to true. */
   defaultCollapsed?: boolean;
 }
 
-function subjectName(subjects: Subject[] | undefined, value: string): string {
+function inferSubjectFromUnitName(value: string): string | null {
+  const text = value.toLowerCase();
+  if (/math|addition|subtraction|multiplication|division|numeracy/.test(text)) return 'Mathematics';
+  if (/english|literacy|reading|writing|grammar|language/.test(text)) return 'English';
+  if (/science|biology|chemistry|physics|environment/.test(text)) return 'Science';
+  if (/arabic|quran|qur/.test(text)) return 'Arabic';
+  if (/social|history|geography|civic|somali|islamic/.test(text)) return 'Social Studies';
+  return null;
+}
+
+function subjectName(subjects: Subject[] | undefined, value: string, unitPlans: UnitPlan[] = []): string {
   if (!value) return '—';
-  return subjects?.find((s) => s.id === value)?.name || value;
+  const match = subjects?.find((s) => s.id === value);
+  if (match) return match.name;
+  const unitMatch = unitPlans.find((unit) => unit.subject_id === value);
+  const inferred = unitMatch ? inferSubjectFromUnitName(`${unitMatch.name} ${unitMatch.objectives}`) : null;
+  if (inferred) return inferred;
+  return value.startsWith('subject-') ? 'Subject' : value;
+}
+
+const DAY_ORDER: Record<string, number> = { Saturday: 1, Sunday: 2, Monday: 3, Tuesday: 4, Wednesday: 5, Thursday: 6, Friday: 7 };
+
+function reviewOrder(period: Pick<ReadPeriod, 'day' | 'period_number'>): number {
+  return (DAY_ORDER[period.day] ?? 99) * 10 + period.period_number;
+}
+
+function alignmentLabel(status: LessonPeriodAIReview['alignment_status']): string {
+  if (status === 'fully_aligned') return '✅ Fully Aligned';
+  if (status === 'partially_aligned') return '⚠️ Partially Aligned';
+  return '❌ Not Aligned';
+}
+
+function revisionLabel(status: LessonPeriodAIReview['revision_status'] | undefined): string {
+  if (status === 'included') return 'Revision: ✓ included';
+  if (status === 'missing') return 'Revision: ⚠ missing';
+  return 'Revision: —';
+}
+
+function AddLineButton({ line, onAdd }: { line: string; onAdd?: (line: string) => void }) {
+  if (!onAdd) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => onAdd(line)}
+      className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/90 text-slate-600 shadow-sm transition hover:bg-indigo-600 hover:text-white"
+      title="Add to supervisor comment"
+      aria-label="Add this line to supervisor comment"
+    >
+      <Plus className="h-3.5 w-3.5" />
+    </button>
+  );
+}
+
+function AiReviewBox({ review, onAddCommentLine }: { review?: LessonPeriodAIReview; onAddCommentLine?: (line: string) => void }) {
+  if (!review) {
+    return (
+      <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
+        No saved period AI review yet. Supervisors can use Regenerate AI Review to create it.
+      </div>
+    );
+  }
+
+  const tone = review.alignment_status === 'fully_aligned'
+    ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
+    : review.alignment_status === 'partially_aligned'
+      ? 'border-amber-200 bg-amber-50 text-amber-800'
+      : 'border-rose-200 bg-rose-50 text-rose-800';
+
+  const suggestions = review.suggested_activities ?? [];
+
+  return (
+    <div className={cn('mt-3 rounded-xl border p-3', tone)}>
+      <div className="mb-1 flex flex-wrap items-center gap-2">
+        <span className="text-xs font-bold uppercase tracking-wide">AI Review</span>
+        <span className="rounded-full bg-white/80 px-2 py-0.5 text-xs font-bold shadow-sm">{alignmentLabel(review.alignment_status)}</span>
+        <span className={cn(
+          'rounded-full bg-white/80 px-2 py-0.5 text-xs font-bold shadow-sm',
+          review.revision_status === 'missing' ? 'text-rose-700' : review.revision_status === 'included' ? 'text-emerald-700' : 'text-slate-500'
+        )}>{revisionLabel(review.revision_status)}</span>
+      </div>
+      <div className="flex items-start gap-2">
+        <p className="flex-1 text-sm leading-6">{review.review_text}</p>
+        <AddLineButton line={review.review_text} onAdd={onAddCommentLine} />
+      </div>
+      {review.alignment_reason && <p className="mt-1 text-xs leading-5 opacity-80">{review.alignment_reason}</p>}
+      {review.revision_reason && <p className="mt-1 text-xs leading-5 opacity-80">{review.revision_reason}</p>}
+      {review.alignment_status !== 'fully_aligned' && review.alignment_gap && (
+        <div className="mt-2 flex items-start gap-2 rounded-lg bg-white/70 px-3 py-2 text-xs font-semibold leading-5 text-slate-700 shadow-sm">
+          <p className="flex-1">Alignment gap: {review.alignment_gap}</p>
+          <AddLineButton line={`Alignment gap: ${review.alignment_gap}`} onAdd={onAddCommentLine} />
+        </div>
+      )}
+      {suggestions.length > 0 && (
+        <div className="mt-3 rounded-lg bg-white/75 p-3 text-slate-800 shadow-sm">
+          <p className="mb-2 text-xs font-bold uppercase tracking-wide text-slate-600">Suggested Activities</p>
+          <ol className="list-none space-y-1.5 text-sm leading-6">
+            {suggestions.map((activity, index) => (
+              <li key={activity} className="flex gap-2">
+                <span className="font-bold text-slate-500">{index + 1}.</span>
+                <span className="flex-1">{activity}</span>
+                <AddLineButton line={activity} onAdd={onAddCommentLine} />
+              </li>
+            ))}
+          </ol>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -38,7 +148,7 @@ function subjectName(subjects: Subject[] | undefined, value: string): string {
  * than the compact editing grid) and it flows well onto a PDF page.
  */
 export function PlanReadView({
-  periods, periodCount, subjects, planClassName, weekDates,
+  periods, periodCount, subjects, planClassName, weekDates, unitPlans = [], periodAiReviews = [], showAiReview = false, onAddCommentLine,
   collapsible = false, defaultCollapsed = true,
 }: PlanReadViewProps) {
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
@@ -52,7 +162,10 @@ export function PlanReadView({
         const dayPeriods = Array.from({ length: periodCount }, (_, pi) =>
           periods.find((p) => p.day === day && p.period_number === pi + 1)
         );
-        const plannedCount = dayPeriods.filter((p) => p && !p.isFree && p.topic.trim()).length;
+        const summary = summarizeDay(
+          dayPeriods.map((period) => ({ is_free: !period || !!period.isFree, topic: period?.topic ?? '' })),
+          periodCount
+        );
         const isExpanded = expandedDays[day] ?? !defaultCollapsed;
 
         return (
@@ -61,25 +174,43 @@ export function PlanReadView({
               <button
                 type="button"
                 onClick={() => toggleDay(day)}
-                className="w-full flex items-center gap-3 px-5 py-3 bg-slate-50 hover:bg-slate-100 transition-colors"
+                className="flex min-h-12 w-full flex-wrap items-center gap-3 bg-slate-50 px-4 py-3 text-left transition-colors hover:bg-slate-100 sm:px-5"
               >
                 <ChevronDown className={cn(
                   'w-4 h-4 text-slate-400 shrink-0 transition-transform',
                   isExpanded && 'rotate-180'
                 )} />
-                <h3 className="text-base font-bold text-slate-900 text-left">{day}</h3>
-                {weekDates?.[di] && <span className="text-sm text-slate-500">{weekDates[di]}</span>}
-                <span className="ml-auto text-xs font-medium text-slate-500">
-                  {plannedCount} of {periodCount} periods planned
-                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <h3 className="text-base font-bold text-slate-900 text-left">{day}</h3>
+                    {weekDates?.[di] && <span className="text-sm text-slate-500">{weekDates[di]}</span>}
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-center sm:max-w-md">
+                    <span className="rounded-lg bg-white px-2 py-1 text-xs font-semibold text-slate-600 shadow-sm">{summary.planned} planned</span>
+                    <span className="rounded-lg bg-white px-2 py-1 text-xs font-semibold text-slate-600 shadow-sm">{summary.free} free</span>
+                    <span className="rounded-lg bg-white px-2 py-1 text-xs font-bold text-indigo-700 shadow-sm">{summary.percent}% done</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div className="h-full rounded-full bg-indigo-600 transition-all" style={{ width: `${summary.percent}%` }} />
+                  </div>
+                </div>
               </button>
             ) : (
               <header className="flex flex-wrap items-center gap-x-3 gap-y-1 px-5 py-3 bg-slate-50 border-b border-slate-200">
-                <h3 className="text-base font-bold text-slate-900">{day}</h3>
-                {weekDates?.[di] && <span className="text-sm text-slate-500">{weekDates[di]}</span>}
-                <span className="ml-auto text-xs font-medium text-slate-500">
-                  {plannedCount} of {periodCount} periods planned
-                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <h3 className="text-base font-bold text-slate-900">{day}</h3>
+                    {weekDates?.[di] && <span className="text-sm text-slate-500">{weekDates[di]}</span>}
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-center sm:max-w-md">
+                    <span className="rounded-lg bg-white px-2 py-1 text-xs font-semibold text-slate-600 shadow-sm">{summary.planned} planned</span>
+                    <span className="rounded-lg bg-white px-2 py-1 text-xs font-semibold text-slate-600 shadow-sm">{summary.free} free</span>
+                    <span className="rounded-lg bg-white px-2 py-1 text-xs font-bold text-indigo-700 shadow-sm">{summary.percent}% done</span>
+                  </div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-200">
+                    <div className="h-full rounded-full bg-indigo-600" style={{ width: `${summary.percent}%` }} />
+                  </div>
+                </div>
               </header>
             )}
 
@@ -88,7 +219,7 @@ export function PlanReadView({
                 {dayPeriods.map((cell, pi) => {
                   const isFree = !cell || cell.isFree || cell.subject === '__FREE__';
                   return (
-                    <div key={pi} className="avoid-break flex gap-4 px-5 py-4">
+                    <div key={pi} className="avoid-break flex gap-3 px-4 py-4 sm:gap-4 sm:px-5">
                       <div className="shrink-0 w-14">
                         <div className={cn(
                           'w-11 h-11 rounded-xl flex flex-col items-center justify-center text-xs font-bold',
@@ -105,7 +236,7 @@ export function PlanReadView({
                         <div className="flex-1 min-w-0 space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
                             <span className="px-2.5 py-1 rounded-lg bg-indigo-50 text-indigo-700 text-xs font-semibold">
-                              {subjectName(subjects, cell!.subject)}
+                              {subjectName(subjects, cell!.subject, unitPlans)}
                             </span>
                             <span className="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium">
                               {cell!.className || planClassName || '—'}
@@ -151,6 +282,13 @@ export function PlanReadView({
                                 </li>
                               ))}
                             </ol>
+                          )}
+
+                          {showAiReview && (
+                            <AiReviewBox
+                              review={periodAiReviews.find((review) => review.period_order === reviewOrder(cell!))}
+                              onAddCommentLine={onAddCommentLine}
+                            />
                           )}
                         </div>
                       )}

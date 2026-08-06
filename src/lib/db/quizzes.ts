@@ -37,7 +37,7 @@ export async function getQuestionsByTeacher(teacherId: string): Promise<Question
     .eq('teacherId', teacherId)
     .order('createdAt', { ascending: false });
   if (error) throw error;
-  return data || [];
+  return (data || []).filter((q: any) => q.source_auto_generated !== true);
 }
 
 export async function updateQuestion(id: string, data: Partial<Question>): Promise<void> {
