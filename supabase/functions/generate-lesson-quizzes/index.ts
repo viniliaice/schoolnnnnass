@@ -1,10 +1,10 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
 const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const NVIDIA_MODEL = 'deepseek-ai/deepseek-v4-flash';
+const NVIDIA_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b';
 const ZEN_API_URL = 'https://opencode.ai/zen/v1/chat/completions';
 const ZEN_MODEL = 'deepseek-v4-flash-free';
-const AI_ATTEMPT_TIMEOUT_MS = 70_000;
+const AI_ATTEMPT_TIMEOUT_MS = 120_000;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -90,7 +90,9 @@ async function callLLM(prompt: string, apiKey: string, signal: AbortSignal, url 
       ],
       temperature: 0.8,
       top_p: 0.9,
-      max_tokens: 5000,
+      max_tokens: 12000,
+      reasoning_budget: url === NVIDIA_API_URL ? 4096 : undefined,
+      chat_template_kwargs: url === NVIDIA_API_URL ? { enable_thinking: true } : undefined,
       stream: false,
     }),
     signal,
