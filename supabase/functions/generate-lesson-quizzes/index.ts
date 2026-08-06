@@ -286,7 +286,9 @@ Rules:
 - No repeated question stems inside a quiz.
 - Output only valid JSON, no markdown fences.
 
-Example multiple_choice question (4 distinct options):
+One-shot example — correct vs incorrect:
+
+CORRECT (4 distinct options):
 {
   "type": "multiple_choice",
   "question": "Muna has 24 pencils and gets 18 more. Which sum should she solve?",
@@ -294,6 +296,16 @@ Example multiple_choice question (4 distinct options):
   "correctIndex": 0,
   "explanation": "We add 24 and 18 to find the total pencils."
 }
+
+INCORRECT (duplicate options — will be rejected):
+{
+  "type": "multiple_choice",
+  "question": "Muna has 24 pencils and gets 18 more. Which sum should she solve?",
+  "options": ["24 + 18", "24+18", "24 + 18 ", "24 - 18"],
+  "correctIndex": 0,
+  "explanation": "We add 24 and 18 to find the total pencils."
+}
+The second example fails because options 1, 2, and 3 are identical after trimming/casing.
 
 Lesson Context:
 ${buildCompactLessonContext(payload)}`;
