@@ -2,7 +2,7 @@ import { supabase } from '../supabase';
 import { getQuizWithQuestions } from './quizzes';
 import type { LessonPlan, LessonPlanPeriod, PeriodActivity, Quiz, QuizQuestion } from '../../types';
 
-import { QUIZ_GENERATION_DEFAULTS, validateGeneratedResponse, findOffendingQuestions, type GeneratedQuestion, type GeneratedQuiz } from '../quizGenerationValidation';
+import { QUIZ_GENERATION_DEFAULTS, validateGeneratedResponse, type GeneratedQuestion, type GeneratedQuiz } from '../quizGenerationValidation';
 
 function id(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -107,8 +107,7 @@ async function edgeFunctionErrorMessage(error: unknown): Promise<string> {
     try {
       const body = await context.clone().json();
       const detail = [body?.error, body?.code, body?.provider, body?.model].filter(Boolean).join(' · ');
-      const excerpt = body?.raw_excerpt ? `\nRaw excerpt: ${String(body.raw_excerpt).slice(0, 800)}` : '';
-      return detail ? `${base}: ${detail}${excerpt}` : base + excerpt;
+      return detail ? `${base}: ${detail}` : base;
     } catch {
       try {
         const text = await context.clone().text();
@@ -170,16 +169,20 @@ async function generateWithLLM(
     // Reinvoking the full generation here multiplies provider work without
     // recovering from schema drift, so retain client validation as a guard only.
     const message = err instanceof Error ? err.message : String(err);
-    const offending = findOffendingQuestions(data);
-    const serialized = JSON.stringify(data);
-    const rawExcerpt = serialized.slice(0, 800);
+    const quizzes = (data as { quizzes?: unknown })?.quizzes;
+    const quizCount = Array.isArray(quizzes) ? quizzes.length : null;
+    const questionCounts = Array.isArray(quizzes)
+      ? quizzes.slice(0, 10).map((quiz) => {
+          const questions = (quiz as { questions?: unknown })?.questions;
+          return Array.isArray(questions) ? questions.length : null;
+        })
+      : [];
     console.error('[lessonPlanQuizzes] Edge/client validation mismatch', {
-      subject,
-      error: message.slice(0, 500),
-      offending,
-      rawExcerpt,
+      validationResult: 'failed',
+      quizCount,
+      questionCounts,
     });
-    throw new Error(`Quiz generation returned invalid structured output: ${message}. Raw preview: ${rawExcerpt}`);
+    throw new Error(`Quiz generation returned invalid structured output: ${message}`);
   }
 }
 

@@ -11,10 +11,11 @@ const AI_ATTEMPT_TIMEOUT_MS = 45_000;
 const RECOVERY_ATTEMPT_TIMEOUT_MS = 30_000;
 const WALL_CLOCK_BUDGET_MS = 75_000;
 
-// One retry preserves recovery from transient 429/5xx responses without the old
-// nested 30-call worst case. A hard request-level guard prevents future loops.
+// One retry preserves recovery from genuinely transient gateway failures. Rate
+// limits are not retried inside one request, and the global guard keeps the
+// full Zen → NVIDIA → validation-recovery path predictable.
 const PROVIDER_MAX_RETRIES = 1;
-const MAX_PROVIDER_ATTEMPTS_PER_REQUEST = 8;
+const MAX_PROVIDER_ATTEMPTS_PER_REQUEST = 4;
 const BASE_BACKOFF_MS = 800;
 export const PROVIDER_MAX_TOKENS = 1800;
 const MAX_RESPONSE_BYTES_WARN = 50_000;
@@ -45,6 +46,23 @@ interface RequestDiagnostics {
 interface ProviderOutput {
   raw: string;
   finishReason: string | null;
+  attempt: number;
+  latencyMs: number;
+}
+
+interface ParsedCandidate {
+  value: unknown;
+  responseChars: number;
+  responseBytes: number;
+  attempt: number;
+  latencyMs: number;
+}
+
+type GenerationStrategy = 'initial' | 'strict_recovery';
+
+export interface QuizShapeDiagnostics {
+  quizCount: number | null;
+  questionCounts: Array<number | null>;
 }
 
 interface GeneratedMultipleChoice {
@@ -70,6 +88,12 @@ export function errorMessage(err: unknown): string {
   return String(err);
 }
 
+function diagnosticErrorCode(err: unknown): string {
+  const code = (err as { code?: unknown })?.code;
+  if (typeof code === 'string' && code) return code.slice(0, 80);
+  return err instanceof Error ? err.name.slice(0, 80) : 'UNKNOWN_ERROR';
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -93,9 +117,9 @@ export function returnResponse(
   const serialized = typeof data === 'string' ? data : JSON.stringify(data);
   const responseBytes = new TextEncoder().encode(serialized).byteLength;
   const executionMs = diagnostics ? Date.now() - diagnostics.startedAt : undefined;
-  const providerAttempts = diagnostics?.providerAttempts;
+  const totalProviderAttempts = diagnostics?.providerAttempts;
 
-  console.log({ responseBytes, executionMs, providerAttempts });
+  console.log({ responseBytes, executionMs, totalProviderAttempts });
   if (responseBytes > MAX_RESPONSE_BYTES_WARN) {
     console.warn('[generate-lesson-quizzes] warning: unexpectedly large response size', { responseBytes });
   }
@@ -168,6 +192,18 @@ export function validate(input: unknown): void {
   validateQuizResponse(input);
 }
 
+/** Bounded structural metadata for diagnostics; never includes generated content. */
+export function summarizeQuizShape(input: unknown): QuizShapeDiagnostics {
+  const quizzes = (input as any)?.quizzes;
+  if (!Array.isArray(quizzes)) return { quizCount: null, questionCounts: [] };
+  return {
+    quizCount: quizzes.length,
+    questionCounts: quizzes.slice(0, 10).map((quiz: any) => (
+      Array.isArray(quiz?.questions) ? quiz.questions.length : null
+    )),
+  };
+}
+
 /** Drop provider-added metadata and retain only fields consumed by the client. */
 export function normalizeQuizResponse(input: unknown): GeneratedQuizResponse {
   const quizzes = (input as any).quizzes.map((quiz: any) => ({
@@ -193,23 +229,6 @@ export function normalizeQuizResponse(input: unknown): GeneratedQuizResponse {
     }),
   }));
   return { quizzes };
-}
-
-function findOffendingQuestions(input: unknown): Array<{ quizIndex: number; questionIndex: number }> {
-  const result: Array<{ quizIndex: number; questionIndex: number }> = [];
-  const quizzes = (input as any)?.quizzes;
-  if (!Array.isArray(quizzes)) return result;
-  quizzes.forEach((quiz: any, qi: number) => {
-    if (!Array.isArray(quiz.questions)) return;
-    quiz.questions.forEach((q: any, qIdx: number) => {
-      if (q.type === 'multiple_choice' && Array.isArray(q.options) && q.options.length === 4) {
-        if (new Set(q.options.map((o: string) => strip(o).toLowerCase())).size !== 4) {
-          result.push({ quizIndex: qi, questionIndex: qIdx });
-        }
-      }
-    });
-  });
-  return result;
 }
 
 function boundedText(value: unknown, maxChars: number): string {
@@ -324,21 +343,26 @@ export function buildCompactPrompt(payload: GeneratePayload): string {
   // Quiz generation is intentionally fixed to the existing client contract.
   const quizCount = 3;
   const questionsPerQuiz = 4;
-  const directAnswerMin = 1;
-  const instructions = `Generate rigorous, age-appropriate quizzes from the lesson context. Return JSON only.
+  const instructions = `Generate rigorous, age-appropriate quizzes from the lesson context.
 
-Exact schema (no extra fields):
-{"quizzes":[{"title":"string","questions":[{"type":"multiple_choice","question":"string","options":["string","string","string","string"],"correctIndex":0,"explanation":"one short sentence"},{"type":"direct_answer","question":"string","rubric":"one short scoring sentence"}]}]}
+OUTPUT CONTRACT — every rule is mandatory:
+- Return ONLY one valid JSON object. No markdown, prose, commentary, or code fences.
+- Return exactly ${quizCount} quizzes. Do not return 2, 4, or any other number. Do not omit a quiz.
+- Each quiz must contain exactly ${questionsPerQuiz} questions. Do not return 3, 5, or any other number.
+- In EACH quiz, questions 1–3 must be multiple_choice and question 4 must be direct_answer.
+- Use no fields except those shown in the exact object shapes below.
 
-Quiz settings and rules:
-- Exactly ${quizCount} quizzes and exactly ${questionsPerQuiz} questions in each quiz.
-- At least ${directAnswerMin} direct_answer question in each quiz; use multiple_choice for the others.
-- Every multiple_choice has exactly 4 meaningful, pairwise-distinct options and correctIndex 0-3.
-- Distractors must test different plausible misconceptions; do not vary only spacing or punctuation.
-- Every direct_answer has a non-empty rubric and no options/correctIndex/explanation.
-- Keep explanations and rubrics to one short sentence.
+Exact root and object shapes:
+{"quizzes":[{"title":"concise title","questions":[{"type":"multiple_choice","question":"concise question","options":["concise option 1","concise option 2","concise option 3","concise option 4"],"correctIndex":0},{"type":"multiple_choice","question":"concise question","options":["concise option 1","concise option 2","concise option 3","concise option 4"],"correctIndex":1},{"type":"multiple_choice","question":"concise question","options":["concise option 1","concise option 2","concise option 3","concise option 4"],"correctIndex":2},{"type":"direct_answer","question":"concise question","rubric":"one short scoring sentence"}]}]}
+The example shows one quiz object only to define its fields. The actual "quizzes" array MUST repeat that quiz object shape exactly ${quizCount} times.
+
+Content rules:
+- Every multiple_choice has exactly 4 meaningful, pairwise-distinct options and correctIndex 0–3.
+- Distractors test different plausible misconceptions; never vary only spacing or punctuation.
+- Every direct_answer has a non-empty rubric and no options, correctIndex, or explanation.
+- Do not include explanations or rationales. Keep all questions, options, titles, and rubrics concise.
 - Use only the supplied lesson title, objectives, topics, vocabulary, activities, class, grade, and subject.
-- Do not repeat question stems within a quiz. Do not output markdown.
+- Do not repeat question stems within a quiz.
 
 Lesson context:
 `;
@@ -359,43 +383,79 @@ Lesson context:
   return prompt;
 }
 
-function buildRepairPrompt(original: unknown, offending: Array<{ quizIndex: number; questionIndex: number }>): string {
-  const offendersDesc = offending.map(({ quizIndex, questionIndex }) => `quiz ${quizIndex + 1} question ${questionIndex + 1}`).join(', ');
-  const origStr = typeof original === 'string' ? original : JSON.stringify(original);
-  const truncatedOrig = origStr.length > 3000 ? origStr.slice(0, 3000) + '... [truncated]' : origStr;
-  return `You previously generated quizzes but the following questions failed validation because their 4 answer options were not distinct (duplicates after trimming whitespace and ignoring case): ${offendersDesc}.
+function buildStrictRecoveryPrompt(prompt: string, failure: 'invalid_json' | 'validation_failed'): string {
+  const recovery = `
 
-Fix ONLY those questions. For each offending multiple_choice question, regenerate its "options" array so all 4 strings are pairwise distinct after trimming and lowercasing, and each distractor represents a different plausible misconception. Keep the same question stem, correct answer position (correctIndex), and all other quizzes/questions exactly as they were.
-
-Return the FULL JSON again with the same schema:
-{ "quizzes": [...] }
-
-Offending indices: ${JSON.stringify(offending)}
-
-Original JSON you produced:
-${truncatedOrig}
-
-Rules for the fix:
-- Each fixed question must have exactly 4 distinct options (case-insensitive, whitespace-insensitive).
-- Do not create near-duplicates like "24 + 18" vs "24+18".
-- Keep correctIndex pointing to the correct answer.
-- Output only valid JSON, no markdown fences.`;
+STRICT RECOVERY — the previous output was rejected (${failure}). Discard it and generate a new complete result.
+- Return ONLY one valid JSON object with the root key "quizzes".
+- Return exactly 3 quizzes, never 2, 4, or another count.
+- Return exactly 4 questions in EACH quiz, never 3, 5, or another count.
+- In each quiz, questions 1–3 are multiple_choice and question 4 is direct_answer.
+- Include every required field and exactly 4 distinct options for each multiple_choice.
+- Include no explanations, rationales, markdown, prose, or omitted quizzes.
+Before responding, silently count the quizzes and every questions array. Output the JSON object only.`;
+  const strictPrompt = `${prompt}${recovery}`;
+  if (strictPrompt.length > MAX_PROMPT_CHARS) {
+    throw new Error(`Strict recovery prompt exceeds hard maximum of ${MAX_PROMPT_CHARS} characters`);
+  }
+  return strictPrompt;
 }
 
-function parseQuizJson(content: string): unknown {
-  let cleaned = content.trim();
-  if (cleaned.startsWith('```')) {
-    const firstLineEnd = cleaned.indexOf('\n');
-    cleaned = firstLineEnd >= 0 ? cleaned.slice(firstLineEnd + 1) : cleaned.slice(3);
-    if (cleaned.trimEnd().endsWith('```')) {
-      cleaned = cleaned.trimEnd().slice(0, -3).trimEnd();
+/** Parse exact JSON or a harmless markdown/prose wrapper around one balanced object. */
+export function parseQuizJson(content: string): unknown {
+  const cleaned = content.replace(/^\uFEFF/, '').trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Providers occasionally wrap an otherwise valid object. Scan balanced
+    // object boundaries while respecting quoted braces and escapes; never
+    // synthesize, duplicate, truncate, or otherwise repair generated content.
+    let firstCandidate: unknown;
+    let hasCandidate = false;
+    for (let start = 0; start < cleaned.length; start += 1) {
+      if (cleaned[start] !== '{') continue;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = start; index < cleaned.length; index += 1) {
+        const char = cleaned[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (char === '\\') escaped = true;
+          else if (char === '"') inString = false;
+          continue;
+        }
+        if (char === '"') {
+          inString = true;
+        } else if (char === '{') {
+          depth += 1;
+        } else if (char === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            try {
+              const parsed = JSON.parse(cleaned.slice(start, index + 1));
+              if (parsed && typeof parsed === 'object' && Object.prototype.hasOwnProperty.call(parsed, 'quizzes')) {
+                return parsed;
+              }
+              if (!hasCandidate) {
+                firstCandidate = parsed;
+                hasCandidate = true;
+              }
+            } catch {
+              // This balanced span was not JSON; continue at the next opening brace.
+            }
+            break;
+          }
+        }
+      }
     }
+    if (hasCandidate) return firstCandidate;
   }
-  return JSON.parse(cleaned);
+  throw new SyntaxError('No complete valid JSON object found in provider response');
 }
 
 /** Extract only the completion text needed by quiz parsing from the provider envelope. */
-export function parseProviderResponse(body: unknown): ProviderOutput {
+export function parseProviderResponse(body: unknown): Pick<ProviderOutput, 'raw' | 'finishReason'> {
   const envelope = body as any;
   const choice = envelope?.choices?.[0];
   const message = choice?.message ?? choice?.delta ?? {};
@@ -415,7 +475,10 @@ export function parseProviderResponse(body: unknown): ProviderOutput {
 }
 
 function isRetriableStatus(status: number): boolean {
-  return status === 429 || status === 529 || status === 502 || status === 503 || status === 504;
+  // A rate limit will not clear within this short request. In particular, Zen's
+  // FreeUsageLimitError must immediately route to NVIDIA rather than consume an
+  // identical retry. Only transient gateway/service failures are retried.
+  return status === 529 || status === 502 || status === 503 || status === 504;
 }
 
 async function sendProviderRequest(
@@ -424,23 +487,35 @@ async function sendProviderRequest(
   signal: AbortSignal,
   url: string,
   model: string,
+  strategy: GenerationStrategy,
 ): Promise<Response> {
   // The provider body is serialized exactly once in this short-lived scope.
-  // Nemotron 3.5's published sampling values are used for the NVIDIA fallback,
-  // but thinking is disabled so its bounded output budget is reserved for the
-  // client-consumed quiz JSON rather than an unused reasoning trace.
+  // Nemotron 3.5 documents JSON-object mode (not full json_schema enforcement),
+  // so exact 3×4 counts remain application-validated. Thinking is disabled so
+  // the output budget is reserved for the client-consumed JSON.
   const isNvidia = url === NVIDIA_API_URL;
+  const strictRecovery = strategy === 'strict_recovery';
   const serializedRequest = JSON.stringify({
     model,
     messages: [
-      { role: 'system', content: 'Generate rigorous school quizzes. Return only valid JSON.' },
+      {
+        role: 'system',
+        content: strictRecovery
+          ? 'Act as a strict JSON compiler. Return one complete valid object matching every count and field rule; output no other text.'
+          : 'Generate rigorous school quizzes. Return only one valid JSON object.',
+      },
       { role: 'user', content: prompt },
     ],
-    temperature: isNvidia ? 1 : 0.7,
-    top_p: isNvidia ? 0.95 : 0.9,
+    temperature: strictRecovery ? 0.2 : isNvidia ? 1 : 0.7,
+    top_p: strictRecovery ? 0.8 : isNvidia ? 0.95 : 0.9,
     max_tokens: PROVIDER_MAX_TOKENS,
     stream: false,
-    ...(isNvidia ? { chat_template_kwargs: { enable_thinking: false } } : {}),
+    ...(isNvidia
+      ? {
+          response_format: { type: 'json_object' },
+          chat_template_kwargs: { enable_thinking: false },
+        }
+      : {}),
   });
   return fetch(url, {
     method: 'POST',
@@ -458,6 +533,7 @@ async function callProvider(
   diagnostics: RequestDiagnostics,
   url = ZEN_API_URL,
   model = ZEN_MODEL,
+  strategy: GenerationStrategy = 'initial',
 ): Promise<ProviderOutput> {
   if (prompt.length > MAX_PROMPT_CHARS) {
     throw new Error(`Prompt exceeds hard maximum of ${MAX_PROMPT_CHARS} characters`);
@@ -469,47 +545,52 @@ async function callProvider(
   }
 
   diagnostics.providerAttempts += 1;
+  const attempt = diagnostics.providerAttempts;
   const provider = url === NVIDIA_API_URL ? 'nvidia' : 'zen';
-  console.log({ promptChars: prompt.length });
+  const startedAt = Date.now();
   console.log('[generate-lesson-quizzes] provider request', {
     provider,
     model,
-    attempt: diagnostics.providerAttempts,
+    strategy,
+    attempt,
+    promptChars: prompt.length,
     maxTokens: PROVIDER_MAX_TOKENS,
+    totalProviderAttempts: diagnostics.providerAttempts,
   });
 
-  const response = await sendProviderRequest(prompt, apiKey, signal, url, model);
+  const response = await sendProviderRequest(prompt, apiKey, signal, url, model, strategy);
+  const latencyMs = Date.now() - startedAt;
   if (!response.ok) {
-    const bodyExcerpt = (await response.text()).slice(0, 500);
-    console.error('[generate-lesson-quizzes] provider error', {
-      provider,
-      model,
-      status: response.status,
-      bodyExcerpt,
-    });
-    const err: any = new Error(`${model} API error: ${response.status} ${bodyExcerpt}`);
+    // Read only to classify a known Zen error; never expose provider body text.
+    const errorBody = await response.text();
+    const freeUsageLimit = provider === 'zen'
+      && response.status === 429
+      && /FreeUsageLimitError/i.test(errorBody.slice(0, 4_000));
+    const err: any = new Error(`${model} API error: HTTP ${response.status}`);
     err.status = response.status;
+    err.code = freeUsageLimit ? 'ZEN_FREE_USAGE_LIMIT' : 'PROVIDER_HTTP_ERROR';
+    err.attempt = attempt;
+    err.responseChars = errorBody.length;
+    err.responseBytes = new TextEncoder().encode(errorBody).byteLength;
+    err.latencyMs = latencyMs;
     throw err;
   }
 
   const envelope: unknown = await response.json();
   const output = parseProviderResponse(envelope);
   if (!output.raw) {
-    console.error('[generate-lesson-quizzes] provider returned empty content', {
-      provider,
-      model,
-      status: response.status,
-      finishReason: output.finishReason,
-      bodyKeys: envelope && typeof envelope === 'object' ? Object.keys(envelope) : [],
-    });
     const err: any = new Error('Empty LLM response');
     err.status = response.status;
+    err.code = 'EMPTY_PROVIDER_RESPONSE';
     err.retriable = true;
+    err.attempt = attempt;
+    err.responseChars = 0;
+    err.responseBytes = 0;
+    err.latencyMs = latencyMs;
     throw err;
   }
 
-  console.log({ responseChars: output.raw.length });
-  return output;
+  return { ...output, attempt, latencyMs };
 }
 
 async function callProviderWithRetry(
@@ -520,9 +601,13 @@ async function callProviderWithRetry(
   timeoutMs: number,
   deadline: number,
   diagnostics: RequestDiagnostics,
+  strategy: GenerationStrategy,
 ): Promise<ProviderOutput> {
   let lastError: unknown;
-  for (let attempt = 0; attempt <= PROVIDER_MAX_RETRIES; attempt++) {
+  // A strict recovery is itself the single post-validation retry and is never
+  // resent identically. Only the initial strategy may retry a transient fault.
+  const maxRetries = strategy === 'initial' ? PROVIDER_MAX_RETRIES : 0;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
     const remaining = remainingMs(deadline);
     if (remaining <= 0) {
       const budgetError: any = new Error('Quiz generation wall-clock budget exceeded');
@@ -532,12 +617,16 @@ async function callProviderWithRetry(
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
+    const attemptStartedAt = Date.now();
     try {
-      const output = await callProvider(prompt, apiKey, controller.signal, diagnostics, url, model);
+      const output = await callProvider(prompt, apiKey, controller.signal, diagnostics, url, model, strategy);
       if (attempt > 0) {
         console.log('[generate-lesson-quizzes] provider retry succeeded', {
           provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-          attempt: attempt + 1,
+          strategy,
+          transportAttempt: attempt + 1,
+          attempt: output.attempt,
+          totalProviderAttempts: diagnostics.providerAttempts,
         });
       }
       return output;
@@ -545,15 +634,33 @@ async function callProviderWithRetry(
       lastError = err;
       const status: number | undefined = err?.status;
       const isAbort = err?.name === 'AbortError';
-      const retriable = !isAbort && (err?.retriable === true || (status !== undefined && isRetriableStatus(status)));
+      const isNetworkFailure = err instanceof TypeError && status === undefined;
+      const retriable = status !== 429
+        && !isAbort
+        && err?.code !== 'PROVIDER_ATTEMPT_GUARD'
+        && (err?.retriable === true || isNetworkFailure || (status !== undefined && isRetriableStatus(status)));
       console.error('[generate-lesson-quizzes] provider attempt failed', {
         provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-        attempt: attempt + 1,
-        status,
+        model,
+        strategy,
+        transportAttempt: attempt + 1,
+        attempt: typeof err?.attempt === 'number' ? err.attempt : diagnostics.providerAttempts,
+        httpStatus: status ?? null,
+        validJson: null,
+        validationResult: 'not_run',
+        quizCount: null,
+        questionCounts: [],
+        responseChars: typeof err?.responseChars === 'number' ? err.responseChars : null,
+        responseBytes: typeof err?.responseBytes === 'number' ? err.responseBytes : null,
+        latencyMs: typeof err?.latencyMs === 'number' ? err.latencyMs : Date.now() - attemptStartedAt,
+        promptChars: prompt.length,
+        executionMs: Date.now() - diagnostics.startedAt,
         retriable,
-        error: errorMessage(err).slice(0, 500),
+        rateLimited: status === 429,
+        errorCode: typeof err?.code === 'string' ? err.code : null,
+        totalProviderAttempts: diagnostics.providerAttempts,
       });
-      if (!retriable || attempt === PROVIDER_MAX_RETRIES) break;
+      if (!retriable || attempt === maxRetries) break;
       const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt) + Math.random() * 300;
       await sleep(backoff);
     } finally {
@@ -572,25 +679,104 @@ async function requestParsedCandidate(
   timeoutMs: number,
   deadline: number,
   diagnostics: RequestDiagnostics,
-): Promise<unknown> {
-  const output = await callProviderWithRetry(prompt, apiKey, url, model, timeoutMs, deadline, diagnostics);
+  strategy: GenerationStrategy,
+): Promise<ParsedCandidate> {
+  const provider = url === NVIDIA_API_URL ? 'nvidia' : 'zen';
+  const output = await callProviderWithRetry(
+    prompt,
+    apiKey,
+    url,
+    model,
+    timeoutMs,
+    deadline,
+    diagnostics,
+    strategy,
+  );
+  const responseChars = output.raw.length;
+  const responseBytes = new TextEncoder().encode(output.raw).byteLength;
   try {
-    return parseQuizJson(output.raw);
-  } catch (parseError) {
-    console.error('[generate-lesson-quizzes] provider returned invalid JSON', {
-      provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
+    const value = parseQuizJson(output.raw);
+    return {
+      value,
+      responseChars,
+      responseBytes,
+      attempt: output.attempt,
+      latencyMs: output.latencyMs,
+    };
+  } catch {
+    console.error('[generate-lesson-quizzes] provider output metadata', {
+      provider,
       model,
+      strategy,
+      attempt: output.attempt,
+      httpStatus: 200,
+      validJson: false,
+      validationResult: 'not_run',
+      quizCount: null,
+      questionCounts: [],
+      responseChars,
+      responseBytes,
+      latencyMs: output.latencyMs,
+      promptChars: prompt.length,
+      executionMs: Date.now() - diagnostics.startedAt,
       finishReason: output.finishReason,
-      rawExcerpt: output.raw.slice(0, 800),
+      totalProviderAttempts: diagnostics.providerAttempts,
     });
-    const err: any = new Error(`Provider returned invalid JSON: ${errorMessage(parseError)}`);
+    const err: any = new Error('Provider returned invalid JSON');
     err.code = 'INVALID_PROVIDER_JSON';
-    err.rawExcerpt = output.raw.slice(0, 800);
     throw err;
   }
 }
 
-/** Validate one generation and allow at most one bounded quality-recovery call. */
+function validateCandidateWithTelemetry(
+  candidate: ParsedCandidate,
+  provider: 'zen' | 'nvidia',
+  model: string,
+  strategy: GenerationStrategy,
+  promptChars: number,
+  diagnostics: RequestDiagnostics,
+): GeneratedQuizResponse {
+  try {
+    validateQuizResponse(candidate.value);
+    console.log('[generate-lesson-quizzes] validation metadata', {
+      provider,
+      model,
+      strategy,
+      attempt: candidate.attempt,
+      httpStatus: 200,
+      validJson: true,
+      validationResult: 'passed',
+      ...summarizeQuizShape(candidate.value),
+      responseChars: candidate.responseChars,
+      responseBytes: candidate.responseBytes,
+      latencyMs: candidate.latencyMs,
+      promptChars,
+      executionMs: Date.now() - diagnostics.startedAt,
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
+    return normalizeQuizResponse(candidate.value);
+  } catch (validationError) {
+    console.error('[generate-lesson-quizzes] validation metadata', {
+      provider,
+      model,
+      strategy,
+      attempt: candidate.attempt,
+      httpStatus: 200,
+      validJson: true,
+      validationResult: 'failed',
+      ...summarizeQuizShape(candidate.value),
+      responseChars: candidate.responseChars,
+      responseBytes: candidate.responseBytes,
+      latencyMs: candidate.latencyMs,
+      promptChars,
+      executionMs: Date.now() - diagnostics.startedAt,
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
+    throw validationError;
+  }
+}
+
+/** Generate once, then allow at most one materially stricter recovery request. */
 async function attemptGenerationWithValidation(
   prompt: string,
   apiKey: string,
@@ -599,10 +785,11 @@ async function attemptGenerationWithValidation(
   deadline: number,
   diagnostics: RequestDiagnostics,
 ): Promise<GeneratedQuizResponse> {
-  let candidate: unknown;
-  let recoveryUsed = false;
+  const provider = url === NVIDIA_API_URL ? 'nvidia' : 'zen';
+  let recoveryReason: 'invalid_json' | 'validation_failed';
+
   try {
-    candidate = await requestParsedCandidate(
+    const initial = await requestParsedCandidate(
       prompt,
       apiKey,
       url,
@@ -610,71 +797,51 @@ async function attemptGenerationWithValidation(
       AI_ATTEMPT_TIMEOUT_MS,
       deadline,
       diagnostics,
+      'initial',
     );
+    try {
+      return validateCandidateWithTelemetry(
+        initial,
+        provider,
+        model,
+        'initial',
+        prompt.length,
+        diagnostics,
+      );
+    } catch {
+      recoveryReason = 'validation_failed';
+    }
   } catch (err: any) {
     if (err?.code !== 'INVALID_PROVIDER_JSON') throw err;
-    recoveryUsed = true;
-    const recoveryPrompt = `${prompt}\n\nYour previous output was not valid JSON. Return the exact schema only, with no markdown or commentary.`;
-    candidate = await requestParsedCandidate(
-      recoveryPrompt,
-      apiKey,
-      url,
-      model,
-      RECOVERY_ATTEMPT_TIMEOUT_MS,
-      deadline,
-      diagnostics,
-    );
+    recoveryReason = 'invalid_json';
   }
 
+  const recoveryPrompt = buildStrictRecoveryPrompt(prompt, recoveryReason);
+  const recovered = await requestParsedCandidate(
+    recoveryPrompt,
+    apiKey,
+    url,
+    model,
+    RECOVERY_ATTEMPT_TIMEOUT_MS,
+    deadline,
+    diagnostics,
+    'strict_recovery',
+  );
   try {
-    validateQuizResponse(candidate);
-    console.log('[generate-lesson-quizzes] validation passed', {
-      provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-    });
-    return normalizeQuizResponse(candidate);
-  } catch (validationError) {
-    if (recoveryUsed) {
-      const err: any = new Error(`Quiz generation returned invalid structured output: ${errorMessage(validationError)}`);
-      err.code = 'INVALID_QUIZ_RESPONSE';
-      throw err;
-    }
-
-    const offending = findOffendingQuestions(candidate);
-    const duplicateOptions = /options are not distinct/i.test(errorMessage(validationError));
-    console.error('[generate-lesson-quizzes] validation failed', {
-      provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-      error: errorMessage(validationError).slice(0, 500),
-      offending,
-    });
-
-    const recoveryPrompt = duplicateOptions && offending.length > 0 && offending.length <= 2
-      ? buildRepairPrompt(candidate, offending)
-      : `${prompt}\n\nThe previous response failed validation: ${errorMessage(validationError).slice(0, 240)}. Regenerate the exact schema only.`;
-    const recovered = await requestParsedCandidate(
-      recoveryPrompt,
-      apiKey,
-      url,
+    return validateCandidateWithTelemetry(
+      recovered,
+      provider,
       model,
-      RECOVERY_ATTEMPT_TIMEOUT_MS,
-      deadline,
+      'strict_recovery',
+      recoveryPrompt.length,
       diagnostics,
     );
-
-    try {
-      validateQuizResponse(recovered);
-      console.log('[generate-lesson-quizzes] recovery validation passed', {
-        provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-      });
-      return normalizeQuizResponse(recovered);
-    } catch (recoveryValidationError) {
-      console.error('[generate-lesson-quizzes] recovery validation failed', {
-        provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-        error: errorMessage(recoveryValidationError).slice(0, 500),
-      });
-      const err: any = new Error(`Quiz generation returned invalid structured output: ${errorMessage(recoveryValidationError)}`);
-      err.code = 'INVALID_QUIZ_RESPONSE';
-      throw err;
-    }
+  } catch (recoveryValidationError) {
+    const err: any = new Error(
+      `Quiz generation returned invalid structured output: ${errorMessage(recoveryValidationError)}`,
+    );
+    err.code = 'INVALID_QUIZ_RESPONSE';
+    throw err;
   }
 }
 
@@ -714,7 +881,6 @@ export async function handleRequest(req: Request): Promise<Response> {
     const zenKey = Deno.env.get('ZEN_API_KEY');
     const nvidiaKey = Deno.env.get('NVIDIA_API_KEY');
     let lastError: unknown;
-    let lastRawExcerpt: string | undefined;
 
     if (zenKey) {
       try {
@@ -729,15 +895,15 @@ export async function handleRequest(req: Request): Promise<Response> {
         console.log('[generate-lesson-quizzes] success', {
           provider: 'zen',
           executionMs: Date.now() - diagnostics.startedAt,
-          providerAttempts: diagnostics.providerAttempts,
+          totalProviderAttempts: diagnostics.providerAttempts,
         });
         return returnResponse(result, 200, undefined, diagnostics);
       } catch (err: any) {
         lastError = err;
-        lastRawExcerpt = typeof err?.rawExcerpt === 'string' ? err.rawExcerpt.slice(0, 800) : undefined;
-        console.error('[generate-lesson-quizzes] zen failed final', {
-          error: errorMessage(err).slice(0, 500),
-          providerAttempts: diagnostics.providerAttempts,
+        console.error('[generate-lesson-quizzes] provider failed final', {
+          provider: 'zen',
+          errorCode: diagnosticErrorCode(err),
+          totalProviderAttempts: diagnostics.providerAttempts,
           executionMs: Date.now() - diagnostics.startedAt,
         });
       }
@@ -758,15 +924,15 @@ export async function handleRequest(req: Request): Promise<Response> {
         console.log('[generate-lesson-quizzes] success', {
           provider: 'nvidia',
           executionMs: Date.now() - diagnostics.startedAt,
-          providerAttempts: diagnostics.providerAttempts,
+          totalProviderAttempts: diagnostics.providerAttempts,
         });
         return returnResponse(result, 200, undefined, diagnostics);
       } catch (err: any) {
         lastError = err;
-        lastRawExcerpt = typeof err?.rawExcerpt === 'string' ? err.rawExcerpt.slice(0, 800) : lastRawExcerpt;
-        console.error('[generate-lesson-quizzes] nvidia failed final', {
-          error: errorMessage(err).slice(0, 500),
-          providerAttempts: diagnostics.providerAttempts,
+        console.error('[generate-lesson-quizzes] provider failed final', {
+          provider: 'nvidia',
+          errorCode: diagnosticErrorCode(err),
+          totalProviderAttempts: diagnostics.providerAttempts,
           executionMs: Date.now() - diagnostics.startedAt,
         });
       }
@@ -778,8 +944,9 @@ export async function handleRequest(req: Request): Promise<Response> {
       ? lastError.message.slice(0, 500)
       : 'No quiz generation provider configured';
     console.error('[generate-lesson-quizzes] failed all providers', {
-      error: detail,
-      providerAttempts: diagnostics.providerAttempts,
+      provider: 'all',
+      errorCode: diagnosticErrorCode(lastError),
+      totalProviderAttempts: diagnostics.providerAttempts,
       executionMs: Date.now() - diagnostics.startedAt,
     });
     return returnResponse(
@@ -787,7 +954,6 @@ export async function handleRequest(req: Request): Promise<Response> {
         error: detail,
         code: 'QUIZ_GENERATION_FAILED',
         provider: 'all',
-        raw_excerpt: lastRawExcerpt,
       },
       502,
       undefined,
@@ -795,8 +961,8 @@ export async function handleRequest(req: Request): Promise<Response> {
     );
   } catch (err) {
     console.error('[generate-lesson-quizzes] internal error', {
-      error: errorMessage(err).slice(0, 500),
-      providerAttempts: diagnostics.providerAttempts,
+      errorCode: diagnosticErrorCode(err),
+      totalProviderAttempts: diagnostics.providerAttempts,
       executionMs: Date.now() - diagnostics.startedAt,
     });
     return returnResponse(

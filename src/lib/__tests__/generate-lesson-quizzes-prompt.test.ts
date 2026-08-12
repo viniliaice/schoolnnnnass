@@ -14,7 +14,9 @@ import {
   handleRequest,
   normalizeQuizResponse,
   parseProviderResponse,
+  parseQuizJson,
   returnResponse,
+  summarizeQuizShape,
   validateQuizResponse,
 } from '../../../supabase/functions/generate-lesson-quizzes/index';
 import { buildQuizGenerationRequest } from '../db/lessonPlanQuizzes';
@@ -80,6 +82,14 @@ const samplePayload = {
   direct_answer_min: 1,
 };
 
+function generationRequest(): Request {
+  return new Request('https://example.test/generate-lesson-quizzes', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(samplePayload),
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -99,6 +109,20 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(context).not.toContain('Huge Unit Plan');
     expect(context).not.toContain('teacher_id');
     expect(context.length).toBeLessThanOrEqual(3_700);
+  });
+
+  it('states the exact JSON-only 3×4 contract and forbids omissions and rationales', () => {
+    const prompt = buildCompactPrompt(samplePayload as any);
+    expect(prompt).toContain('Return ONLY one valid JSON object');
+    expect(prompt).toContain('Return exactly 3 quizzes');
+    expect(prompt).toContain('Do not return 2, 4, or any other number');
+    expect(prompt).toContain('exactly 4 questions');
+    expect(prompt).toContain('Do not return 3, 5, or any other number');
+    expect(prompt).toContain('Do not include explanations or rationales');
+    expect(prompt).toContain('No markdown, prose, commentary, or code fences');
+    expect(prompt).toContain('questions 1–3 must be multiple_choice and question 4 must be direct_answer');
+    expect(prompt.length).toBeLessThan(6_000);
+    expect(prompt.length).toBeLessThanOrEqual(8_000);
   });
 
   it('keeps oversized metadata, vocabulary, activities, periods, and unit plans below prompt limits', () => {
@@ -195,14 +219,28 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(serialized).not.toContain('"Math"');
   });
 
-  it('validates exactly 3 quizzes with 4 questions and normalizes to consumed fields', () => {
+  it('validates exactly 3 quizzes with exactly 4 questions and rejects missing fields', () => {
     const providerResult = makeValidResponse(true);
     expect(() => validateQuizResponse(providerResult)).not.toThrow();
-    expect(() => validateQuizResponse({ quizzes: [] })).toThrow(/exactly 3 quizzes/i);
-    expect(() => validateQuizResponse({ quizzes: providerResult.quizzes.map((quiz) => ({
-      ...quiz,
-      questions: quiz.questions.slice(0, 3),
-    })) })).toThrow(/exactly 4 questions/i);
+
+    expect(() => validateQuizResponse({ quizzes: providerResult.quizzes.slice(0, 2) }))
+      .toThrow(/exactly 3 quizzes/i);
+    expect(() => validateQuizResponse({ quizzes: [...providerResult.quizzes, providerResult.quizzes[0]] }))
+      .toThrow(/exactly 3 quizzes/i);
+
+    const counts434 = makeValidResponse();
+    counts434.quizzes[1].questions = counts434.quizzes[1].questions.slice(0, 3);
+    expect(summarizeQuizShape(counts434)).toEqual({ quizCount: 3, questionCounts: [4, 3, 4] });
+    expect(() => validateQuizResponse(counts434)).toThrow(/exactly 4 questions/i);
+
+    const counts454 = makeValidResponse();
+    counts454.quizzes[1].questions.push(counts454.quizzes[1].questions[0]);
+    expect(summarizeQuizShape(counts454)).toEqual({ quizCount: 3, questionCounts: [4, 5, 4] });
+    expect(() => validateQuizResponse(counts454)).toThrow(/exactly 4 questions/i);
+
+    const missingRubric = makeValidResponse() as any;
+    delete missingRubric.quizzes[2].questions[3].rubric;
+    expect(() => validateQuizResponse(missingRubric)).toThrow(/must have a rubric/i);
 
     const normalized = normalizeQuizResponse(providerResult);
     expect(normalized.quizzes).toHaveLength(3);
@@ -219,6 +257,18 @@ describe('generate-lesson-quizzes resource optimization', () => {
       usage: { total_tokens: 1234 },
       choices: [{ finish_reason: 'stop', message: { content: ' {"quizzes":[]} ', reasoning_content: 'unused reasoning' } }],
     })).toEqual({ raw: '{"quizzes":[]}', finishReason: 'stop' });
+  });
+
+  it('safely parses markdown/prose wrappers without repairing incomplete content', () => {
+    const valid = makeValidResponse();
+    const raw = JSON.stringify(valid);
+    expect(parseQuizJson(`\`\`\`json\n${raw}\n\`\`\``)).toEqual(valid);
+    expect(parseQuizJson(`Here is the requested object:\n${raw}\nDone.`)).toEqual(valid);
+    expect(parseQuizJson(`prefix {"note":"brace } in string"} then ${raw}`)).toEqual(valid);
+    expect(() => parseQuizJson('```json\n{"quizzes":[')).toThrow(/No complete valid JSON object/i);
+
+    const wrappedIncomplete = parseQuizJson(`Result: ${JSON.stringify({ quizzes: valid.quizzes.slice(0, 2) })}`);
+    expect(() => validateQuizResponse(wrappedIncomplete)).toThrow(/exactly 3 quizzes/i);
   });
 
   it('uses 1800 tokens, one provider call on success, and returns the existing normalized schema', async () => {
@@ -245,14 +295,32 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(providerBody.max_tokens).toBe(PROVIDER_MAX_TOKENS);
     expect(providerBody.max_tokens).toBe(1_800);
     expect(providerBody.messages[1].content.length).toBeLessThan(6_000);
+    expect(providerBody).not.toHaveProperty('response_format');
     expect(responseData).toEqual(normalizeQuizResponse(providerResult));
-    expect(logSpy).toHaveBeenCalledWith({ promptChars: providerBody.messages[1].content.length });
-    expect(logSpy).toHaveBeenCalledWith({ responseChars: raw.length });
+    expect(logSpy).toHaveBeenCalledWith(
+      '[generate-lesson-quizzes] validation metadata',
+      expect.objectContaining({
+        provider: 'zen',
+        attempt: 1,
+        httpStatus: 200,
+        validJson: true,
+        validationResult: 'passed',
+        quizCount: 3,
+        questionCounts: [4, 4, 4],
+        responseChars: raw.length,
+        responseBytes: new TextEncoder().encode(raw).byteLength,
+        latencyMs: expect.any(Number),
+        promptChars: providerBody.messages[1].content.length,
+        executionMs: expect.any(Number),
+        totalProviderAttempts: 1,
+      }),
+    );
     expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
       responseBytes: expect.any(Number),
       executionMs: expect.any(Number),
-      providerAttempts: 1,
+      totalProviderAttempts: 1,
     }));
+    expect(JSON.stringify(logSpy.mock.calls)).not.toContain('Question 1-1?');
   });
 
   it('uses the bounded Nemotron 3.5 Lightning configuration for NVIDIA fallback', async () => {
@@ -283,12 +351,107 @@ describe('generate-lesson-quizzes resource optimization', () => {
       top_p: 0.95,
       max_tokens: 1_800,
       stream: false,
+      response_format: { type: 'json_object' },
       chat_template_kwargs: { enable_thinking: false },
     }));
+    expect(providerBody).not.toHaveProperty('json_schema');
     expect(providerBody).not.toHaveProperty('reasoning_budget');
   });
 
-  it('allows one quality recovery per provider and prevents accidental retry loops', async () => {
+  it('routes Zen 429 directly to one initial and one strict NVIDIA fallback attempt', async () => {
+    const valid = makeValidResponse();
+    const invalidRaw = JSON.stringify({ quizzes: valid.quizzes.map((quiz, index) => ({
+      ...quiz,
+      questions: index === 1 ? quiz.questions.slice(0, 3) : quiz.questions,
+    })) });
+    const validRaw = JSON.stringify(valid);
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        error: { type: 'FreeUsageLimitError', message: 'quota reached' },
+      }), { status: 429, headers: { 'Content-Type': 'application/json' } }))
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        choices: [{ finish_reason: 'stop', message: { content: invalidRaw } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        choices: [{ finish_reason: 'stop', message: { content: validRaw } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('Deno', { env: { get: () => 'provider-key' } });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await handleRequest(generationRequest());
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      'https://opencode.ai/zen/v1/chat/completions',
+      'https://integrate.api.nvidia.com/v1/chat/completions',
+      'https://integrate.api.nvidia.com/v1/chat/completions',
+    ]);
+    const nvidiaInitial = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
+    const nvidiaRecovery = JSON.parse(String(fetchMock.mock.calls[2][1]?.body));
+    expect(nvidiaInitial.messages[1].content).not.toBe(nvidiaRecovery.messages[1].content);
+    expect(nvidiaRecovery.messages[1].content).toContain('STRICT RECOVERY');
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[generate-lesson-quizzes] provider attempt failed',
+      expect.objectContaining({
+        provider: 'zen',
+        httpStatus: 429,
+        retriable: false,
+        rateLimited: true,
+        errorCode: 'ZEN_FREE_USAGE_LIMIT',
+        totalProviderAttempts: 1,
+      }),
+    );
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('quota reached');
+  });
+
+  it('uses one meaningfully stricter NVIDIA recovery after invalid structure', async () => {
+    const invalidRaw = JSON.stringify({ quizzes: makeValidResponse().quizzes.slice(0, 2) });
+    const validRaw = JSON.stringify(makeValidResponse());
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        choices: [{ finish_reason: 'stop', message: { content: invalidRaw } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        choices: [{ finish_reason: 'stop', message: { content: validRaw } }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('Deno', {
+      env: { get: (name: string) => name === 'NVIDIA_API_KEY' ? 'nvidia-key' : undefined },
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await handleRequest(generationRequest());
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const initialBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    const recoveryBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
+    expect(initialBody.messages[1].content).not.toBe(recoveryBody.messages[1].content);
+    expect(recoveryBody.messages[1].content).toContain('STRICT RECOVERY');
+    expect(recoveryBody.messages[0].content).toContain('strict JSON compiler');
+    expect(recoveryBody.temperature).toBe(0.2);
+    expect(recoveryBody.top_p).toBe(0.8);
+    expect(recoveryBody.response_format).toEqual({ type: 'json_object' });
+    expect(recoveryBody.max_tokens).toBe(1_800);
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[generate-lesson-quizzes] validation metadata',
+      expect.objectContaining({
+        provider: 'nvidia',
+        strategy: 'initial',
+        validJson: true,
+        validationResult: 'failed',
+        quizCount: 2,
+        questionCounts: [4, 4],
+        totalProviderAttempts: 1,
+      }),
+    );
+  });
+
+  it('allows one quality recovery per provider and enforces the four-attempt global budget', async () => {
     const invalidRaw = JSON.stringify({ quizzes: [] });
     const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
       choices: [{ finish_reason: 'stop', message: { content: invalidRaw } }],
@@ -298,15 +461,18 @@ describe('generate-lesson-quizzes resource optimization', () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const response = await handleRequest(new Request('https://example.test/generate-lesson-quizzes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(samplePayload),
-    }));
+    const response = await handleRequest(generationRequest());
+    const body = await response.json();
 
     expect(response.status).toBe(502);
     // Initial + one validation recovery for Zen, then the same bounded fallback for NVIDIA.
     expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(body).not.toHaveProperty('raw_excerpt');
+    const providerBodies = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)));
+    expect(providerBodies[1].messages[1].content).toContain('STRICT RECOVERY');
+    expect(providerBodies[3].messages[1].content).toContain('STRICT RECOVERY');
+    expect(providerBodies[0].messages[1].content).not.toBe(providerBodies[1].messages[1].content);
+    expect(providerBodies[2].messages[1].content).not.toBe(providerBodies[3].messages[1].content);
   });
 
   it('rejects declared legacy-sized requests before parsing or calling a provider', async () => {
