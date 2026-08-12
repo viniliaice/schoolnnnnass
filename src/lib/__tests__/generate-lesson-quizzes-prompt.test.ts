@@ -13,6 +13,7 @@ import {
   buildCompactPrompt,
   handleRequest,
   normalizeQuizResponse,
+  parseGeminiResponse,
   parseProviderResponse,
   parseQuizJson,
   returnResponse,
@@ -43,6 +44,17 @@ function makeValidResponse(includeExtras = false) {
           }),
     })),
     ...(includeExtras ? { usage: { tokens: 9999 }, provider: 'unused' } : {}),
+  };
+}
+
+function geminiInteraction(raw: string) {
+  return {
+    id: 'interaction-test',
+    status: 'completed',
+    steps: [
+      { type: 'thought', content: [{ type: 'text', text: 'must not be parsed' }] },
+      { type: 'model_output', content: [{ type: 'text', text: raw }] },
+    ],
   };
 }
 
@@ -251,12 +263,21 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(normalized.quizzes[0].questions[0].question).toBe('Question 1-1?');
   });
 
-  it('extracts only completion text from a provider envelope', () => {
+  it('extracts only completion text from provider envelopes', () => {
     expect(parseProviderResponse({
       id: 'provider-id',
       usage: { total_tokens: 1234 },
       choices: [{ finish_reason: 'stop', message: { content: ' {"quizzes":[]} ', reasoning_content: 'unused reasoning' } }],
     })).toEqual({ raw: '{"quizzes":[]}', finishReason: 'stop' });
+
+    expect(parseGeminiResponse(geminiInteraction(' {"quizzes":[]} '))).toEqual({
+      raw: '{"quizzes":[]}',
+      finishReason: 'completed',
+    });
+    expect(parseGeminiResponse({
+      status: 'completed',
+      steps: [{ type: 'tool_output', content: [{ type: 'text', text: '{"quizzes":["wrong"]}' }] }],
+    })).toEqual({ raw: '', finishReason: 'completed' });
   });
 
   it('safely parses markdown/prose wrappers without repairing incomplete content', () => {
@@ -358,12 +379,9 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(providerBody).not.toHaveProperty('reasoning_budget');
   });
 
-  it('routes Zen 429 directly to one initial and one strict NVIDIA fallback attempt', async () => {
+  it('routes Zen 429 through NVIDIA and both Gemini models in the fixed order', async () => {
     const valid = makeValidResponse();
-    const invalidRaw = JSON.stringify({ quizzes: valid.quizzes.map((quiz, index) => ({
-      ...quiz,
-      questions: index === 1 ? quiz.questions.slice(0, 3) : quiz.questions,
-    })) });
+    const invalidRaw = JSON.stringify({ quizzes: valid.quizzes.slice(0, 2) });
     const validRaw = JSON.stringify(valid);
     const fetchMock = vi.fn()
       .mockImplementationOnce(async () => new Response(JSON.stringify({
@@ -372,9 +390,14 @@ describe('generate-lesson-quizzes resource optimization', () => {
       .mockImplementationOnce(async () => new Response(JSON.stringify({
         choices: [{ finish_reason: 'stop', message: { content: invalidRaw } }],
       }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-      .mockImplementationOnce(async () => new Response(JSON.stringify({
-        choices: [{ finish_reason: 'stop', message: { content: validRaw } }],
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      .mockImplementationOnce(async () => new Response(JSON.stringify(geminiInteraction(invalidRaw)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockImplementationOnce(async () => new Response(JSON.stringify(geminiInteraction(validRaw)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('Deno', { env: { get: () => 'provider-key' } });
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -383,22 +406,24 @@ describe('generate-lesson-quizzes resource optimization', () => {
     const response = await handleRequest(generationRequest());
 
     expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
       'https://opencode.ai/zen/v1/chat/completions',
       'https://integrate.api.nvidia.com/v1/chat/completions',
-      'https://integrate.api.nvidia.com/v1/chat/completions',
+      'https://generativelanguage.googleapis.com/v1beta/interactions',
+      'https://generativelanguage.googleapis.com/v1beta/interactions',
     ]);
-    const nvidiaInitial = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
-    const nvidiaRecovery = JSON.parse(String(fetchMock.mock.calls[2][1]?.body));
-    expect(nvidiaInitial.messages[1].content).not.toBe(nvidiaRecovery.messages[1].content);
-    expect(nvidiaRecovery.messages[1].content).toContain('STRICT RECOVERY');
+    expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model)).toEqual([
+      'deepseek-v4-flash-free',
+      'nvidia/nemotron-3.5-lightning-30b-a3b',
+      'gemini-3.6-flash',
+      'gemini-3.5-flash-lite',
+    ]);
     expect(errorSpy).toHaveBeenCalledWith(
       '[generate-lesson-quizzes] provider attempt failed',
       expect.objectContaining({
         provider: 'zen',
         httpStatus: 429,
-        retriable: false,
         rateLimited: true,
         errorCode: 'ZEN_FREE_USAGE_LIMIT',
         totalProviderAttempts: 1,
@@ -407,72 +432,185 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('quota reached');
   });
 
-  it('uses one meaningfully stricter NVIDIA recovery after invalid structure', async () => {
+  it('uses identical exact 3×4 schemas and bounded generation settings for both Gemini calls', async () => {
     const invalidRaw = JSON.stringify({ quizzes: makeValidResponse().quizzes.slice(0, 2) });
     const validRaw = JSON.stringify(makeValidResponse());
     const fetchMock = vi.fn()
-      .mockImplementationOnce(async () => new Response(JSON.stringify({
-        choices: [{ finish_reason: 'stop', message: { content: invalidRaw } }],
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-      .mockImplementationOnce(async () => new Response(JSON.stringify({
-        choices: [{ finish_reason: 'stop', message: { content: validRaw } }],
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+      .mockImplementationOnce(async () => new Response(JSON.stringify(geminiInteraction(invalidRaw)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockImplementationOnce(async () => new Response(JSON.stringify(geminiInteraction(validRaw)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('Deno', {
-      env: { get: (name: string) => name === 'NVIDIA_API_KEY' ? 'nvidia-key' : undefined },
+      env: { get: (name: string) => name === 'GEMINI_API_KEY' ? 'gemini-key' : undefined },
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await handleRequest(generationRequest());
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const bodies = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)));
+    expect(bodies.map((body) => body.model)).toEqual(['gemini-3.6-flash', 'gemini-3.5-flash-lite']);
+    expect(bodies[0].response_format.schema).toEqual(bodies[1].response_format.schema);
+    for (const [index, body] of bodies.entries()) {
+      expect(body.input).toContain('Return exactly 3 quizzes');
+      expect(body.system_instruction).toContain('schema-conforming JSON');
+      expect(body.response_format.type).toBe('text');
+      expect(body.response_format.mime_type).toBe('application/json');
+      expect(body.generation_config).toEqual({
+        max_output_tokens: 1_800,
+        thinking_level: 'minimal',
+      });
+      expect(fetchMock.mock.calls[index][1]?.headers).toEqual({
+        'Content-Type': 'application/json',
+        'x-goog-api-key': 'gemini-key',
+      });
+    }
+
+    const schema = bodies[0].response_format.schema;
+    expect(schema).toEqual({
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        quizzes: {
+          type: 'array',
+          minItems: 3,
+          maxItems: 3,
+          items: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              title: { type: 'string' },
+              questions: {
+                type: 'array',
+                minItems: 4,
+                maxItems: 4,
+                prefixItems: [
+                  {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      type: { type: 'string', enum: ['multiple_choice'] },
+                      question: { type: 'string' },
+                      options: {
+                        type: 'array', minItems: 4, maxItems: 4, items: { type: 'string' },
+                      },
+                      correctIndex: { type: 'integer', enum: [0, 1, 2, 3] },
+                    },
+                    required: ['type', 'question', 'options', 'correctIndex'],
+                  },
+                  {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      type: { type: 'string', enum: ['multiple_choice'] },
+                      question: { type: 'string' },
+                      options: {
+                        type: 'array', minItems: 4, maxItems: 4, items: { type: 'string' },
+                      },
+                      correctIndex: { type: 'integer', enum: [0, 1, 2, 3] },
+                    },
+                    required: ['type', 'question', 'options', 'correctIndex'],
+                  },
+                  {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      type: { type: 'string', enum: ['multiple_choice'] },
+                      question: { type: 'string' },
+                      options: {
+                        type: 'array', minItems: 4, maxItems: 4, items: { type: 'string' },
+                      },
+                      correctIndex: { type: 'integer', enum: [0, 1, 2, 3] },
+                    },
+                    required: ['type', 'question', 'options', 'correctIndex'],
+                  },
+                  {
+                    type: 'object',
+                    additionalProperties: false,
+                    properties: {
+                      type: { type: 'string', enum: ['direct_answer'] },
+                      question: { type: 'string' },
+                      rubric: { type: 'string' },
+                    },
+                    required: ['type', 'question', 'rubric'],
+                  },
+                ],
+              },
+            },
+            required: ['title', 'questions'],
+          },
+        },
+      },
+      required: ['quizzes'],
+    });
+  });
+
+  it('rejects invalid output after four calls without logging or returning generated content', async () => {
+    const invalidRaw = JSON.stringify({
+      quizzes: [{ title: 'DO_NOT_LOG_GENERATED_CONTENT', questions: [] }],
+    });
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => {
+      const envelope = url.includes('generativelanguage.googleapis.com')
+        ? geminiInteraction(invalidRaw)
+        : { choices: [{ finish_reason: 'stop', message: { content: invalidRaw } }] };
+      return new Response(JSON.stringify(envelope), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('Deno', { env: { get: () => 'provider-key' } });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await handleRequest(generationRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(502);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model)).toEqual([
+      'deepseek-v4-flash-free',
+      'nvidia/nemotron-3.5-lightning-30b-a3b',
+      'gemini-3.6-flash',
+      'gemini-3.5-flash-lite',
+    ]);
+    expect(body).toEqual(expect.objectContaining({
+      error: 'Quiz generation returned invalid structured output',
+      code: 'QUIZ_GENERATION_FAILED',
+      provider: 'all',
+    }));
+    expect(body).not.toHaveProperty('raw_excerpt');
+    const diagnostics = JSON.stringify([...logSpy.mock.calls, ...errorSpy.mock.calls]);
+    expect(diagnostics).not.toContain('DO_NOT_LOG_GENERATED_CONTENT');
+    expect(diagnostics).not.toContain(invalidRaw);
+  });
+
+  it('does not call Gemini when GEMINI_API_KEY is missing and reports the secret once', async () => {
+    const invalidRaw = JSON.stringify({ quizzes: [] });
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+      choices: [{ finish_reason: 'stop', message: { content: invalidRaw } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('Deno', {
+      env: { get: (name: string) => name === 'GEMINI_API_KEY' ? undefined : 'provider-key' },
     });
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
     const response = await handleRequest(generationRequest());
 
-    expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const initialBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-    const recoveryBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
-    expect(initialBody.messages[1].content).not.toBe(recoveryBody.messages[1].content);
-    expect(recoveryBody.messages[1].content).toContain('STRICT RECOVERY');
-    expect(recoveryBody.messages[0].content).toContain('strict JSON compiler');
-    expect(recoveryBody.temperature).toBe(0.2);
-    expect(recoveryBody.top_p).toBe(0.8);
-    expect(recoveryBody.response_format).toEqual({ type: 'json_object' });
-    expect(recoveryBody.max_tokens).toBe(1_800);
-    expect(errorSpy).toHaveBeenCalledWith(
-      '[generate-lesson-quizzes] validation metadata',
-      expect.objectContaining({
-        provider: 'nvidia',
-        strategy: 'initial',
-        validJson: true,
-        validationResult: 'failed',
-        quizCount: 2,
-        questionCounts: [4, 4],
-        totalProviderAttempts: 1,
-      }),
-    );
-  });
-
-  it('allows one quality recovery per provider and enforces the four-attempt global budget', async () => {
-    const invalidRaw = JSON.stringify({ quizzes: [] });
-    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
-      choices: [{ finish_reason: 'stop', message: { content: invalidRaw } }],
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
-    vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('Deno', { env: { get: () => 'provider-key' } });
-    vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-
-    const response = await handleRequest(generationRequest());
-    const body = await response.json();
-
     expect(response.status).toBe(502);
-    // Initial + one validation recovery for Zen, then the same bounded fallback for NVIDIA.
-    expect(fetchMock).toHaveBeenCalledTimes(4);
-    expect(body).not.toHaveProperty('raw_excerpt');
-    const providerBodies = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)));
-    expect(providerBodies[1].messages[1].content).toContain('STRICT RECOVERY');
-    expect(providerBodies[3].messages[1].content).toContain('STRICT RECOVERY');
-    expect(providerBodies[0].messages[1].content).not.toBe(providerBodies[1].messages[1].content);
-    expect(providerBodies[2].messages[1].content).not.toBe(providerBodies[3].messages[1].content);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.every((call) => !String(call[0]).includes('googleapis.com'))).toBe(true);
+    expect(errorSpy.mock.calls.filter((call) => call[0] === '[generate-lesson-quizzes] GEMINI_API_KEY missing'))
+      .toHaveLength(1);
   });
 
   it('rejects declared legacy-sized requests before parsing or calling a provider', async () => {

@@ -4,19 +4,22 @@ const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
 const NVIDIA_MODEL = 'nvidia/nemotron-3.5-lightning-30b-a3b';
 const ZEN_API_URL = 'https://opencode.ai/zen/v1/chat/completions';
 const ZEN_MODEL = 'deepseek-v4-flash-free';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+const GEMINI_36_MODEL = 'gemini-3.6-flash';
+const GEMINI_35_LITE_MODEL = 'gemini-3.5-flash-lite';
 // Production timings ranged from 18–82 seconds. Forty-five seconds retains the
 // normal 18–40 second path while preventing one pathological provider call from
 // consuming the worker for the full 82-second outlier.
 const AI_ATTEMPT_TIMEOUT_MS = 45_000;
-const RECOVERY_ATTEMPT_TIMEOUT_MS = 30_000;
 const WALL_CLOCK_BUDGET_MS = 75_000;
+// Zen and NVIDIA share the first 45 seconds. Gemini 3.6 may then use the
+// remaining time except for the final 15 seconds reserved for 3.5 Flash-Lite.
+const GOOGLE_FALLBACK_RESERVED_BUDGET_MS = 30_000;
+const FINAL_GOOGLE_ATTEMPT_RESERVED_BUDGET_MS = 15_000;
 
-// One retry preserves recovery from genuinely transient gateway failures. Rate
-// limits are not retried inside one request, and the global guard keeps the
-// full Zen → NVIDIA → validation-recovery path predictable.
-const PROVIDER_MAX_RETRIES = 1;
+// The request-global schedule is Zen → NVIDIA → Gemini 3.6 → Gemini 3.5
+// Flash-Lite. There are no duplicate transport or structural retries.
 const MAX_PROVIDER_ATTEMPTS_PER_REQUEST = 4;
-const BASE_BACKOFF_MS = 800;
 export const PROVIDER_MAX_TOKENS = 1800;
 const MAX_RESPONSE_BYTES_WARN = 50_000;
 const MAX_CONTEXT_CHARS = 3_700;
@@ -58,7 +61,8 @@ interface ParsedCandidate {
   latencyMs: number;
 }
 
-type GenerationStrategy = 'initial' | 'strict_recovery';
+type GenerationStrategy = 'initial';
+type ProviderName = 'zen' | 'nvidia' | 'gemini';
 
 export interface QuizShapeDiagnostics {
   quizCount: number | null;
@@ -92,10 +96,6 @@ function diagnosticErrorCode(err: unknown): string {
   const code = (err as { code?: unknown })?.code;
   if (typeof code === 'string' && code) return code.slice(0, 80);
   return err instanceof Error ? err.name.slice(0, 80) : 'UNKNOWN_ERROR';
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 /** Milliseconds left before the overall request budget expires (never negative). */
@@ -383,24 +383,6 @@ Lesson context:
   return prompt;
 }
 
-function buildStrictRecoveryPrompt(prompt: string, failure: 'invalid_json' | 'validation_failed'): string {
-  const recovery = `
-
-STRICT RECOVERY — the previous output was rejected (${failure}). Discard it and generate a new complete result.
-- Return ONLY one valid JSON object with the root key "quizzes".
-- Return exactly 3 quizzes, never 2, 4, or another count.
-- Return exactly 4 questions in EACH quiz, never 3, 5, or another count.
-- In each quiz, questions 1–3 are multiple_choice and question 4 is direct_answer.
-- Include every required field and exactly 4 distinct options for each multiple_choice.
-- Include no explanations, rationales, markdown, prose, or omitted quizzes.
-Before responding, silently count the quizzes and every questions array. Output the JSON object only.`;
-  const strictPrompt = `${prompt}${recovery}`;
-  if (strictPrompt.length > MAX_PROMPT_CHARS) {
-    throw new Error(`Strict recovery prompt exceeds hard maximum of ${MAX_PROMPT_CHARS} characters`);
-  }
-  return strictPrompt;
-}
-
 /** Parse exact JSON or a harmless markdown/prose wrapper around one balanced object. */
 export function parseQuizJson(content: string): unknown {
   const cleaned = content.replace(/^\uFEFF/, '').trim();
@@ -474,12 +456,92 @@ export function parseProviderResponse(body: unknown): Pick<ProviderOutput, 'raw'
   };
 }
 
-function isRetriableStatus(status: number): boolean {
-  // A rate limit will not clear within this short request. In particular, Zen's
-  // FreeUsageLimitError must immediately route to NVIDIA rather than consume an
-  // identical retry. Only transient gateway/service failures are retried.
-  return status === 529 || status === 502 || status === 503 || status === 504;
+/** Extract text output only from Gemini Interactions model-output steps. */
+export function parseGeminiResponse(body: unknown): Pick<ProviderOutput, 'raw' | 'finishReason'> {
+  const interaction = body as any;
+  let raw = '';
+  if (Array.isArray(interaction?.steps)) {
+    for (const step of interaction.steps) {
+      if (step?.type !== 'model_output' || !Array.isArray(step.content)) continue;
+      for (const block of step.content) {
+        if (block?.type === 'text' && typeof block.text === 'string') raw += block.text;
+      }
+    }
+  }
+  return {
+    raw: raw.trim(),
+    finishReason: typeof interaction?.status === 'string' ? interaction.status : null,
+  };
 }
+
+function providerForUrl(url: string): ProviderName {
+  if (url === NVIDIA_API_URL) return 'nvidia';
+  if (url === GEMINI_API_URL) return 'gemini';
+  return 'zen';
+}
+
+// Gemini Interactions supports this JSON Schema subset, including exact array
+// lengths and tuple-style prefixItems. Application validation still checks
+// semantic constraints such as non-empty/distinct options before returning.
+const GEMINI_MULTIPLE_CHOICE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    type: { type: 'string', enum: ['multiple_choice'] },
+    question: { type: 'string' },
+    options: {
+      type: 'array',
+      minItems: 4,
+      maxItems: 4,
+      items: { type: 'string' },
+    },
+    correctIndex: { type: 'integer', enum: [0, 1, 2, 3] },
+  },
+  required: ['type', 'question', 'options', 'correctIndex'],
+};
+
+const GEMINI_DIRECT_ANSWER_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    type: { type: 'string', enum: ['direct_answer'] },
+    question: { type: 'string' },
+    rubric: { type: 'string' },
+  },
+  required: ['type', 'question', 'rubric'],
+};
+
+const GEMINI_QUIZ_RESPONSE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    quizzes: {
+      type: 'array',
+      minItems: 3,
+      maxItems: 3,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          title: { type: 'string' },
+          questions: {
+            type: 'array',
+            minItems: 4,
+            maxItems: 4,
+            prefixItems: [
+              GEMINI_MULTIPLE_CHOICE_SCHEMA,
+              GEMINI_MULTIPLE_CHOICE_SCHEMA,
+              GEMINI_MULTIPLE_CHOICE_SCHEMA,
+              GEMINI_DIRECT_ANSWER_SCHEMA,
+            ],
+          },
+        },
+        required: ['title', 'questions'],
+      },
+    },
+  },
+  required: ['quizzes'],
+};
 
 async function sendProviderRequest(
   prompt: string,
@@ -487,27 +549,46 @@ async function sendProviderRequest(
   signal: AbortSignal,
   url: string,
   model: string,
-  strategy: GenerationStrategy,
 ): Promise<Response> {
   // The provider body is serialized exactly once in this short-lived scope.
+  if (url === GEMINI_API_URL) {
+    const serializedRequest = JSON.stringify({
+      model,
+      input: prompt,
+      system_instruction: 'Generate rigorous school quizzes and output only the schema-conforming JSON result.',
+      response_format: {
+        type: 'text',
+        mime_type: 'application/json',
+        schema: GEMINI_QUIZ_RESPONSE_SCHEMA,
+      },
+      generation_config: {
+        max_output_tokens: PROVIDER_MAX_TOKENS,
+        thinking_level: 'minimal',
+      },
+    });
+    return fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+      body: serializedRequest,
+      signal,
+    });
+  }
+
   // Nemotron 3.5 documents JSON-object mode (not full json_schema enforcement),
   // so exact 3×4 counts remain application-validated. Thinking is disabled so
   // the output budget is reserved for the client-consumed JSON.
   const isNvidia = url === NVIDIA_API_URL;
-  const strictRecovery = strategy === 'strict_recovery';
   const serializedRequest = JSON.stringify({
     model,
     messages: [
       {
         role: 'system',
-        content: strictRecovery
-          ? 'Act as a strict JSON compiler. Return one complete valid object matching every count and field rule; output no other text.'
-          : 'Generate rigorous school quizzes. Return only one valid JSON object.',
+        content: 'Generate rigorous school quizzes. Return only one valid JSON object.',
       },
       { role: 'user', content: prompt },
     ],
-    temperature: strictRecovery ? 0.2 : isNvidia ? 1 : 0.7,
-    top_p: strictRecovery ? 0.8 : isNvidia ? 0.95 : 0.9,
+    temperature: isNvidia ? 1 : 0.7,
+    top_p: isNvidia ? 0.95 : 0.9,
     max_tokens: PROVIDER_MAX_TOKENS,
     stream: false,
     ...(isNvidia
@@ -519,7 +600,10 @@ async function sendProviderRequest(
   });
   return fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
     body: serializedRequest,
     signal,
   });
@@ -546,7 +630,7 @@ async function callProvider(
 
   diagnostics.providerAttempts += 1;
   const attempt = diagnostics.providerAttempts;
-  const provider = url === NVIDIA_API_URL ? 'nvidia' : 'zen';
+  const provider = providerForUrl(url);
   const startedAt = Date.now();
   console.log('[generate-lesson-quizzes] provider request', {
     provider,
@@ -558,14 +642,13 @@ async function callProvider(
     totalProviderAttempts: diagnostics.providerAttempts,
   });
 
-  const response = await sendProviderRequest(prompt, apiKey, signal, url, model, strategy);
+  const response = await sendProviderRequest(prompt, apiKey, signal, url, model);
   const latencyMs = Date.now() - startedAt;
   if (!response.ok) {
     // Read only to classify a known Zen error; never expose provider body text.
     const errorBody = await response.text();
-    const freeUsageLimit = provider === 'zen'
-      && response.status === 429
-      && /FreeUsageLimitError/i.test(errorBody.slice(0, 4_000));
+    const freeUsageLimit =
+      provider === 'zen' && response.status === 429 && /FreeUsageLimitError/i.test(errorBody.slice(0, 4_000));
     const err: any = new Error(`${model} API error: HTTP ${response.status}`);
     err.status = response.status;
     err.code = freeUsageLimit ? 'ZEN_FREE_USAGE_LIMIT' : 'PROVIDER_HTTP_ERROR';
@@ -577,12 +660,11 @@ async function callProvider(
   }
 
   const envelope: unknown = await response.json();
-  const output = parseProviderResponse(envelope);
+  const output = provider === 'gemini' ? parseGeminiResponse(envelope) : parseProviderResponse(envelope);
   if (!output.raw) {
     const err: any = new Error('Empty LLM response');
     err.status = response.status;
     err.code = 'EMPTY_PROVIDER_RESPONSE';
-    err.retriable = true;
     err.attempt = attempt;
     err.responseChars = 0;
     err.responseBytes = 0;
@@ -593,7 +675,7 @@ async function callProvider(
   return { ...output, attempt, latencyMs };
 }
 
-async function callProviderWithRetry(
+async function callProviderWithTimeout(
   prompt: string,
   apiKey: string,
   url: string,
@@ -603,71 +685,43 @@ async function callProviderWithRetry(
   diagnostics: RequestDiagnostics,
   strategy: GenerationStrategy,
 ): Promise<ProviderOutput> {
-  let lastError: unknown;
-  // A strict recovery is itself the single post-validation retry and is never
-  // resent identically. Only the initial strategy may retry a transient fault.
-  const maxRetries = strategy === 'initial' ? PROVIDER_MAX_RETRIES : 0;
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    const remaining = remainingMs(deadline);
-    if (remaining <= 0) {
-      const budgetError: any = new Error('Quiz generation wall-clock budget exceeded');
-      budgetError.code = 'WALL_CLOCK_BUDGET_EXCEEDED';
-      throw budgetError;
-    }
-
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
-    const attemptStartedAt = Date.now();
-    try {
-      const output = await callProvider(prompt, apiKey, controller.signal, diagnostics, url, model, strategy);
-      if (attempt > 0) {
-        console.log('[generate-lesson-quizzes] provider retry succeeded', {
-          provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-          strategy,
-          transportAttempt: attempt + 1,
-          attempt: output.attempt,
-          totalProviderAttempts: diagnostics.providerAttempts,
-        });
-      }
-      return output;
-    } catch (err: any) {
-      lastError = err;
-      const status: number | undefined = err?.status;
-      const isAbort = err?.name === 'AbortError';
-      const isNetworkFailure = err instanceof TypeError && status === undefined;
-      const retriable = status !== 429
-        && !isAbort
-        && err?.code !== 'PROVIDER_ATTEMPT_GUARD'
-        && (err?.retriable === true || isNetworkFailure || (status !== undefined && isRetriableStatus(status)));
-      console.error('[generate-lesson-quizzes] provider attempt failed', {
-        provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-        model,
-        strategy,
-        transportAttempt: attempt + 1,
-        attempt: typeof err?.attempt === 'number' ? err.attempt : diagnostics.providerAttempts,
-        httpStatus: status ?? null,
-        validJson: null,
-        validationResult: 'not_run',
-        quizCount: null,
-        questionCounts: [],
-        responseChars: typeof err?.responseChars === 'number' ? err.responseChars : null,
-        responseBytes: typeof err?.responseBytes === 'number' ? err.responseBytes : null,
-        latencyMs: typeof err?.latencyMs === 'number' ? err.latencyMs : Date.now() - attemptStartedAt,
-        promptChars: prompt.length,
-        executionMs: Date.now() - diagnostics.startedAt,
-        retriable,
-        rateLimited: status === 429,
-        errorCode: typeof err?.code === 'string' ? err.code : null,
-        totalProviderAttempts: diagnostics.providerAttempts,
-      });
-      if (!retriable || attempt === maxRetries) break;
-      const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt) + Math.random() * 300;
-      await sleep(backoff);
-    } finally {
-      clearTimeout(timeout);
-    }
+  const remaining = remainingMs(deadline);
+  if (remaining <= 0) {
+    const budgetError: any = new Error('Quiz generation wall-clock budget exceeded');
+    budgetError.code = 'WALL_CLOCK_BUDGET_EXCEEDED';
+    throw budgetError;
   }
-  throw lastError;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
+  const attemptStartedAt = Date.now();
+  try {
+    return await callProvider(prompt, apiKey, controller.signal, diagnostics, url, model, strategy);
+  } catch (err: any) {
+    const status: number | undefined = err?.status;
+    console.error('[generate-lesson-quizzes] provider attempt failed', {
+      provider: providerForUrl(url),
+      model,
+      strategy,
+      attempt: typeof err?.attempt === 'number' ? err.attempt : diagnostics.providerAttempts,
+      httpStatus: status ?? null,
+      validJson: null,
+      validationResult: 'not_run',
+      quizCount: null,
+      questionCounts: [],
+      responseChars: typeof err?.responseChars === 'number' ? err.responseChars : null,
+      responseBytes: typeof err?.responseBytes === 'number' ? err.responseBytes : null,
+      latencyMs: typeof err?.latencyMs === 'number' ? err.latencyMs : Date.now() - attemptStartedAt,
+      promptChars: prompt.length,
+      executionMs: Date.now() - diagnostics.startedAt,
+      rateLimited: status === 429,
+      errorCode: typeof err?.code === 'string' ? err.code : diagnosticErrorCode(err),
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 /** Call the provider, parse its completion, and release the raw string on return. */
@@ -681,17 +735,8 @@ async function requestParsedCandidate(
   diagnostics: RequestDiagnostics,
   strategy: GenerationStrategy,
 ): Promise<ParsedCandidate> {
-  const provider = url === NVIDIA_API_URL ? 'nvidia' : 'zen';
-  const output = await callProviderWithRetry(
-    prompt,
-    apiKey,
-    url,
-    model,
-    timeoutMs,
-    deadline,
-    diagnostics,
-    strategy,
-  );
+  const provider = providerForUrl(url);
+  const output = await callProviderWithTimeout(prompt, apiKey, url, model, timeoutMs, deadline, diagnostics, strategy);
   const responseChars = output.raw.length;
   const responseBytes = new TextEncoder().encode(output.raw).byteLength;
   try {
@@ -730,7 +775,7 @@ async function requestParsedCandidate(
 
 function validateCandidateWithTelemetry(
   candidate: ParsedCandidate,
-  provider: 'zen' | 'nvidia',
+  provider: ProviderName,
   model: string,
   strategy: GenerationStrategy,
   promptChars: number,
@@ -776,7 +821,7 @@ function validateCandidateWithTelemetry(
   }
 }
 
-/** Generate once, then allow at most one materially stricter recovery request. */
+/** Make one provider call and validate its complete structured result. */
 async function attemptGenerationWithValidation(
   prompt: string,
   apiKey: string,
@@ -785,68 +830,32 @@ async function attemptGenerationWithValidation(
   deadline: number,
   diagnostics: RequestDiagnostics,
 ): Promise<GeneratedQuizResponse> {
-  const provider = url === NVIDIA_API_URL ? 'nvidia' : 'zen';
-  let recoveryReason: 'invalid_json' | 'validation_failed';
-
-  try {
-    const initial = await requestParsedCandidate(
-      prompt,
-      apiKey,
-      url,
-      model,
-      AI_ATTEMPT_TIMEOUT_MS,
-      deadline,
-      diagnostics,
-      'initial',
-    );
-    try {
-      return validateCandidateWithTelemetry(
-        initial,
-        provider,
-        model,
-        'initial',
-        prompt.length,
-        diagnostics,
-      );
-    } catch {
-      recoveryReason = 'validation_failed';
-    }
-  } catch (err: any) {
-    if (err?.code !== 'INVALID_PROVIDER_JSON') throw err;
-    recoveryReason = 'invalid_json';
-  }
-
-  const recoveryPrompt = buildStrictRecoveryPrompt(prompt, recoveryReason);
-  const recovered = await requestParsedCandidate(
-    recoveryPrompt,
+  const provider = providerForUrl(url);
+  const candidate = await requestParsedCandidate(
+    prompt,
     apiKey,
     url,
     model,
-    RECOVERY_ATTEMPT_TIMEOUT_MS,
+    AI_ATTEMPT_TIMEOUT_MS,
     deadline,
     diagnostics,
-    'strict_recovery',
+    'initial',
   );
+
   try {
-    return validateCandidateWithTelemetry(
-      recovered,
-      provider,
-      model,
-      'strict_recovery',
-      recoveryPrompt.length,
-      diagnostics,
-    );
-  } catch (recoveryValidationError) {
-    const err: any = new Error(
-      `Quiz generation returned invalid structured output: ${errorMessage(recoveryValidationError)}`,
-    );
+    return validateCandidateWithTelemetry(candidate, provider, model, 'initial', prompt.length, diagnostics);
+  } catch {
+    const err: any = new Error('Quiz generation returned invalid structured output');
     err.code = 'INVALID_QUIZ_RESPONSE';
     throw err;
   }
 }
 
 export async function handleRequest(req: Request): Promise<Response> {
-  const diagnostics: RequestDiagnostics = { startedAt: Date.now(), providerAttempts: 0 };
+  const diagnostics: RequestDiagnostics = {
+    startedAt: Date.now(),
+    providerAttempts: 0,
+  };
   const deadline = diagnostics.startedAt + WALL_CLOCK_BUDGET_MS;
 
   if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -858,9 +867,14 @@ export async function handleRequest(req: Request): Promise<Response> {
     // Avoid parsing a stale or non-browser caller's legacy multi-megabyte payload.
     const declaredLength = Number(req.headers.get('content-length') || 0);
     if (declaredLength > 250_000) {
-      console.warn('[generate-lesson-quizzes] request rejected by size guard', { requestBytes: declaredLength });
+      console.warn('[generate-lesson-quizzes] request rejected by size guard', {
+        requestBytes: declaredLength,
+      });
       return returnResponse(
-        { error: 'Quiz generation request is too large', code: 'REQUEST_TOO_LARGE' },
+        {
+          error: 'Quiz generation request is too large',
+          code: 'REQUEST_TOO_LARGE',
+        },
         413,
         undefined,
         diagnostics,
@@ -878,22 +892,87 @@ export async function handleRequest(req: Request): Promise<Response> {
     }
 
     const prompt = buildCompactPrompt(payload);
-    const zenKey = Deno.env.get('ZEN_API_KEY');
-    const nvidiaKey = Deno.env.get('NVIDIA_API_KEY');
+    const edgeEnv = Deno.env;
+    const zenKey = edgeEnv.get('ZEN_API_KEY');
+    const nvidiaKey = edgeEnv.get('NVIDIA_API_KEY');
+    const geminiKey = edgeEnv.get('GEMINI_API_KEY');
+    const preGoogleDeadline = geminiKey ? deadline - GOOGLE_FALLBACK_RESERVED_BUDGET_MS : deadline;
+    const gemini36Deadline = deadline - FINAL_GOOGLE_ATTEMPT_RESERVED_BUDGET_MS;
     let lastError: unknown;
 
-    if (zenKey) {
+    const routes: Array<{
+      provider: ProviderName;
+      model: string;
+      url: string;
+      apiKey: string | undefined;
+      secretName: string;
+      attemptDeadline: number;
+    }> = [
+      {
+        provider: 'zen',
+        model: ZEN_MODEL,
+        url: ZEN_API_URL,
+        apiKey: zenKey,
+        secretName: 'ZEN_API_KEY',
+        attemptDeadline: preGoogleDeadline,
+      },
+      {
+        provider: 'nvidia',
+        model: NVIDIA_MODEL,
+        url: NVIDIA_API_URL,
+        apiKey: nvidiaKey,
+        secretName: 'NVIDIA_API_KEY',
+        attemptDeadline: preGoogleDeadline,
+      },
+      {
+        provider: 'gemini',
+        model: GEMINI_36_MODEL,
+        url: GEMINI_API_URL,
+        apiKey: geminiKey,
+        secretName: 'GEMINI_API_KEY',
+        attemptDeadline: gemini36Deadline,
+      },
+      {
+        provider: 'gemini',
+        model: GEMINI_35_LITE_MODEL,
+        url: GEMINI_API_URL,
+        apiKey: geminiKey,
+        secretName: 'GEMINI_API_KEY',
+        attemptDeadline: deadline,
+      },
+    ];
+    const reportedMissingSecrets = new Set<string>();
+
+    for (const route of routes) {
+      if (!route.apiKey) {
+        if (!reportedMissingSecrets.has(route.secretName)) {
+          console.error(`[generate-lesson-quizzes] ${route.secretName} missing`);
+          reportedMissingSecrets.add(route.secretName);
+        }
+        continue;
+      }
+      if (remainingMs(route.attemptDeadline) <= 0) {
+        console.warn('[generate-lesson-quizzes] provider skipped to preserve fallback budget', {
+          provider: route.provider,
+          model: route.model,
+          executionMs: Date.now() - diagnostics.startedAt,
+          totalProviderAttempts: diagnostics.providerAttempts,
+        });
+        continue;
+      }
+
       try {
         const result = await attemptGenerationWithValidation(
           prompt,
-          zenKey,
-          ZEN_API_URL,
-          ZEN_MODEL,
-          deadline,
+          route.apiKey,
+          route.url,
+          route.model,
+          route.attemptDeadline,
           diagnostics,
         );
         console.log('[generate-lesson-quizzes] success', {
-          provider: 'zen',
+          provider: route.provider,
+          model: route.model,
           executionMs: Date.now() - diagnostics.startedAt,
           totalProviderAttempts: diagnostics.providerAttempts,
         });
@@ -901,48 +980,17 @@ export async function handleRequest(req: Request): Promise<Response> {
       } catch (err: any) {
         lastError = err;
         console.error('[generate-lesson-quizzes] provider failed final', {
-          provider: 'zen',
+          provider: route.provider,
+          model: route.model,
           errorCode: diagnosticErrorCode(err),
           totalProviderAttempts: diagnostics.providerAttempts,
           executionMs: Date.now() - diagnostics.startedAt,
         });
       }
-    } else {
-      console.error('[generate-lesson-quizzes] ZEN_API_KEY missing');
     }
 
-    if (nvidiaKey && remainingMs(deadline) > 0) {
-      try {
-        const result = await attemptGenerationWithValidation(
-          prompt,
-          nvidiaKey,
-          NVIDIA_API_URL,
-          NVIDIA_MODEL,
-          deadline,
-          diagnostics,
-        );
-        console.log('[generate-lesson-quizzes] success', {
-          provider: 'nvidia',
-          executionMs: Date.now() - diagnostics.startedAt,
-          totalProviderAttempts: diagnostics.providerAttempts,
-        });
-        return returnResponse(result, 200, undefined, diagnostics);
-      } catch (err: any) {
-        lastError = err;
-        console.error('[generate-lesson-quizzes] provider failed final', {
-          provider: 'nvidia',
-          errorCode: diagnosticErrorCode(err),
-          totalProviderAttempts: diagnostics.providerAttempts,
-          executionMs: Date.now() - diagnostics.startedAt,
-        });
-      }
-    } else if (!nvidiaKey) {
-      console.error('[generate-lesson-quizzes] NVIDIA_API_KEY missing');
-    }
-
-    const detail = lastError instanceof Error
-      ? lastError.message.slice(0, 500)
-      : 'No quiz generation provider configured';
+    const detail =
+      lastError instanceof Error ? lastError.message.slice(0, 500) : 'No quiz generation provider configured';
     console.error('[generate-lesson-quizzes] failed all providers', {
       provider: 'all',
       errorCode: diagnosticErrorCode(lastError),
@@ -966,7 +1014,10 @@ export async function handleRequest(req: Request): Promise<Response> {
       executionMs: Date.now() - diagnostics.startedAt,
     });
     return returnResponse(
-      { error: err instanceof Error ? err.message.slice(0, 500) : 'Internal error', code: 'INTERNAL_ERROR' },
+      {
+        error: err instanceof Error ? err.message.slice(0, 500) : 'Internal error',
+        code: 'INTERNAL_ERROR',
+      },
       500,
       undefined,
       diagnostics,
