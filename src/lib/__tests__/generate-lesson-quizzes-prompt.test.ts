@@ -255,6 +255,39 @@ describe('generate-lesson-quizzes resource optimization', () => {
     }));
   });
 
+  it('uses the bounded Nemotron 3.5 Lightning configuration for NVIDIA fallback', async () => {
+    const raw = JSON.stringify(makeValidResponse());
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ finish_reason: 'stop', message: { content: raw } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('Deno', {
+      env: { get: (name: string) => name === 'NVIDIA_API_KEY' ? 'nvidia-key' : undefined },
+    });
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await handleRequest(new Request('https://example.test/generate-lesson-quizzes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(samplePayload),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe('https://integrate.api.nvidia.com/v1/chat/completions');
+    const providerBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(providerBody).toEqual(expect.objectContaining({
+      model: 'nvidia/nemotron-3.5-lightning-30b-a3b',
+      temperature: 1,
+      top_p: 0.95,
+      max_tokens: 1_800,
+      stream: false,
+      chat_template_kwargs: { enable_thinking: false },
+    }));
+    expect(providerBody).not.toHaveProperty('reasoning_budget');
+  });
+
   it('allows one quality recovery per provider and prevents accidental retry loops', async () => {
     const invalidRaw = JSON.stringify({ quizzes: [] });
     const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({

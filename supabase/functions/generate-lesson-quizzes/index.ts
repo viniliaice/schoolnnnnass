@@ -1,7 +1,7 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
 const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const NVIDIA_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b';
+const NVIDIA_MODEL = 'nvidia/nemotron-3.5-lightning-30b-a3b';
 const ZEN_API_URL = 'https://opencode.ai/zen/v1/chat/completions';
 const ZEN_MODEL = 'deepseek-v4-flash-free';
 // Production timings ranged from 18–82 seconds. Forty-five seconds retains the
@@ -426,16 +426,21 @@ async function sendProviderRequest(
   model: string,
 ): Promise<Response> {
   // The provider body is serialized exactly once in this short-lived scope.
+  // Nemotron 3.5's published sampling values are used for the NVIDIA fallback,
+  // but thinking is disabled so its bounded output budget is reserved for the
+  // client-consumed quiz JSON rather than an unused reasoning trace.
+  const isNvidia = url === NVIDIA_API_URL;
   const serializedRequest = JSON.stringify({
     model,
     messages: [
       { role: 'system', content: 'Generate rigorous school quizzes. Return only valid JSON.' },
       { role: 'user', content: prompt },
     ],
-    temperature: 0.7,
-    top_p: 0.9,
+    temperature: isNvidia ? 1 : 0.7,
+    top_p: isNvidia ? 0.95 : 0.9,
     max_tokens: PROVIDER_MAX_TOKENS,
     stream: false,
+    ...(isNvidia ? { chat_template_kwargs: { enable_thinking: false } } : {}),
   });
   return fetch(url, {
     method: 'POST',
