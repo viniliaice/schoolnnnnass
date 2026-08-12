@@ -1,23 +1,11 @@
 import { supabase } from '../supabase';
 import { regeneratePeriodAiReviews } from './lessonPeriodAiReviews';
 import { generateLessonPlanQuizzes } from './lessonPlanQuizzes';
-import type { LessonPlan, LessonPlanPeriod, PeriodActivity, AIReview, AiReviewLog, AiReviewOutcome, DayOfWeek, PlanStatus, ReviewResponse, SavePeriodsPayload } from '../../types';
+import type { LessonPlan, LessonPlanPeriod, PeriodActivity, AIReview, AiReviewLog, AiReviewOutcome, DayOfWeek, PlanStatus, ReviewResponse, SavePeriodsPayload, SubmitForReviewResult } from '../../types';
 import { isPlanEditable } from '../../types';
 
 function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-}
-
-/**
- * Thrown when the plan reached the supervisor but the AI review could not be
- * generated. The submission itself succeeded — only the scoring is missing.
- */
-export class SubmissionAiError extends Error {
-  readonly aiFailedOnly = true;
-  constructor(message: string) {
-    super(message);
-    this.name = 'SubmissionAiError';
-  }
 }
 
 export async function fetchPlansByTeacher(teacherId: string): Promise<LessonPlan[]> {
@@ -251,11 +239,18 @@ export async function expireStuckAiReviews(candidates?: LessonPlan[]): Promise<s
   return expired;
 }
 
+/**
+ * Teacher action: submit a plan for review. This is intentionally FAST — it
+ * only persists the submission (status → 'submitted', which also locks the
+ * plan against teacher edits server-side) and returns. The AI review is a
+ * background concern for the supervisor and runs fire-and-forget via
+ * `runAiReviewInBackground`; the teacher never waits on it.
+ */
 export async function submitForReview(
   planId: string,
-  periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
-  unitContext?: { name: string; objectives: string }
-): Promise<ReviewResponse> {
+  _periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
+  _unitContext?: { name: string; objectives: string }
+): Promise<SubmitForReviewResult> {
   // First, verify the plan exists and is in a valid state
   const { data: plan, error: fetchError } = await supabase
     .from('lesson_plans')
@@ -270,36 +265,49 @@ export async function submitForReview(
     throw new Error('Plan has already been submitted for review');
   }
 
-  // Stamp the start time so a stuck plan can be timed out later.
+  // Stamp the start time so a stuck background review can be timed out later,
+  // and mark the plan submitted. The server-side lock trigger keys off this
+  // status, so the teacher's edit window closes here — before the AI runs.
   const startedAt = new Date().toISOString();
-  await supabase
+  const { error: submitError } = await supabase
     .from('lesson_plans')
-    .update({ ai_started_at: startedAt, ai_failure_reason: null })
+    .update({ status: 'submitted', ai_started_at: startedAt, ai_failure_reason: null, updated_at: startedAt })
     .eq('id', planId);
+  if (submitError) throw submitError;
 
-  // Call the edge function to generate AI review first
-  // The edge function will set status to 'in_review' on success
-  // or 'ai_failed' on failure
-  const sessionResult = await supabase.auth?.getSession?.();
-  const sessionData = sessionResult?.data;
-  console.log('[submitForReview] plan.teacher_id:', plan.teacher_id, 'session.user.id:', sessionData?.session?.user?.id);
+  return { plan_id: planId, status: 'submitted' };
+}
+
+/**
+ * Background chain that runs AFTER the teacher's submission is confirmed.
+ * Fire-and-forget: callers must NOT await this (it never throws — every step
+ * is guarded and logged so a slow or failed AI review can only ever affect
+ * what the supervisor sees, never the teacher's flow).
+ *
+ * Order matters:
+ *  1. generate-lesson-review — the edge function persists the ai_reviews row
+ *     and flips the plan submitted → in_review (or → ai_failed) itself.
+ *  2. regeneratePeriodAiReviews — per-period rows in lesson_period_ai_reviews.
+ *  3. generateLessonPlanQuizzes — auto quizzes (independently retryable from
+ *     the supervisor screen).
+ */
+export async function runAiReviewInBackground(
+  planId: string,
+  periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
+  unitContext?: { name: string; objectives: string }
+): Promise<void> {
   const callStart = Date.now();
-  const { data, error } = await supabase.functions.invoke('generate-lesson-review', {
+
+  // ── Step 1: the AI review (edge function) ─────────────────────────────
+  const { error } = await supabase.functions.invoke('generate-lesson-review', {
     body: { plan_id: planId, periods: periodInputs, unit_context: unitContext },
   });
 
   if (error) {
-    // The edge function normally flips the plan to 'ai_failed' itself. Re-read the
-    // status so we can tell "the AI failed but the plan IS with the supervisor"
-    // apart from "nothing was submitted at all".
-    const { data: currentPlan } = await supabase
-      .from('lesson_plans')
-      .select('status')
-      .eq('id', planId)
-      .single();
-
+    // The edge function normally flips the plan to 'ai_failed' itself (guarded
+    // so it can never clobber a supervisor decision). Record the attempt for
+    // the admin monitor and keep the failure reason on the plan.
     const msg = error.context?.message || error.message || 'Review request failed';
-
     await logAiReviewAttempt({
       planId,
       outcome: classifyAiError(msg),
@@ -311,31 +319,9 @@ export async function submitForReview(
       .from('lesson_plans')
       .update({ ai_failure_reason: msg })
       .eq('id', planId);
-
-    if (currentPlan?.status === 'ai_failed' || currentPlan?.status === 'in_review') {
-      // Plan is visible to the supervisor; only the AI scoring failed.
-      throw new SubmissionAiError(msg);
-    }
-
-    // The submission itself never landed — return the plan to draft so the
-    // teacher can retry without ending up in a stuck state.
-    await supabase
-      .from('lesson_plans')
-      .update({ status: 'draft', updated_at: new Date().toISOString() })
-      .eq('id', planId);
-
-    throw new Error(msg);
+    console.error('[lesson-ai-review] background review failed', { planId, message: msg });
+    return; // do not continue the chain — the review is the critical step
   }
-
-  // The edge function already moved the plan to 'in_review' on success, which the
-  // supervisor query also picks up. Only nudge the status when it is still sitting
-  // in a pre-submission state, so we never overwrite 'in_review' with 'submitted'
-  // (that made finished plans look like they were still waiting on the AI).
-  const { data: afterPlan } = await supabase
-    .from('lesson_plans')
-    .select('status')
-    .eq('id', planId)
-    .single();
 
   await logAiReviewAttempt({
     planId,
@@ -343,26 +329,19 @@ export async function submitForReview(
     latencyMs: Date.now() - callStart,
   });
 
-  if (afterPlan?.status !== 'in_review' && afterPlan?.status !== 'ai_failed') {
-    await supabase
-      .from('lesson_plans')
-      .update({ status: 'submitted', updated_at: new Date().toISOString() })
-      .eq('id', planId);
-  }
-
+  // ── Step 2: per-period AI reviews ─────────────────────────────────────
   try {
     await regeneratePeriodAiReviews(planId);
   } catch (err) {
     console.error('[lesson-period-ai-reviews] failed to generate after submit', err);
   }
 
+  // ── Step 3: auto-generated quizzes ────────────────────────────────────
   try {
     await generateLessonPlanQuizzes(planId);
   } catch (err) {
     console.error('[lesson-plan-quizzes] failed to generate after submit', err);
   }
-
-  return data as ReviewResponse;
 }
 
 export async function fetchReviewByPlanId(planId: string): Promise<AIReview | null> {

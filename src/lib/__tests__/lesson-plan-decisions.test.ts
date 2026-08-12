@@ -7,8 +7,20 @@ vi.mock('../supabase', () => ({
   },
 }));
 
+// The background chain calls these after submission; mock them so the unit
+// tests can assert they were invoked (or not) without DB plumbing.
+vi.mock('../db/lessonPeriodAiReviews', () => ({
+  regeneratePeriodAiReviews: vi.fn().mockResolvedValue([]),
+}));
+vi.mock('../db/lessonPlanQuizzes', () => ({
+  generateLessonPlanQuizzes: vi.fn().mockResolvedValue([]),
+}));
+
 import { supabase } from '../supabase';
-import { approvePlan, rejectPlan, submitForReview, SubmissionAiError } from '../db/lessonPlans';
+import { approvePlan, rejectPlan, submitForReview, runAiReviewInBackground } from '../db/lessonPlans';
+import { regeneratePeriodAiReviews } from '../db/lessonPeriodAiReviews';
+import { generateLessonPlanQuizzes } from '../db/lessonPlanQuizzes';
+import type { DayOfWeek } from '../../types';
 
 const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
 const mockInvoke = supabase.functions.invoke as unknown as ReturnType<typeof vi.fn>;
@@ -16,6 +28,8 @@ const mockInvoke = supabase.functions.invoke as unknown as ReturnType<typeof vi.
 beforeEach(() => {
   mockFrom.mockReset();
   mockInvoke.mockReset();
+  (regeneratePeriodAiReviews as unknown as ReturnType<typeof vi.fn>).mockClear();
+  (generateLessonPlanQuizzes as unknown as ReturnType<typeof vi.fn>).mockClear();
 });
 
 /** Build a chainable stub for `.update().eq()` and `.upsert()`. */
@@ -80,14 +94,13 @@ describe('supervisor decisions without an AI review', () => {
   });
 });
 
-describe('submitForReview failure signalling', () => {
-  function statusSequence(statuses: string[]) {
-    let call = 0;
+describe('submitForReview — fast, non-blocking submission', () => {
+  function stubPlan(initialStatus: string) {
     const updates: any[] = [];
     mockFrom.mockImplementation(() => ({
       select: () => ({
         eq: () => ({
-          single: () => Promise.resolve({ data: { id: 'p1', teacher_id: 't1', status: statuses[Math.min(call++, statuses.length - 1)] }, error: null }),
+          single: () => Promise.resolve({ data: { id: 'p1', teacher_id: 't1', status: initialStatus }, error: null }),
         }),
       }),
       update: (values: any) => ({
@@ -96,38 +109,85 @@ describe('submitForReview failure signalling', () => {
           return Promise.resolve({ error: null });
         },
       }),
-      // submitForReview now also writes an ai_review_logs row.
       insert: () => Promise.resolve({ error: null }),
     }));
     return updates;
   }
 
-  it('throws SubmissionAiError when the plan reached the supervisor but the AI failed', async () => {
-    // 1st read: pre-submit status 'draft'. 2nd read (after error): 'ai_failed'.
-    const updates = statusSequence(['draft', 'ai_failed']);
-    mockInvoke.mockResolvedValue({ data: null, error: { message: 'AI review generation failed' } });
+  it('writes status=submitted and returns immediately — never awaits the AI review', async () => {
+    const updates = stubPlan('draft');
 
-    await expect(submitForReview('p1', [])).rejects.toBeInstanceOf(SubmissionAiError);
-    // Plan must NOT be rolled back to draft — the supervisor can still see it.
-    expect(updates.some((u) => u.status === 'draft')).toBe(false);
+    const result = await submitForReview('p1', []);
+
+    expect(result).toEqual({ plan_id: 'p1', status: 'submitted' });
+    // The submission itself is only a status write...
+    expect(updates.some((u) => u.status === 'submitted')).toBe(true);
+    // ...and the AI edge function is NOT called inside the awaited submit.
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 
-  it('rolls the plan back to draft when the submission itself never landed', async () => {
-    const updates = statusSequence(['draft', 'draft']);
-    mockInvoke.mockResolvedValue({ data: null, error: { message: 'network down' } });
-
-    const err = await submitForReview('p1', []).catch((e) => e);
-    expect(err).toBeInstanceOf(Error);
-    expect(err).not.toBeInstanceOf(SubmissionAiError);
-    expect(updates.some((u) => u.status === 'draft')).toBe(true);
-  });
-
-  it('does not downgrade in_review back to submitted on success', async () => {
-    const updates = statusSequence(['draft', 'in_review']);
-    mockInvoke.mockResolvedValue({ data: { plan_id: 'p1' }, error: null });
+  it('stamps ai_started_at so the timeout watchdog can time out a stuck background review', async () => {
+    const updates = stubPlan('draft');
 
     await submitForReview('p1', []);
 
-    expect(updates.some((u) => u.status === 'submitted')).toBe(false);
+    const submitUpdate = updates.find((u) => u.status === 'submitted');
+    expect(submitUpdate?.ai_started_at).toBeTruthy();
+    expect(submitUpdate?.ai_failure_reason).toBeNull();
+  });
+
+  it('rejects when the plan is already submitted, in review, or approved', async () => {
+    for (const status of ['submitted', 'in_review', 'approved']) {
+      stubPlan(status);
+      await expect(submitForReview('p1', [])).rejects.toThrow(/already/i);
+    }
+  });
+});
+
+describe('runAiReviewInBackground — fire-and-forget chain', () => {
+  it('invokes the review edge function, then regenerates period reviews and quizzes on success', async () => {
+    const logs: any[] = [];
+    mockFrom.mockImplementation(() => ({
+      insert: (values: any) => {
+        logs.push(values);
+        return Promise.resolve({ error: null });
+      },
+    }));
+    mockInvoke.mockResolvedValue({ data: { plan_id: 'p1' }, error: null });
+    const periods = [{ day: 'Monday' as DayOfWeek, period_number: 1, topic: 'T', activities: 'A' }];
+
+    await runAiReviewInBackground('p1', periods, { name: 'Unit 1', objectives: 'Add, subtract' });
+
+    expect(mockInvoke).toHaveBeenCalledWith('generate-lesson-review', {
+      body: { plan_id: 'p1', periods, unit_context: { name: 'Unit 1', objectives: 'Add, subtract' } },
+    });
+    expect(regeneratePeriodAiReviews).toHaveBeenCalledWith('p1');
+    expect(generateLessonPlanQuizzes).toHaveBeenCalledWith('p1');
+    // The attempt is recorded for the admin monitor.
+    expect(logs.some((l) => l.outcome === 'success')).toBe(true);
+  });
+
+  it('logs the failure and stops the chain when the edge function errors — never throws', async () => {
+    const logs: any[] = [];
+    mockFrom.mockImplementation(() => ({
+      insert: (values: any) => {
+        logs.push(values);
+        return Promise.resolve({ error: null });
+      },
+      update: (values: any) => ({
+        eq: () => Promise.resolve({ error: null }),
+      }),
+    }));
+    mockInvoke.mockResolvedValue({ data: null, error: { message: 'AI review generation failed' } });
+
+    await expect(runAiReviewInBackground('p1', [])).resolves.toBeUndefined();
+
+    const log = logs.find((l) => l.outcome !== undefined);
+    expect(log).toBeTruthy();
+    expect(log.outcome).not.toBe('success');
+    // The chain stops at the failed review — no point regenerating reviews or
+    // quizzes off a failed submission state.
+    expect(regeneratePeriodAiReviews).not.toHaveBeenCalled();
+    expect(generateLessonPlanQuizzes).not.toHaveBeenCalled();
   });
 });

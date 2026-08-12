@@ -296,10 +296,14 @@ async function markPlanFailed(
   latencyMs: number,
 ): Promise<void> {
   try {
+    // Guarded: only flip plans that are still awaiting the review. A supervisor
+    // may have decided (approved/rejected/revision_requested) while the review
+    // was running in the background — their decision must never be clobbered.
     await supabase
       .from('lesson_plans')
       .update({ status: 'ai_failed', ai_failure_reason: reason, updated_at: new Date().toISOString() })
-      .eq('id', planId);
+      .eq('id', planId)
+      .in('status', ['submitted', 'ai_failed']);
   } catch (e) {
     console.error('Failed to mark plan ai_failed:', e);
   }
@@ -550,11 +554,14 @@ serve(async (req: Request) => {
     if (insertError) {
       // Rollback: try to restore the previous status
       // Since the plan was already 'submitted' or similar before this call,
-      // we set it back to the original status so teacher can retry
+      // we set it back to the original status so teacher can retry. Guarded
+      // like the other status writes: never clobber a supervisor decision
+      // made while the background review was in flight.
       await supabase
         .from('lesson_plans')
         .update({ status: plan.status, updated_at: new Date().toISOString() })
-        .eq('id', payload.plan_id);
+        .eq('id', payload.plan_id)
+        .in('status', ['submitted', 'ai_failed']);
       
       return corsResponse({
         error: 'Failed to save review',
@@ -563,7 +570,10 @@ serve(async (req: Request) => {
       }, { status: 500 });
     }
 
-    // Update plan status to in_review - carry forward previous audit trail
+    // Update plan status to in_review - carry forward previous audit trail.
+    // Guarded: the review now runs in the background after the teacher submits,
+    // so a supervisor may already have decided by the time we land. Only plans
+    // still awaiting the review (submitted, or a retried ai_failed) may flip.
     const { error: statusUpdateError } = await supabase
       .from('lesson_plans')
       .update({
@@ -572,7 +582,8 @@ serve(async (req: Request) => {
         previous_reviewed_at: plan.previous_reviewed_at,
         updated_at: new Date().toISOString(),
       })
-      .eq('id', payload.plan_id);
+      .eq('id', payload.plan_id)
+      .in('status', ['submitted', 'ai_failed']);
 
     // If status update fails but review was saved, that's OK - the review exists
     // and can be retrieved. The status will be updated on next action or manual fix.

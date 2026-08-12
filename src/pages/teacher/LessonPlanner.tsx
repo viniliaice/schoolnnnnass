@@ -338,22 +338,17 @@ export function LessonPlanner() {
       }
 
       await submitMut.mutateAsync({ planId, periods: periodsForSave, unitContext });
+      // Submission is confirmed the moment the status write lands; the AI
+      // review runs in the background and is never something the teacher
+      // waits on.
       addToast({
         type: 'success',
         title: 'Submitted to supervisor',
-        description: 'Your plan has been sent to your supervisor for review.',
+        description: 'Your plan has been sent for review. The AI review runs in the background.',
       });
       setTab('mine');
     } catch (err: any) {
-      if (err?.aiFailedOnly) {
-        // Plan reached the supervisor; only the AI scoring failed.
-        addToast({
-          type: 'warning',
-          title: 'Submitted, but the AI review failed',
-          description: 'Your supervisor can still see and approve the plan. You can retry the AI review below.',
-        });
-        setTab('mine');
-      } else if (err?.isLocked) {
+      if (err?.isLocked) {
         addToast({ type: 'error', title: 'This plan is locked', description: err.message });
       } else {
         addToast({
@@ -712,20 +707,20 @@ export function LessonPlanner() {
         />
       )}
 
-      {/* Submission progress overlay */}
+      {/* Submission progress overlay — brief: the AI review is NOT part of this */}
       {submitMut.isPending && (
         <div className="fixed inset-0 bg-black/30 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="bg-white rounded-2xl p-8 shadow-xl flex flex-col items-center gap-4 max-w-sm text-center">
             <Loader2 className="w-10 h-10 animate-spin text-indigo-600" />
             <p className="text-lg font-semibold text-slate-900">Submitting&hellip;</p>
             <p className="text-sm text-slate-500">
-              Saving plan &rarr; sending to supervisor. You will be redirected to your plans once it is done.
+              Saving plan &rarr; sending to supervisor. This only takes a moment.
             </p>
           </div>
         </div>
       )}
 
-      {/* AI review is handled entirely in the background — teacher never sees it */}
+      {/* The AI review is handled entirely in the background — the teacher never waits on it */}
     </div>
   );
 }

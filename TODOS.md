@@ -75,3 +75,10 @@ Direct `.insert()/.update()/.delete()` on RLS-protected tables from the anon-key
 - **Effort:** S (human ~2h / CC ~10min)
 - **Priority:** P3
 - **Depends on:** M3 parent portal family ID.
+
+## Async lesson-plan submit — server-side background queue (DEFERRED 2026-08-13)
+- **What:** Move the post-submit AI review chain (`generate-lesson-review` edge call + per-period reviews + quiz generation) from the teacher's browser tab to a server-side queue (pg_net → edge function, or pg_cron sweep) so it survives the teacher closing the tab.
+- **Why:** The current fix is client-side fire-and-forget; if the teacher's tab closes mid-review, the review is lost until the 3-minute watchdog flips the plan to `ai_failed` and the supervisor retries. Functionally recoverable, but not resilient.
+- **Pros:** Review completion no longer depends on any client; teacher's device does zero AI work.
+- **Cons:** pg_net/pg_cron infra + a new edge entrypoint + auth context for the AI call (the edge function currently authenticates the caller as the plan owner).
+- **Context:** Deferred in /plan-design-review (PLAN-async-lesson-plan-submit.md, decision D2). Revisit if lost reviews become observable in `ai_review_logs` (outcome 'timeout' with no matching review).

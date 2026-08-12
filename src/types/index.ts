@@ -733,6 +733,13 @@ export interface ReviewPayload {
   };
 }
 
+// Fast path result of the teacher's submit action. The AI review is NOT part
+// of this response — it runs in the background after submission is confirmed.
+export interface SubmitForReviewResult {
+  plan_id: string;
+  status: 'submitted';
+}
+
 // Edge Function success response
 export interface ReviewResponse {
   review_id: string;
