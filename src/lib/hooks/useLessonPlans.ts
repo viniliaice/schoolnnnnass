@@ -8,6 +8,7 @@ import {
   deletePlan,
   savePeriods,
   submitForReview,
+  runAiReviewInBackground,
   fetchReviewByPlanId,
   updateReviewStatus,
   approvePlan,
@@ -357,7 +358,7 @@ export function useSavePeriods() {
 export function useSubmitForReview() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({
+    mutationFn: async ({
       planId,
       periods,
       unitContext,
@@ -365,7 +366,14 @@ export function useSubmitForReview() {
       planId: string;
       periods: { day: DayOfWeek; period_number: number; topic: string; activities: string }[];
       unitContext?: { name: string; objectives: string };
-    }) => submitForReview(planId, periods, unitContext),
+    }) => {
+      // The submission itself is fast (status write). The AI review, per-period
+      // reviews and quiz generation run fire-and-forget AFTER the teacher has
+      // been confirmed — a slow/hung review must never block the submit.
+      const result = await submitForReview(planId, periods, unitContext);
+      void runAiReviewInBackground(planId, periods, unitContext);
+      return result;
+    },
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['aiReview', data.plan_id] });

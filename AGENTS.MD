@@ -1,9 +1,9 @@
 ---
 type: Config
 title: Agent Configuration
-description: OKF skill configuration and available playbooks for this repository
+description: Installed agent skills (gstack, vercel-react-best-practices) and working rules for this repository
 resource: AGENTS.md
-tags: [okf, config]
+tags: [gstack, skills, config]
 timestamp: 2026-07-27T00:00:00Z
 ---
 
@@ -13,7 +13,7 @@ timestamp: 2026-07-27T00:00:00Z
 Read this file first. Do NOT run a full codebase scan or glob the entire repo to "understand the project" — everything you need to locate relevant code is listed below. Only read files outside this map if a task explicitly requires something not covered here, and even then, search narrowly (specific folder, not root).
 
 ## Stack
-Next.js (App Router) + Supabase. School web app — [fill in: parent portal / admin dashboard / student-facing, etc.].
+React 19 + Vite + Tailwind CSS 4 + Supabase (PostgreSQL, RLS, Edge Functions); TanStack React Query; single-file build via vite-plugin-singlefile. School management web app — admin/teacher/parent/supervisor roles.
 
 ## Where things live
 [Fill in your key file directories here]
@@ -39,18 +39,13 @@ Only fall back to a broader repo scan if `.kb/` doesn't cover what you need, and
 
 ## Agent Configuration
 
-### okf skill
-* **Path:** `.opencode/skill/okf`
-* **Installed via:** `okf skill .opencode/skill/okf --here --force`
-* **CLI:** `okf` (gem install okf)
-* **Playbooks available:**
-  * consume.md
-  * curate.md
-  * doctor.md
-  * maintain.md
-  * menu.md
-  * migrate.md
-  * produce.md
-  * refine.md
-  * search.md
+### gstack skill pack — INSTALLED (vendored)
+* **Path:** `.claude/skills/gstack` (full vendored copy, no `.git`)
+* **Source:** `garrytan/gstack` v1.62.0.0 @ `d078622` — locked in `skills-lock.json`
+* **Skills available (59):** `/office-hours`, `/autoplan`, `/plan-ceo-review`, `/plan-eng-review`, `/plan-design-review`, `/plan-devex-review`, `/design-consultation`, `/design-shotgun`, `/design-html`, `/design-review`, `/review`, `/codex`, `/cso`, `/qa`, `/qa-only`, `/browse`, `/ship`, `/land-and-deploy`, `/canary`, `/benchmark`, `/investigate`, `/retro`, `/spec`, `/document-generate`, `/document-release`, `/careful`, `/freeze`, `/guard`, `/unfreeze`, `/gstack-upgrade`, `/learn`, `/health` and more
+* **Per-skill docs:** each skill dir has its own `SKILL.md` (e.g. `.claude/skills/gstack/office-hours/SKILL.md`). The design docs in this repo (e.g. `DESIGN-family-id-generator.md`) were produced with this workflow — a `## GSTACK REVIEW REPORT` section at the end of a plan file is the expected output of `/plan-*-review`.
+* **Note:** gstack's `./setup` script needs `bun` (and Claude Code) to register skills globally and build the `/browse` browser binary. If the environment lacks bun, the Markdown skills still work; `/browse` needs the binary at `browse/dist/browse` (built by `./setup`).
+
+### okf skill — NOT INSTALLED (stale reference)
+The previous version of this file referenced `.opencode/skill/okf` — that directory does **not** exist in this checkout. The `okf` CLI (gem install okf) is not present, so its playbooks (consume/curate/doctor/maintain/menu/migrate/produce/refine/search) are unavailable. Reinstall with `okf skill .opencode/skill/okf --here --force` if needed.
   

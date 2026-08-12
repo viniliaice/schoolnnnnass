@@ -5,6 +5,13 @@
       "source": "vercel-labs/agent-skills",
       "sourceType": "github",
       "computedHash": "43ca6c197f8ec13055079da7053232d477068b03ca443f9ac1bc819b95cdd432"
+    },
+    "gstack": {
+      "source": "garrytan/gstack",
+      "sourceType": "github",
+      "version": "1.62.0.0",
+      "ref": "d078622b73539fc1a7a27e709861e9b6b058ae98",
+      "computedHash": "7edd3b2ab6775e3447a53da37e27d42f4720da8587925deed0f5022d11d4d207"
     }
   }
 }
