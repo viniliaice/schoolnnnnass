@@ -26,6 +26,13 @@ describe('lesson plan quiz generation validation', () => {
         correctIndex: null,
         rubric: 'A correct answer adds ones, regroups 14 ones as 1 ten and 4 ones, then adds tens to get 74.',
       },
+      {
+        type: 'multiple_choice' as const,
+        question: 'What is 46 + 28?',
+        options: ['74', '64', '68', '84'],
+        correctIndex: 0,
+        explanation: 'Adding the ones and tens with regrouping gives 74.',
+      },
     ],
   };
 
@@ -40,6 +47,7 @@ describe('lesson plan quiz generation validation', () => {
         validQuiz.questions[0],
         validQuiz.questions[1],
         { ...validQuiz.questions[2], options: ['A', 'B'] },
+        validQuiz.questions[3],
       ],
     })).toThrow(/must not have options/i);
   });
@@ -51,6 +59,7 @@ describe('lesson plan quiz generation validation', () => {
         validQuiz.questions[0],
         validQuiz.questions[1],
         { ...validQuiz.questions[2], rubric: '' },
+        validQuiz.questions[3],
       ],
     })).toThrow(/must have a rubric/i);
   });
@@ -62,6 +71,7 @@ describe('lesson plan quiz generation validation', () => {
         { ...validQuiz.questions[0], options: ['A', 'A', 'B', 'C'] },
         validQuiz.questions[1],
         validQuiz.questions[2],
+        validQuiz.questions[3],
       ],
     })).toThrow(/options are not distinct/i);
   });

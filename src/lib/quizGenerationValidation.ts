@@ -48,8 +48,8 @@ function strip(value: string | null | undefined): string {
  */
 export function validateGeneratedQuiz(input: GeneratedQuiz): GeneratedQuiz {
   if (!input.title?.trim()) throw new Error('Generated quiz is missing a title');
-  if (!Array.isArray(input.questions) || input.questions.length < 3 || input.questions.length > 5) {
-    throw new Error('Generated quiz must contain 3–5 questions');
+  if (!Array.isArray(input.questions) || input.questions.length !== QUIZ_GENERATION_DEFAULTS.questionsPerQuiz) {
+    throw new Error(`Generated quiz must contain exactly ${QUIZ_GENERATION_DEFAULTS.questionsPerQuiz} questions`);
   }
   const seen = new Set<string>();
   let directCount = 0;
