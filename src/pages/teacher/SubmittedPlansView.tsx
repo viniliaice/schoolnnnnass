@@ -16,7 +16,7 @@ import { getCurrentAcademicYear } from '../../lib/db/academic';
 
 const STATUS_META: Record<PlanStatus, { label: string; icon: typeof FileText; chip: string; help: string }> = {
   draft:      { label: 'Draft',      icon: Pencil,        chip: 'bg-slate-100 text-slate-600',     help: 'Not submitted yet — only you can see this.' },
-  submitted:  { label: 'Submitted',  icon: Clock,         chip: 'bg-blue-100 text-blue-700',       help: 'Sent to your supervisor for review.' },
+  submitted:  { label: 'AI review pending', icon: Clock, chip: 'bg-blue-100 text-blue-700', help: 'Submitted and locked. AI review is running in the background.' },
   in_review:  { label: 'In review',  icon: Clock,         chip: 'bg-amber-100 text-amber-700',     help: 'Waiting on your supervisor\'s decision.' },
   approved:   { label: 'Approved',   icon: CheckCircle,   chip: 'bg-emerald-100 text-emerald-700', help: 'Your supervisor approved this plan.' },
   rejected:   { label: 'Revisions',  icon: XCircle,       chip: 'bg-rose-100 text-rose-700',       help: 'Your supervisor asked for revisions — see their comment.' },
@@ -215,7 +215,8 @@ function PlanDetail({
   onEditPlan?: (planId: string) => void;
 }) {
   const { data, isLoading } = usePlanWithPeriods(planId);
-  const { data: periodAiReviews = [] } = usePeriodAiReviews(planId);
+  const aiReviewPending = data?.plan.status === 'submitted' || data?.plan.status === 'in_review';
+  const { data: periodAiReviews = [] } = usePeriodAiReviews(planId, aiReviewPending);
   const { data: unitPlans = [] } = useUnitPlansByClass(data?.plan.class_name ?? null);
 
   if (isLoading || !data) {

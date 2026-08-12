@@ -8,8 +8,7 @@ import * as XLSX from 'xlsx';
 import { cn } from '../../utils/cn';
 import { getUserById } from '../../lib/db/profiles';
 import { getClassSubjectsForTeacher } from '../../lib/db/classes';
-import { getCurrentAcademicYear, getCurrentTerm } from '../../lib/db/academic';
-import { fetchUnitPlanByClassSubjectTerm } from '../../lib/db/unitPlans';
+import { getCurrentAcademicYear } from '../../lib/db/academic';
 import { weekRangeForNumber, weekNumberForDate, weekNumberFromLabel, makeWeekLabel, describePlanWeek } from '../../utils/weekDates';
 import { PlanConfigBar } from '../../components/lesson-planner/PlanConfigBar';
 import { PlanGrid } from '../../components/lesson-planner/PlanGrid';
@@ -111,7 +110,10 @@ export function LessonPlanner() {
 
   const { data: existingPlans } = useTeacherPlans(session?.userId);
   const { data: planWithPeriods } = usePlanWithPeriods(planId || undefined);
-  const { data: review } = useReview(planId || undefined);
+  const { data: review } = useReview(
+    planId || undefined,
+    planWithPeriods?.plan.status === 'submitted' || planWithPeriods?.plan.status === 'in_review'
+  );
   // Guarantees a plan never sits on "waiting" forever (#4).
   useAiReviewTimeout(planWithPeriods?.plan);
   const createPlanMut = useCreatePlan();
@@ -321,39 +323,17 @@ export function LessonPlanner() {
     try {
       await savePeriodsMut.mutateAsync({ plan_id: planId, periods: periodsForSave });
 
-      // Auto-resolve unit plan at submit time (fresh — not cached from mount)
-      const subjectsSet = new Set(
-        periodsForSave.filter((p) => !p.is_free && p.subject).map((p) => p.subject)
-      );
-      const subjectId = subjectsSet.size === 1 ? [...subjectsSet][0] : null;
-      let unitContext: { name: string; objectives: string } | undefined;
-      if (subjectId) {
-        const currentTerm = await getCurrentTerm();
-        if (currentTerm) {
-          const matchedUnit = await fetchUnitPlanByClassSubjectTerm(className, subjectId, currentTerm.id);
-          if (matchedUnit) {
-            unitContext = { name: matchedUnit.name, objectives: matchedUnit.objectives };
-          }
-        }
-      }
-
-      await submitMut.mutateAsync({ planId, periods: periodsForSave, unitContext });
+      // The Edge Function resolves authoritative periods and Unit Plans after
+      // this status-first submission; none of that work blocks the teacher.
+      await submitMut.mutateAsync({ planId });
       addToast({
         type: 'success',
         title: 'Submitted to supervisor',
-        description: 'Your plan has been sent to your supervisor for review.',
+        description: 'Your plan is locked and saved. AI review is running in the background.',
       });
       setTab('mine');
     } catch (err: any) {
-      if (err?.aiFailedOnly) {
-        // Plan reached the supervisor; only the AI scoring failed.
-        addToast({
-          type: 'warning',
-          title: 'Submitted, but the AI review failed',
-          description: 'Your supervisor can still see and approve the plan. You can retry the AI review below.',
-        });
-        setTab('mine');
-      } else if (err?.isLocked) {
+      if (err?.isLocked) {
         addToast({ type: 'error', title: 'This plan is locked', description: err.message });
       } else {
         addToast({

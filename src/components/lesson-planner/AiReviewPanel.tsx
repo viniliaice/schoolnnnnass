@@ -97,7 +97,7 @@ export function AiReviewPanel({
   }
 
   // ── Waiting on the AI ────────────────────────────────────────
-  if (!review) {
+  if (!review || status === 'submitted') {
     if (status === 'draft') return null;
     return (
       <div className={cn(
@@ -108,9 +108,10 @@ export function AiReviewPanel({
           <div className={cn('p-2 rounded-xl', stale ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700')}>
             {stale ? <Clock className="w-5 h-5" /> : <Loader2 className="w-5 h-5 animate-spin" />}
           </div>
-          <h2 className="min-w-0 flex-1 text-lg font-bold text-slate-900">
-            {stale ? t('aiReview.takingLong') : t('aiReview.inProgress')}
-          </h2>
+          <div className="min-w-0 flex-1">
+            <h2 className="text-lg font-bold text-slate-900">AI review pending</h2>
+            {stale && <p className="mt-0.5 text-xs font-semibold text-amber-700">{t('aiReview.takingLong')}</p>}
+          </div>
           <span className={cn(
             'rounded-full px-3 py-1 text-xs font-bold sm:ml-auto',
             stale ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700 animate-pulse'

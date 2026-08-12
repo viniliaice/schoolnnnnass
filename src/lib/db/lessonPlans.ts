@@ -1,23 +1,10 @@
 import { supabase } from '../supabase';
-import { regeneratePeriodAiReviews } from './lessonPeriodAiReviews';
 import { generateLessonPlanQuizzes } from './lessonPlanQuizzes';
-import type { LessonPlan, LessonPlanPeriod, PeriodActivity, AIReview, AiReviewLog, AiReviewOutcome, DayOfWeek, PlanStatus, ReviewResponse, SavePeriodsPayload } from '../../types';
+import type { LessonPlan, LessonPlanPeriod, AIReview, AiReviewLog, AiReviewOutcome, PlanStatus, ReviewDispatchResponse, SavePeriodsPayload } from '../../types';
 import { isPlanEditable } from '../../types';
 
 function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
-}
-
-/**
- * Thrown when the plan reached the supervisor but the AI review could not be
- * generated. The submission itself succeeded — only the scoring is missing.
- */
-export class SubmissionAiError extends Error {
-  readonly aiFailedOnly = true;
-  constructor(message: string) {
-    super(message);
-    this.name = 'SubmissionAiError';
-  }
 }
 
 export async function fetchPlansByTeacher(teacherId: string): Promise<LessonPlan[]> {
@@ -251,118 +238,72 @@ export async function expireStuckAiReviews(candidates?: LessonPlan[]): Promise<s
   return expired;
 }
 
-export async function submitForReview(
+/**
+ * Dispatch review generation after the database has confirmed the submitted
+ * status. This promise is intentionally not awaited by submitForReview: once
+ * the status RPC returns, the teacher's submission is complete and locked.
+ */
+async function dispatchLessonPlanReview(
   planId: string,
-  periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
-  unitContext?: { name: string; objectives: string }
-): Promise<ReviewResponse> {
-  // First, verify the plan exists and is in a valid state
-  const { data: plan, error: fetchError } = await supabase
-    .from('lesson_plans')
-    .select('id, teacher_id, status')
-    .eq('id', planId)
-    .single();
-  if (fetchError || !plan) throw new Error('Plan not found');
-  if (plan.status === 'in_review' || plan.status === 'approved') {
-    throw new Error(`Plan is already ${plan.status}`);
-  }
-  if (plan.status === 'submitted') {
-    throw new Error('Plan has already been submitted for review');
-  }
-
-  // Stamp the start time so a stuck plan can be timed out later.
-  const startedAt = new Date().toISOString();
-  await supabase
-    .from('lesson_plans')
-    .update({ ai_started_at: startedAt, ai_failure_reason: null })
-    .eq('id', planId);
-
-  // Call the edge function to generate AI review first
-  // The edge function will set status to 'in_review' on success
-  // or 'ai_failed' on failure
-  const sessionResult = await supabase.auth?.getSession?.();
-  const sessionData = sessionResult?.data;
-  console.log('[submitForReview] plan.teacher_id:', plan.teacher_id, 'session.user.id:', sessionData?.session?.user?.id);
-  const callStart = Date.now();
-  const { data, error } = await supabase.functions.invoke('generate-lesson-review', {
-    body: { plan_id: planId, periods: periodInputs, unit_context: unitContext },
+  attemptStartedAt: string,
+): Promise<boolean> {
+  const { error } = await supabase.functions.invoke('generate-lesson-review', {
+    body: { plan_id: planId },
   });
 
   if (error) {
-    // The edge function normally flips the plan to 'ai_failed' itself. Re-read the
-    // status so we can tell "the AI failed but the plan IS with the supervisor"
-    // apart from "nothing was submitted at all".
-    const { data: currentPlan } = await supabase
-      .from('lesson_plans')
-      .select('status')
-      .eq('id', planId)
-      .single();
+    const message = error.context?.message || error.message || 'Review request could not be dispatched';
 
-    const msg = error.context?.message || error.message || 'Review request failed';
-
-    await logAiReviewAttempt({
-      planId,
-      outcome: classifyAiError(msg),
-      errorCode: (error as any)?.code || null,
-      message: msg,
-      latencyMs: Date.now() - callStart,
+    // The SECURITY DEFINER RPC checks both status and attempt timestamp. A
+    // newer retry, successful result, or supervisor decision always wins over
+    // a late browser-side dispatch failure.
+    const { error: persistError } = await supabase.rpc('mark_lesson_plan_review_dispatch_failed', {
+      p_plan_id: planId,
+      p_ai_started_at: attemptStartedAt,
+      p_reason: message,
     });
-    await supabase
-      .from('lesson_plans')
-      .update({ ai_failure_reason: msg })
-      .eq('id', planId);
-
-    if (currentPlan?.status === 'ai_failed' || currentPlan?.status === 'in_review') {
-      // Plan is visible to the supervisor; only the AI scoring failed.
-      throw new SubmissionAiError(msg);
+    if (persistError) {
+      console.error('[lesson-plan-review] failed to persist dispatch failure', persistError);
     }
-
-    // The submission itself never landed — return the plan to draft so the
-    // teacher can retry without ending up in a stuck state.
-    await supabase
-      .from('lesson_plans')
-      .update({ status: 'draft', updated_at: new Date().toISOString() })
-      .eq('id', planId);
-
-    throw new Error(msg);
+    return false;
   }
 
-  // The edge function already moved the plan to 'in_review' on success, which the
-  // supervisor query also picks up. Only nudge the status when it is still sitting
-  // in a pre-submission state, so we never overwrite 'in_review' with 'submitted'
-  // (that made finished plans look like they were still waiting on the AI).
-  const { data: afterPlan } = await supabase
-    .from('lesson_plans')
-    .select('status')
-    .eq('id', planId)
-    .single();
+  // Quiz generation is independent of submission and review persistence. Keep
+  // the existing automation, but never put it back on the teacher's critical
+  // path.
+  void generateLessonPlanQuizzes(planId).catch((quizError) => {
+    console.error('[lesson-plan-quizzes] background generation failed', quizError);
+  });
+  return true;
+}
 
-  await logAiReviewAttempt({
-    planId,
-    outcome: 'success',
-    latencyMs: Date.now() - callStart,
+export async function submitForReview(planId: string): Promise<ReviewDispatchResponse> {
+  // This transaction verifies ownership, removes stale review rows, changes the
+  // status to submitted, and stamps ai_started_at. The status activates both
+  // existing server-side edit-lock triggers before this call returns.
+  const { data, error } = await supabase.rpc('submit_lesson_plan_for_review', {
+    p_plan_id: planId,
+  });
+  if (error) throw error;
+
+  const submittedPlan = Array.isArray(data) ? data[0] : data;
+  if (!submittedPlan?.id || submittedPlan.status !== 'submitted') {
+    throw new Error('Submission was not confirmed by the database.');
+  }
+
+  // Fire-and-forget only after the confirmed status transition above. The Edge
+  // Function acknowledges quickly and owns the durable background task.
+  void dispatchLessonPlanReview(planId, submittedPlan.ai_started_at).catch((dispatchError) => {
+    // dispatchLessonPlanReview handles expected invocation failures itself;
+    // this guard prevents an unexpected exception becoming unhandled.
+    console.error('[lesson-plan-review] background dispatch failed', dispatchError);
   });
 
-  if (afterPlan?.status !== 'in_review' && afterPlan?.status !== 'ai_failed') {
-    await supabase
-      .from('lesson_plans')
-      .update({ status: 'submitted', updated_at: new Date().toISOString() })
-      .eq('id', planId);
-  }
-
-  try {
-    await regeneratePeriodAiReviews(planId);
-  } catch (err) {
-    console.error('[lesson-period-ai-reviews] failed to generate after submit', err);
-  }
-
-  try {
-    await generateLessonPlanQuizzes(planId);
-  } catch (err) {
-    console.error('[lesson-plan-quizzes] failed to generate after submit', err);
-  }
-
-  return data as ReviewResponse;
+  return {
+    plan_id: planId,
+    status: 'submitted',
+    ai_started_at: submittedPlan.ai_started_at,
+  };
 }
 
 export async function fetchReviewByPlanId(planId: string): Promise<AIReview | null> {
@@ -387,85 +328,30 @@ export async function updateReviewStatus(
   if (error) throw error;
 }
 
-export async function retryAIReview(
-  planId: string,
-  periodInputs: { day: DayOfWeek; period_number: number; topic: string; objective?: string | null; activities: string; slide_number?: string | null; details?: PeriodActivity[] }[],
-  unitContext?: { name: string; objectives: string }
-): Promise<ReviewResponse> {
-  // First verify the plan exists and is in a retryable state
-  const { data: plan, error: fetchError } = await supabase
-    .from('lesson_plans')
-    .select('id, status')
-    .eq('id', planId)
-    .single();
-  if (fetchError || !plan) throw new Error('Plan not found');
-  if (plan.status !== 'ai_failed' && plan.status !== 'submitted') {
-    throw new Error('Only plans with a failed or pending AI review can be retried');
-  }
-
-  // Reset the clock so the timeout sweep measures THIS attempt.
-  await supabase
-    .from('lesson_plans')
-    .update({ ai_started_at: new Date().toISOString(), ai_failure_reason: null })
-    .eq('id', planId);
-
-  // Call the edge function to retry AI review
-  // The edge function will set status to 'in_review' on success
-  // or 'ai_failed' on failure
-  const callStart = Date.now();
-  const { data, error } = await supabase.functions.invoke('generate-lesson-review', {
-    body: { plan_id: planId, periods: periodInputs, unit_context: unitContext },
+export async function retryAIReview(planId: string): Promise<ReviewDispatchResponse> {
+  // Reset to an explicit pending state and create a fresh attempt timestamp.
+  // The RPC allows the owner or a supervisor/admin and rejects final statuses.
+  const { data: queued, error: queueError } = await supabase.rpc('retry_lesson_plan_ai_review', {
+    p_plan_id: planId,
   });
+  if (queueError) throw queueError;
 
-  if (error) {
-    // If edge function failed, the status should already be set to 'ai_failed' by the edge function
-    // But if not (e.g., network error before edge function could update), roll back to 'ai_failed'
-    const { data: currentPlan } = await supabase
-      .from('lesson_plans')
-      .select('status')
-      .eq('id', planId)
-      .single();
-    
-    if (currentPlan?.status !== 'ai_failed' && currentPlan?.status !== 'in_review') {
-      // Edge function didn't update status, set back to ai_failed
-      await supabase
-        .from('lesson_plans')
-        .update({ status: 'ai_failed', updated_at: new Date().toISOString() })
-        .eq('id', planId);
-    }
-    
-    const msg = error.context?.message || error.message || 'Review request failed';
-
-    await logAiReviewAttempt({
-      planId,
-      outcome: classifyAiError(msg),
-      errorCode: (error as any)?.code || null,
-      message: msg,
-      latencyMs: Date.now() - callStart,
-    });
-    await supabase
-      .from('lesson_plans')
-      .update({ ai_failure_reason: msg })
-      .eq('id', planId);
-
-    throw new Error(msg);
+  const queuedPlan = Array.isArray(queued) ? queued[0] : queued;
+  if (!queuedPlan?.id || queuedPlan.status !== 'submitted') {
+    throw new Error('AI review retry was not confirmed by the database.');
   }
 
-  await logAiReviewAttempt({ planId, outcome: 'success', latencyMs: Date.now() - callStart });
+  // A retry button may report immediate dispatch/auth failures, while all slow
+  // generation failures are persisted by the background Edge job and arrive
+  // through the existing realtime/polling status path.
+  const dispatched = await dispatchLessonPlanReview(planId, queuedPlan.ai_started_at);
+  if (!dispatched) throw new Error('Review retry could not be dispatched');
 
-  try {
-    await regeneratePeriodAiReviews(planId);
-  } catch (err) {
-    console.error('[lesson-period-ai-reviews] failed to regenerate after AI retry', err);
-  }
-
-  try {
-    await generateLessonPlanQuizzes(planId);
-  } catch (err) {
-    console.error('[lesson-plan-quizzes] failed to regenerate after AI retry', err);
-  }
-
-  return data as ReviewResponse;
+  return {
+    plan_id: planId,
+    status: 'submitted',
+    ai_started_at: queuedPlan.ai_started_at,
+  };
 }
 
 /**

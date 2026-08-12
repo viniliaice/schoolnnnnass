@@ -53,8 +53,11 @@ export function LessonPlanReview() {
 
   const { data: plans } = useSupervisorPlans();
   const { data: planWithPeriods } = usePlanWithPeriods(selectedPlanId || undefined);
-  const { data: review } = useReview(selectedPlanId || undefined);
-  const { data: periodAiReviews = [] } = usePeriodAiReviews(selectedPlanId || undefined);
+  const planStatus = planWithPeriods?.plan.status;
+  const reviewMayBeArriving = planStatus === 'submitted' || planStatus === 'in_review';
+  const { data: review } = useReview(selectedPlanId || undefined, reviewMayBeArriving);
+  const aiReviewPending = planStatus === 'submitted' || (planStatus === 'in_review' && !review);
+  const { data: periodAiReviews = [] } = usePeriodAiReviews(selectedPlanId || undefined, reviewMayBeArriving);
   const { data: quizPreviews = [] } = useLessonPlanQuizPreviews(selectedPlanId || undefined);
   // Guarantees a stuck plan flips to ai_failed instead of waiting forever (#4).
   useAiReviewTimeout(planWithPeriods?.plan);
@@ -82,17 +85,6 @@ export function LessonPlanReview() {
     () => toReadPeriods(planWithPeriods?.periods ?? []),
     [planWithPeriods?.periods]
   );
-  const retryPeriods = useMemo(() => (
-    planWithPeriods?.periods.map((p) => ({
-      day: p.day,
-      period_number: p.period_number,
-      topic: p.topic,
-      objective: p.objective ?? null,
-      activities: p.activities,
-      slide_number: p.slide_number ?? null,
-      details: (p.details as any[]) ?? [],
-    })) ?? []
-  ), [planWithPeriods?.periods]);
   const filteredPlans = useMemo(
     () => plans?.filter((p) => statusFilter === 'all' || p.status === statusFilter) ?? [],
     [plans, statusFilter]
@@ -118,8 +110,8 @@ export function LessonPlanReview() {
 
   const handleRetryReview = useCallback(async () => {
     if (!selectedPlanId || !planWithPeriods) return;
-    await retryMut.mutateAsync({ planId: selectedPlanId, periods: retryPeriods });
-  }, [planWithPeriods, retryMut, retryPeriods, selectedPlanId]);
+    await retryMut.mutateAsync({ planId: selectedPlanId });
+  }, [planWithPeriods, retryMut, selectedPlanId]);
 
   const handleRegeneratePeriodReview = useCallback(async () => {
     if (!selectedPlanId) return;
@@ -180,8 +172,10 @@ export function LessonPlanReview() {
 
   const pending = approveMut.isPending || rejectMut.isPending || revisionMut.isPending;
   const aiFailed = plan?.status === 'ai_failed';
-  const waitingOnAi = !!plan && plan.status === 'submitted' && !review;
-  const waitedMinutes = minutesSince(plan?.updated_at);
+  // Status is authoritative. A cached review from an older attempt must never
+  // hide the pending state after the queueing RPC has deleted stale rows.
+  const waitingOnAi = !!plan && aiReviewPending;
+  const waitedMinutes = minutesSince(plan?.ai_started_at || plan?.updated_at);
   const aiLikelyStuck = waitingOnAi && waitedMinutes >= 3;
 
   return (
@@ -236,7 +230,7 @@ export function LessonPlanReview() {
                   </p>
                   <span className={cn('flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full text-xs font-medium w-fit', STATUS_CHIP[p.status])}>
                     {p.status === 'ai_failed' && <AlertTriangle className="w-3 h-3" />}
-                    {p.status === 'ai_failed' ? 'AI failed' : p.status.replace('_', ' ')}
+                    {p.status === 'submitted' ? 'AI review pending' : p.status === 'ai_failed' ? 'AI failed' : p.status.replace('_', ' ')}
                   </span>
                 </div>
                 <ChevronRight className="w-4 h-4 text-slate-400" />
@@ -285,9 +279,9 @@ export function LessonPlanReview() {
                   </div>
                   <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
                     <span className={cn('w-fit rounded-full px-3 py-1.5 text-xs font-semibold', STATUS_CHIP[plan.status])}>
-                      {plan.status === 'ai_failed' ? 'AI failed' : plan.status.replace('_', ' ')}
+                      {waitingOnAi ? 'AI review pending' : plan.status === 'ai_failed' ? 'AI failed' : plan.status.replace('_', ' ')}
                     </span>
-                    {(periodAiReviews.length === 0 || quizPreviews.length === 0) && (
+                    {!waitingOnAi && (periodAiReviews.length === 0 || quizPreviews.length === 0) && (
                       <button
                         type="button"
                         onClick={handleGenerateMissingAssets}
@@ -298,7 +292,7 @@ export function LessonPlanReview() {
                         {(regeneratePeriodReviewMut.isPending || generateQuizzesMut.isPending) ? t('lessonReview.generatingNow') : t('lessonReview.generateNow')}
                       </button>
                     )}
-                    <button
+                    {!waitingOnAi && <button
                       type="button"
                       onClick={handleRegeneratePeriodReview}
                       disabled={regeneratePeriodReviewMut.isPending}
@@ -306,7 +300,7 @@ export function LessonPlanReview() {
                     >
                       {regeneratePeriodReviewMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                       {regeneratePeriodReviewMut.isPending ? t('lessonReview.regenerating') : t('lessonReview.regenerate')}
-                    </button>
+                    </button>}
                     <ExportLessonPlanPdfButton
                       document={<LessonPlanPdfDocument plan={plan} periods={planWithPeriods.periods} review={review} unitPlans={unitPlans} subjects={subjects} periodAiReviews={periodAiReviews} />}
                       fileName={`${plan.title.replace(/[^a-z0-9]/gi, '_')}_${plan.class_name}_${plan.week_label}.pdf`}
@@ -417,6 +411,7 @@ export function LessonPlanReview() {
                 unitPlans={unitPlans}
                 periodAiReviews={periodAiReviews}
                 showAiReview
+                aiReviewPending={waitingOnAi}
                 onAddCommentLine={handleAddCommentLine}
                 collapsible
                 defaultCollapsed
@@ -425,7 +420,7 @@ export function LessonPlanReview() {
               <AiReviewPanel
                 review={review}
                 status={plan.status}
-                updatedAt={plan.updated_at}
+                updatedAt={plan.ai_started_at || plan.updated_at}
                 failureReason={plan.ai_failure_reason}
                 retrying={retryMut.isPending}
                 onRetry={handleRetryReview}
@@ -440,7 +435,7 @@ export function LessonPlanReview() {
                 <h2 className="text-lg font-bold text-slate-900">{t('lessonReview.supervisorDecision')}</h2>
                 {waitingOnAi && !aiLikelyStuck && (
                   <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">
-                    <Loader2 className="w-3 h-3 animate-spin" /> AI review still running
+                    <Loader2 className="w-3 h-3 animate-spin" /> AI review pending
                   </span>
                 )}
                 {aiFailed && (
