@@ -1,14 +1,16 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.3';
-import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
-const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const NVIDIA_MODEL = 'deepseek-ai/deepseek-v4-flash';
-const ZEN_API_URL = 'https://opencode.ai/zen/v1/chat/completions';
-const ZEN_MODEL = 'deepseek-v4-flash-free';
+const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_MODEL = 'nvidia/nemotron-3.5-lightning:free';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+const GEMINI_36_MODEL = 'gemini-3.6-flash';
+const GEMINI_35_LITE_MODEL = 'gemini-3.5-flash-lite';
+const PROVIDER_MAX_RETRIES = 1;
+const BASE_BACKOFF_MS = 800;
 
 /**
- * Per-attempt timeout. With the primary retry and Zen fallback, all generation
- * remains below the client/database three-minute stuck-review watchdog.
+ * Per-attempt timeout. Provider retries only follow immediate retriable HTTP
+ * responses, so timeout failures still advance to the next fallback model.
  */
 const AI_ATTEMPT_TIMEOUT_MS = 50_000;
 
@@ -152,9 +154,52 @@ interface ReviewJob {
   payload: ReviewPayload;
   teacherId: string;
   attemptStartedAt: string;
-  nvidiaApiKey: string;
-  zenApiKey?: string;
+  openRouterApiKey?: string;
+  geminiApiKey?: string;
   requestStartedAt: number;
+}
+
+type ProviderName = 'openrouter' | 'gemini';
+
+export interface ProviderRoute {
+  provider: ProviderName;
+  url: string;
+  model: string;
+  apiKey: string | undefined;
+  secretName: 'OPENROUTER_API_KEY' | 'GEMINI_API_KEY';
+}
+
+export function buildProviderRoutes(
+  openRouterApiKey?: string,
+  geminiApiKey?: string,
+): ProviderRoute[] {
+  return [
+    {
+      provider: 'openrouter',
+      url: OPENROUTER_API_URL,
+      model: OPENROUTER_MODEL,
+      apiKey: openRouterApiKey,
+      secretName: 'OPENROUTER_API_KEY',
+    },
+    {
+      provider: 'gemini',
+      url: GEMINI_API_URL,
+      model: GEMINI_36_MODEL,
+      apiKey: geminiApiKey,
+      secretName: 'GEMINI_API_KEY',
+    },
+    {
+      provider: 'gemini',
+      url: GEMINI_API_URL,
+      model: GEMINI_35_LITE_MODEL,
+      apiKey: geminiApiKey,
+      secretName: 'GEMINI_API_KEY',
+    },
+  ];
+}
+
+interface ProviderError extends Error {
+  status?: number;
 }
 
 const CORS_HEADERS = {
@@ -202,58 +247,131 @@ function buildPrompt(payload: ReviewPayload): string {
   return `${preamble}Period Breakdown:\n${periodsText}\n\nEvaluate the whole plan across all 10 categories and return a specific period_reviews entry for every non-free instructional period.`;
 }
 
-async function callLLM(
+export async function callLLM(
   prompt: string,
-  apiKey: string,
+  route: ProviderRoute,
   signal: AbortSignal,
-  opts?: { model?: string; url?: string },
 ): Promise<{ result: ReviewResult; usage: TokenUsage }> {
-  const url = opts?.url || NVIDIA_API_URL;
-  const model = opts?.model || NVIDIA_MODEL;
-  const bodyPayload: Record<string, unknown> = {
-    model,
-    messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: prompt },
-    ],
-    temperature: 1,
-    top_p: 0.95,
-    max_tokens: 16384,
-    stream: false,
-  };
+  const bodyPayload = route.provider === 'gemini'
+    ? {
+        model: route.model,
+        input: prompt,
+        system_instruction: SYSTEM_PROMPT,
+        generation_config: {
+          max_output_tokens: 16384,
+          thinking_level: 'minimal',
+        },
+      }
+    : {
+        model: route.model,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT },
+          { role: 'user', content: prompt },
+        ],
+        temperature: 1,
+        top_p: 0.95,
+        max_tokens: 16384,
+        stream: false,
+        reasoning: { effort: 'minimal', exclude: true },
+      };
 
-  if (url === NVIDIA_API_URL) {
-    bodyPayload.chat_template_kwargs = { thinking: true, reasoning_effort: 'high' };
-  }
-
-  const response = await fetch(url, {
+  const response = await fetch(route.url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`,
-    },
+    headers: route.provider === 'gemini'
+      ? {
+          'Content-Type': 'application/json',
+          'x-goog-api-key': route.apiKey!,
+        }
+      : {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${route.apiKey}`,
+        },
     body: JSON.stringify(bodyPayload),
     signal,
   });
 
-  if (response.status === 429) throw new RateLimitError('Rate limited');
-  if (response.status === 401) throw new APIKeyError('Invalid API key');
   if (!response.ok) {
-    const providerLabel = url === NVIDIA_API_URL ? 'NVIDIA' : url === ZEN_API_URL ? 'Zen' : url;
-    throw new Error(`${providerLabel} API error: ${response.status} ${await response.text()}`);
+    const error: ProviderError = response.status === 429
+      ? new RateLimitError('Rate limited')
+      : response.status === 401
+        ? new APIKeyError('Invalid API key')
+        : new Error(`${route.provider} API error: HTTP ${response.status}`);
+    error.status = response.status;
+    throw error;
   }
 
-  const body = await response.json();
-  const content = body.choices?.[0]?.message?.content;
-  if (!content) throw new MalformedJSONError('Empty response from LLM');
+  let body: any;
+  try {
+    body = await response.json();
+  } catch {
+    throw new MalformedJSONError('Provider returned an invalid JSON envelope');
+  }
+
+  let content = '';
+  if (route.provider === 'gemini') {
+    if (Array.isArray(body?.steps)) {
+      for (const step of body.steps) {
+        if (step?.type !== 'model_output' || !Array.isArray(step.content)) continue;
+        for (const block of step.content) {
+          if (block?.type === 'text' && typeof block.text === 'string') content += block.text;
+        }
+      }
+    }
+  } else {
+    content = typeof body?.choices?.[0]?.message?.content === 'string'
+      ? body.choices[0].message.content
+      : '';
+  }
+  if (!content.trim()) throw new MalformedJSONError('Empty response from LLM');
 
   return {
     result: parseAndValidateJSON(content),
     usage: {
-      input_tokens: body.usage?.prompt_tokens ?? 0,
-      output_tokens: body.usage?.completion_tokens ?? 0,
+      input_tokens: body.usage?.prompt_tokens ?? body.usage?.input_tokens ?? 0,
+      output_tokens: body.usage?.completion_tokens ?? body.usage?.output_tokens ?? 0,
     },
   };
+}
+
+export function isRetriableStatus(status: number): boolean {
+  return status === 429 || status === 502 || status === 503 || status === 504 || status === 529;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+export async function callLLMWithRetry(
+  prompt: string,
+  route: ProviderRoute,
+  onRetry: () => void,
+): Promise<{ result: ReviewResult; usage: TokenUsage }> {
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt <= PROVIDER_MAX_RETRIES; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), AI_ATTEMPT_TIMEOUT_MS);
+    try {
+      return await callLLM(prompt, route, controller.signal);
+    } catch (error) {
+      lastError = error;
+      const status = (error as ProviderError)?.status;
+      const retriableHttpStatus = status !== undefined && isRetriableStatus(status);
+      const retriableMalformedPrimary = route.provider === 'openrouter'
+        && error instanceof MalformedJSONError;
+      if ((!retriableHttpStatus && !retriableMalformedPrimary) || attempt === PROVIDER_MAX_RETRIES) break;
+
+      onRetry();
+      if (retriableHttpStatus) {
+        const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt) + Math.random() * 300;
+        await sleep(backoff);
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  throw lastError;
 }
 
 function parseAndValidateJSON(content: string): ReviewResult {
@@ -506,8 +624,8 @@ async function generateAndPersistReview(job: ReviewJob): Promise<void> {
     payload,
     teacherId,
     attemptStartedAt,
-    nvidiaApiKey,
-    zenApiKey,
+    openRouterApiKey,
+    geminiApiKey,
     requestStartedAt,
   } = job;
 
@@ -518,46 +636,30 @@ async function generateAndPersistReview(job: ReviewJob): Promise<void> {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let retryCount = 0;
-    let modelUsed = NVIDIA_MODEL;
+    let modelUsed = OPENROUTER_MODEL;
+    const routes = buildProviderRoutes(openRouterApiKey, geminiApiKey);
+    const reportedMissingSecrets = new Set<string>();
 
-    for (let attempt = 0; attempt <= 1; attempt++) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), AI_ATTEMPT_TIMEOUT_MS);
-      try {
-        const { result, usage } = await callLLM(promptText, nvidiaApiKey, controller.signal);
-        reviewResult = result;
-        totalInputTokens = usage.input_tokens;
-        totalOutputTokens = usage.output_tokens;
-        break;
-      } catch (error) {
-        lastError = error as Error;
-        if (attempt === 0 && (error instanceof RateLimitError || error instanceof MalformedJSONError)) {
-          retryCount++;
-          continue;
+    for (const route of routes) {
+      if (!route.apiKey) {
+        if (!reportedMissingSecrets.has(route.secretName)) {
+          console.error(`generate-lesson-review ${route.secretName} is not configured.`);
+          reportedMissingSecrets.add(route.secretName);
         }
-        break;
-      } finally {
-        clearTimeout(timeoutId);
+        continue;
       }
-    }
 
-    if (!reviewResult && zenApiKey) {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), AI_ATTEMPT_TIMEOUT_MS);
       try {
-        const { result, usage } = await callLLM(promptText, zenApiKey, controller.signal, {
-          url: ZEN_API_URL,
-          model: ZEN_MODEL,
+        const { result, usage } = await callLLMWithRetry(promptText, route, () => {
+          retryCount++;
         });
         reviewResult = result;
         totalInputTokens = usage.input_tokens;
         totalOutputTokens = usage.output_tokens;
-        modelUsed = ZEN_MODEL;
+        modelUsed = route.model;
+        break;
       } catch (error) {
         lastError = error as Error;
-        modelUsed = `${NVIDIA_MODEL}, ${ZEN_MODEL}`;
-      } finally {
-        clearTimeout(timeoutId);
       }
     }
 
@@ -626,7 +728,8 @@ async function generateAndPersistReview(job: ReviewJob): Promise<void> {
   }
 }
 
-serve(async (req: Request) => {
+// @ts-ignore Supabase Edge Runtime provides the native Deno global.
+Deno.serve(async (req: Request) => {
   const requestStartedAt = Date.now();
 
   if (req.method === 'OPTIONS') {
@@ -756,9 +859,10 @@ serve(async (req: Request) => {
       return corsResponse({ error: error.message, code: 'TOKEN_OVERFLOW' }, { status: 413 });
     }
 
-    const nvidiaApiKey = Deno.env.get('NVIDIA_API_KEY');
-    if (!nvidiaApiKey) {
-      const error = new APIKeyError('NVIDIA API key is not configured.');
+    const openRouterApiKey = Deno.env.get('OPENROUTER_API_KEY');
+    const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
+    if (!openRouterApiKey && !geminiApiKey) {
+      const error = new APIKeyError('No AI provider API key is configured.');
       await markPlanFailed(supabase, planId, plan.teacher_id, plan.ai_started_at, error, Date.now() - requestStartedAt);
       return corsResponse({ error: error.message, code: 'API_KEY_ERROR' }, { status: 500 });
     }
@@ -768,8 +872,8 @@ serve(async (req: Request) => {
       payload,
       teacherId: plan.teacher_id,
       attemptStartedAt: plan.ai_started_at,
-      nvidiaApiKey,
-      zenApiKey: Deno.env.get('ZEN_API_KEY'),
+      openRouterApiKey,
+      geminiApiKey,
       requestStartedAt,
     });
 
