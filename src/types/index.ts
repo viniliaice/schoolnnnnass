@@ -733,7 +733,15 @@ export interface ReviewPayload {
   };
 }
 
-// Edge Function success response
+// Immediate response after a review attempt has been durably queued. The
+// generated review itself arrives later through the persisted Supabase rows.
+export interface ReviewDispatchResponse {
+  plan_id: string;
+  status: 'submitted';
+  ai_started_at: string;
+}
+
+// Persisted generation result shape returned by older/synchronous callers.
 export interface ReviewResponse {
   review_id: string;
   plan_id: string;

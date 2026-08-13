@@ -114,37 +114,16 @@ describe('AI review timeout (#4)', () => {
     });
   });
 
-  it('falls back to expiring a stuck plan client-side', async () => {
-    mockRpc.mockResolvedValue({ data: null, error: { message: 'function missing' } });
-    const sink = { updates: [] as any[] };
-    stubPlanStatus('submitted', sink);
+  it('propagates authoritative expiry failures without falling back to direct client writes', async () => {
+    const error = { code: '42883', message: 'function missing with sensitive details' };
+    mockRpc.mockResolvedValue({ data: null, error });
 
-    const longAgo = new Date(Date.now() - 10 * 60_000).toISOString();
-    const expired = await expireStuckAiReviews([
-      { id: 'p1', status: 'submitted', ai_started_at: longAgo, updated_at: longAgo, teacher_id: 't1' } as any,
-    ]);
+    await expect(expireStuckAiReviews()).rejects.toBe(error);
 
-    expect(expired).toEqual(['p1']);
-    expect(sink.updates[0].status).toBe('ai_failed');
-    expect(sink.updates[0].ai_failure_reason).toMatch(/timed out/i);
-  });
-
-  it('leaves a plan alone while it is still within the timeout window', async () => {
-    mockRpc.mockResolvedValue({ data: null, error: { message: 'function missing' } });
-    const justNow = new Date().toISOString();
-    const expired = await expireStuckAiReviews([
-      { id: 'p1', status: 'submitted', ai_started_at: justNow, updated_at: justNow, teacher_id: 't1' } as any,
-    ]);
-    expect(expired).toEqual([]);
-  });
-
-  it('ignores plans that are not waiting on the AI', async () => {
-    mockRpc.mockResolvedValue({ data: null, error: { message: 'function missing' } });
-    const longAgo = new Date(Date.now() - 60 * 60_000).toISOString();
-    const expired = await expireStuckAiReviews([
-      { id: 'p1', status: 'approved', ai_started_at: longAgo, updated_at: longAgo, teacher_id: 't1' } as any,
-    ]);
-    expect(expired).toEqual([]);
+    expect(mockRpc).toHaveBeenCalledWith('expire_stuck_ai_reviews', {
+      p_timeout_minutes: AI_REVIEW_TIMEOUT_MINUTES,
+    });
+    expect(mockFrom).not.toHaveBeenCalled();
   });
 
   it('has a timeout well under the 107 minutes observed in the bug report', () => {
