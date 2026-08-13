@@ -11,11 +11,13 @@ import {
   PROVIDER_MAX_TOKENS,
   buildCompactLessonContext,
   buildCompactPrompt,
+  buildEmbeddingBatch,
   handleRequest,
   normalizeQuizResponse,
   parseGeminiResponse,
   parseProviderResponse,
   parseQuizJson,
+  rankPeriodsByEmbeddings,
   returnResponse,
   summarizeQuizShape,
   validateQuizResponse,
@@ -94,12 +96,34 @@ const samplePayload = {
   direct_answer_min: 1,
 };
 
-function generationRequest(): Request {
+function generationRequest(payload: unknown = samplePayload): Request {
   return new Request('https://example.test/generate-lesson-quizzes', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(samplePayload),
+    body: JSON.stringify(payload),
   });
+}
+
+function embeddingEnvelope(payload: any) {
+  const batch = buildEmbeddingBatch(payload);
+  return {
+    data: batch.inputs.map((_, index) => ({
+      index,
+      embedding: index === 0 ? [1, 0] : [1, index / 100],
+    })),
+  };
+}
+
+function openRouterCompletion(raw: string) {
+  return {
+    choices: [{
+      finish_reason: 'stop',
+      message: {
+        content: raw,
+        reasoning_details: [{ type: 'summary', text: 'must stay private' }],
+      },
+    }],
+  };
 }
 
 afterEach(() => {
@@ -189,6 +213,95 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(prompt).not.toContain('UNUSED-RESOURCE');
   });
 
+  it('builds one bounded educational embedding query plus at most 24 candidates', () => {
+    const payload = {
+      plan: {
+        title: `Plant systems ${'title '.repeat(500)}`,
+        objective: `Explain transport ${'objective '.repeat(500)}`,
+        teacher_id: 'PRIVATE-TEACHER-ID',
+      },
+      subject: 'Science',
+      periods: Array.from({ length: 80 }, (_, index) => ({
+        id: `PRIVATE-PERIOD-${index}`,
+        subject: index < 60 ? 'Science' : 'Math',
+        period_number: index + 1,
+        topic: `Topic ${index} ${'topic '.repeat(100)}`,
+        objective: `Objective ${index} ${'objective '.repeat(100)}`,
+        activities: `Activity ${index} ${'activity '.repeat(200)}`,
+        details: [{ activity: `Step ${index} ${'detail '.repeat(100)}`, resource: 'PRIVATE-RESOURCE' }],
+      })),
+    };
+
+    const batch = buildEmbeddingBatch(payload as any);
+    expect(batch.inputs).toHaveLength(25);
+    expect(batch.periodIndexes).toHaveLength(24);
+    expect(batch.inputs[0].length).toBeLessThanOrEqual(1_500);
+    expect(batch.inputs.slice(1).every((input) => input.length <= 900)).toBe(true);
+    expect(batch.periodIndexes).toEqual(Array.from({ length: 24 }, (_, index) => index));
+    const serialized = JSON.stringify(batch.inputs);
+    expect(serialized).not.toContain('PRIVATE-TEACHER-ID');
+    expect(serialized).not.toContain('PRIVATE-PERIOD-');
+    expect(serialized).not.toContain('PRIVATE-RESOURCE');
+    expect(serialized).not.toContain('Math');
+
+    const storedSubjectId = 'd9428888-122b-11e1-b85c-61cd3cbb3210';
+    const identifierPayload = {
+      plan: { title: 'Fractions' },
+      subject: storedSubjectId,
+      periods: [{
+        subject: storedSubjectId,
+        period_number: 1,
+        topic: 'Equivalent fractions',
+        objective: 'Compare equivalent fractions',
+      }],
+    };
+    expect(buildCompactLessonContext(identifierPayload as any)).not.toContain(storedSubjectId);
+    expect(JSON.stringify(buildEmbeddingBatch(identifierPayload as any).inputs)).not.toContain(storedSubjectId);
+  });
+
+  it('uses valid embedding similarity only under context pressure and restores chronology', () => {
+    const payload = {
+      plan: { class_name: 'Grade 7', title: 'Interdependent ecosystems' },
+      subject: 'Science',
+      periods: Array.from({ length: 12 }, (_, index) => ({
+        subject: 'Science',
+        period_number: index + 1,
+        topic: `Topic ${index} ${'ecosystem '.repeat(20)}`,
+        objective: `Objective ${index} ${'relationship '.repeat(20)}`,
+        activities: `Activity ${index} ${'investigation '.repeat(24)}`,
+        details: [{ activity: `Evidence task ${index} ${'observation '.repeat(10)}` }],
+      })),
+    };
+    expect(buildCompactLessonContext(payload as any)).toContain('[context truncated]');
+    const batch = buildEmbeddingBatch(payload as any);
+    const data = batch.inputs.map((_, vectorIndex) => {
+      if (vectorIndex === 0) return { index: 0, embedding: [1, 0] };
+      const periodIndex = batch.periodIndexes[vectorIndex - 1];
+      const score = periodIndex === 8 ? 1 : periodIndex === 2 ? 0.99 : 0.1;
+      return { index: vectorIndex, embedding: [score, Math.sqrt(1 - score * score)] };
+    });
+
+    const ranked = rankPeriodsByEmbeddings(payload as any, batch, data);
+    const selectedIndexes = ranked.periods.map((period) => payload.periods.indexOf(period as any));
+    expect(ranked).not.toBe(payload);
+    expect(ranked.periods.length).toBeLessThan(payload.periods.length);
+    expect(selectedIndexes).toContain(8);
+    expect(selectedIndexes).toContain(2);
+    expect(selectedIndexes).toEqual([...selectedIndexes].sort((left, right) => left - right));
+    expect(buildCompactLessonContext(ranked as any)).not.toContain('[context truncated]');
+
+    expect(() => rankPeriodsByEmbeddings(payload as any, batch, data.slice(0, -1)))
+      .toThrow(/count does not match/i);
+    const malformed = data.map((item) => ({ ...item, embedding: [...item.embedding] }));
+    malformed[1].embedding[0] = Number.NaN;
+    expect(() => rankPeriodsByEmbeddings(payload as any, batch, malformed))
+      .toThrow(/non-finite vector/i);
+
+    const overflowing = data.map((item) => ({ ...item, embedding: [Number.MAX_VALUE, Number.MAX_VALUE] }));
+    expect(() => rankPeriodsByEmbeddings(payload as any, batch, overflowing))
+      .toThrow(/invalid cosine similarity/i);
+  });
+
   it('builds a bounded browser request without unit plans or database metadata', () => {
     const plan = {
       id: 'plan-id',
@@ -198,12 +311,13 @@ describe('generate-lesson-quizzes resource optimization', () => {
       title: `Photosynthesis ${'title '.repeat(1_000)}`,
       created_at: 'unused',
     };
+    const storedSubjectId = 'd9428888-122b-11e1-b85c-61cd3cbb3210';
     const periods = Array.from({ length: 100 }, (_, index) => ({
       id: `period-${index}`,
       plan_id: 'plan-id',
       day: 'Monday',
       period_number: index + 1,
-      subject: index % 2 === 0 ? 'Science' : 'Math',
+      subject: storedSubjectId,
       is_free: false,
       topic: `Topic ${index} ${'topic '.repeat(500)}`,
       objective: `Objective ${index} ${'objective '.repeat(500)}`,
@@ -223,12 +337,13 @@ describe('generate-lesson-quizzes resource optimization', () => {
       'activities', 'details', 'objective', 'period_number', 'subject', 'topic',
     ]);
     expect(request.periods[0].details).toHaveLength(4);
+    expect(request.periods.every((period) => period.subject === 'Science')).toBe(true);
     expect(serialized.length).toBeLessThan(40_000);
     expect(serialized).not.toContain('teacher-id');
     expect(serialized).not.toContain('period-0');
     expect(serialized).not.toContain('created_at');
     expect(serialized).not.toContain('unit_plans');
-    expect(serialized).not.toContain('"Math"');
+    expect(serialized).not.toContain(storedSubjectId);
   });
 
   it('validates exactly 3 quizzes with exactly 4 questions and rejects missing fields', () => {
@@ -267,8 +382,18 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(parseProviderResponse({
       id: 'provider-id',
       usage: { total_tokens: 1234 },
-      choices: [{ finish_reason: 'stop', message: { content: ' {"quizzes":[]} ', reasoning_content: 'unused reasoning' } }],
+      choices: [{
+        finish_reason: 'stop',
+        message: {
+          content: ' {"quizzes":[]} ',
+          reasoning_content: 'unused reasoning',
+          reasoning_details: [{ text: 'also unused' }],
+        },
+      }],
     })).toEqual({ raw: '{"quizzes":[]}', finishReason: 'stop' });
+    expect(parseProviderResponse({
+      choices: [{ finish_reason: 'stop', message: { reasoning_content: '{"quizzes":["private"]}' } }],
+    })).toEqual({ raw: '', finishReason: 'stop' });
 
     expect(parseGeminiResponse(geminiInteraction(' {"quizzes":[]} '))).toEqual({
       raw: '{"quizzes":[]}',
@@ -292,37 +417,84 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(() => validateQuizResponse(wrappedIncomplete)).toThrow(/exactly 3 quizzes/i);
   });
 
-  it('uses 1800 tokens, one provider call on success, and returns the existing normalized schema', async () => {
+  it('uses bounded embedding preprocessing and strict OpenRouter 3×4 generation on success', async () => {
     const providerResult = makeValidResponse(true);
     const raw = JSON.stringify(providerResult);
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ finish_reason: 'stop', message: { content: raw, reasoning_content: 'unused reasoning' } }],
-      usage: { total_tokens: 1_700 },
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify(embeddingEnvelope(samplePayload)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockImplementationOnce(async () => new Response(JSON.stringify(openRouterCompletion(raw)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
     vi.stubGlobal('fetch', fetchMock);
-    vi.stubGlobal('Deno', { env: { get: (name: string) => name === 'ZEN_API_KEY' ? 'zen-key' : 'nvidia-key' } });
+    vi.stubGlobal('Deno', {
+      env: { get: (name: string) => name === 'OPENROUTER_API_KEY' ? 'openrouter-key' : undefined },
+    });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    const response = await handleRequest(new Request('https://example.test/generate-lesson-quizzes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(samplePayload),
-    }));
+    const response = await handleRequest(generationRequest());
     const responseData = await response.json();
 
     expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    const providerBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-    expect(providerBody.max_tokens).toBe(PROVIDER_MAX_TOKENS);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
+      'https://openrouter.ai/api/v1/embeddings',
+      'https://openrouter.ai/api/v1/chat/completions',
+    ]);
+
+    const embeddingBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
+    expect(embeddingBody).toEqual({
+      model: 'nvidia/nemotron-3-embed-1b:free',
+      input: buildEmbeddingBatch(samplePayload as any).inputs,
+      encoding_format: 'float',
+    });
+    expect(embeddingBody.input).toHaveLength(2);
+    expect(JSON.stringify(embeddingBody)).not.toContain('plan-1');
+    expect(JSON.stringify(embeddingBody)).not.toContain('t-12345');
+    expect(fetchMock.mock.calls[0][1]?.headers).toEqual({
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer openrouter-key',
+    });
+
+    const providerBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
+    expect(providerBody).toEqual(expect.objectContaining({
+      model: 'nvidia/nemotron-3-super-120b-a12b:free',
+      temperature: 0.7,
+      top_p: 0.95,
+      max_tokens: PROVIDER_MAX_TOKENS,
+      stream: false,
+      reasoning: { effort: 'minimal', exclude: true },
+      provider: { require_parameters: true },
+    }));
     expect(providerBody.max_tokens).toBe(1_800);
     expect(providerBody.messages[1].content.length).toBeLessThan(6_000);
-    expect(providerBody).not.toHaveProperty('response_format');
+    expect(providerBody.response_format.type).toBe('json_schema');
+    expect(providerBody.response_format.json_schema).toEqual(expect.objectContaining({
+      name: 'lesson_quizzes',
+      strict: true,
+    }));
+    const schema = providerBody.response_format.json_schema.schema;
+    expect(schema.properties.quizzes).toEqual(expect.objectContaining({ minItems: 3, maxItems: 3 }));
+    expect(schema.properties.quizzes.items.properties.questions).toEqual(expect.objectContaining({
+      minItems: 4,
+      maxItems: 4,
+    }));
+    expect(schema.properties.quizzes.items.properties.questions.prefixItems).toHaveLength(4);
+    expect(fetchMock.mock.calls[1][1]?.headers).toEqual({
+      'Content-Type': 'application/json',
+      Authorization: 'Bearer openrouter-key',
+    });
+
     expect(responseData).toEqual(normalizeQuizResponse(providerResult));
     expect(logSpy).toHaveBeenCalledWith(
       '[generate-lesson-quizzes] validation metadata',
       expect.objectContaining({
-        provider: 'zen',
-        attempt: 1,
+        provider: 'openrouter',
+        attempt: 2,
         httpStatus: 200,
         validJson: true,
         validationResult: 'passed',
@@ -333,63 +505,85 @@ describe('generate-lesson-quizzes resource optimization', () => {
         latencyMs: expect.any(Number),
         promptChars: providerBody.messages[1].content.length,
         executionMs: expect.any(Number),
-        totalProviderAttempts: 1,
+        totalProviderAttempts: 2,
       }),
     );
     expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
       responseBytes: expect.any(Number),
       executionMs: expect.any(Number),
-      totalProviderAttempts: 1,
+      totalProviderAttempts: 2,
     }));
-    expect(JSON.stringify(logSpy.mock.calls)).not.toContain('Question 1-1?');
+    const diagnostics = JSON.stringify(logSpy.mock.calls);
+    expect(diagnostics).not.toContain('Question 1-1?');
+    expect(diagnostics).not.toContain('must stay private');
+    expect(diagnostics).not.toContain('[1,0]');
   });
 
-  it('uses the bounded Nemotron 3.5 Lightning configuration for NVIDIA fallback', async () => {
+  it('falls back to deterministic source order when embedding vectors are malformed', async () => {
+    const payload = {
+      plan: { class_name: 'Grade 6', title: 'Water systems' },
+      subject: 'Science',
+      periods: Array.from({ length: 12 }, (_, index) => ({
+        subject: 'Science',
+        period_number: index + 1,
+        topic: `Source topic ${index} ${'cycle '.repeat(24)}`,
+        objective: `Source objective ${index} ${'explain '.repeat(28)}`,
+        activities: `Source activity ${index} ${'observe '.repeat(36)}`,
+      })),
+    };
     const raw = JSON.stringify(makeValidResponse());
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
-      choices: [{ finish_reason: 'stop', message: { content: raw } }],
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify({
+        data: [{ index: 0, embedding: [1, 0] }],
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockImplementationOnce(async () => new Response(JSON.stringify(openRouterCompletion(raw)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('Deno', {
-      env: { get: (name: string) => name === 'NVIDIA_API_KEY' ? 'nvidia-key' : undefined },
+      env: { get: (name: string) => name === 'OPENROUTER_API_KEY' ? 'openrouter-key' : undefined },
     });
     vi.spyOn(console, 'log').mockImplementation(() => {});
-    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
-    const response = await handleRequest(new Request('https://example.test/generate-lesson-quizzes', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(samplePayload),
-    }));
+    const response = await handleRequest(generationRequest(payload));
 
     expect(response.status).toBe(200);
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock.mock.calls[0][0]).toBe('https://integrate.api.nvidia.com/v1/chat/completions');
-    const providerBody = JSON.parse(String(fetchMock.mock.calls[0][1]?.body));
-    expect(providerBody).toEqual(expect.objectContaining({
-      model: 'nvidia/nemotron-3.5-lightning-30b-a3b',
-      temperature: 1,
-      top_p: 0.95,
-      max_tokens: 1_800,
-      stream: false,
-      response_format: { type: 'json_object' },
-      chat_template_kwargs: { enable_thinking: false },
-    }));
-    expect(providerBody).not.toHaveProperty('json_schema');
-    expect(providerBody).not.toHaveProperty('reasoning_budget');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const generationBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
+    expect(generationBody.messages[1].content).toBe(buildCompactPrompt(payload as any));
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[generate-lesson-quizzes] embedding fallback applied',
+      expect.objectContaining({
+        provider: 'openrouter-embedding',
+        totalProviderAttempts: 1,
+      }),
+    );
+    expect(errorSpy).toHaveBeenCalledWith(
+      '[generate-lesson-quizzes] embedding metadata',
+      expect.objectContaining({
+        validJson: true,
+        validationResult: 'failed',
+        totalProviderAttempts: 1,
+      }),
+    );
+    expect(JSON.stringify([...errorSpy.mock.calls, ...warnSpy.mock.calls])).not.toContain('[1,0]');
   });
 
-  it('routes Zen 429 through NVIDIA and both Gemini models in the fixed order', async () => {
+  it('uses the fixed embedding → OpenRouter → Gemini 3.6 → Gemini 3.5 order', async () => {
     const valid = makeValidResponse();
     const invalidRaw = JSON.stringify({ quizzes: valid.quizzes.slice(0, 2) });
     const validRaw = JSON.stringify(valid);
     const fetchMock = vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify(embeddingEnvelope(samplePayload)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
       .mockImplementationOnce(async () => new Response(JSON.stringify({
-        error: { type: 'FreeUsageLimitError', message: 'quota reached' },
+        error: { message: 'PRIVATE-QUOTA-DETAIL' },
       }), { status: 429, headers: { 'Content-Type': 'application/json' } }))
-      .mockImplementationOnce(async () => new Response(JSON.stringify({
-        choices: [{ finish_reason: 'stop', message: { content: invalidRaw } }],
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
       .mockImplementationOnce(async () => new Response(JSON.stringify(geminiInteraction(invalidRaw)), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -408,28 +602,61 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(response.status).toBe(200);
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls.map((call) => call[0])).toEqual([
-      'https://opencode.ai/zen/v1/chat/completions',
-      'https://integrate.api.nvidia.com/v1/chat/completions',
+      'https://openrouter.ai/api/v1/embeddings',
+      'https://openrouter.ai/api/v1/chat/completions',
       'https://generativelanguage.googleapis.com/v1beta/interactions',
       'https://generativelanguage.googleapis.com/v1beta/interactions',
     ]);
     expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model)).toEqual([
-      'deepseek-v4-flash-free',
-      'nvidia/nemotron-3.5-lightning-30b-a3b',
+      'nvidia/nemotron-3-embed-1b:free',
+      'nvidia/nemotron-3-super-120b-a12b:free',
       'gemini-3.6-flash',
       'gemini-3.5-flash-lite',
     ]);
     expect(errorSpy).toHaveBeenCalledWith(
       '[generate-lesson-quizzes] provider attempt failed',
       expect.objectContaining({
-        provider: 'zen',
+        provider: 'openrouter',
+        attempt: 2,
         httpStatus: 429,
         rateLimited: true,
-        errorCode: 'ZEN_FREE_USAGE_LIMIT',
-        totalProviderAttempts: 1,
+        errorCode: 'PROVIDER_HTTP_ERROR',
+        totalProviderAttempts: 2,
       }),
     );
-    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('quota reached');
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('PRIVATE-QUOTA-DETAIL');
+  });
+
+  it('falls back safely when a provider envelope is malformed without exposing its content', async () => {
+    const privateProviderContent = 'DO_NOT_LOG_PROVIDER_CONTENT';
+    const validRaw = JSON.stringify(makeValidResponse());
+    const fetchMock = vi.fn()
+      .mockImplementationOnce(async () => new Response(JSON.stringify(embeddingEnvelope(samplePayload)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockImplementationOnce(async () => new Response(`{"error":"${privateProviderContent}`, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockImplementationOnce(async () => new Response(JSON.stringify(geminiInteraction(validRaw)), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('Deno', { env: { get: () => 'provider-key' } });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const response = await handleRequest(generationRequest());
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.quizzes).toHaveLength(3);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    const diagnostics = JSON.stringify([...logSpy.mock.calls, ...errorSpy.mock.calls]);
+    expect(diagnostics).not.toContain(privateProviderContent);
+    expect(diagnostics).toContain('INVALID_PROVIDER_ENVELOPE');
   });
 
   it('uses identical exact 3×4 schemas and bounded generation settings for both Gemini calls', async () => {
@@ -557,9 +784,11 @@ describe('generate-lesson-quizzes resource optimization', () => {
       quizzes: [{ title: 'DO_NOT_LOG_GENERATED_CONTENT', questions: [] }],
     });
     const fetchMock = vi.fn().mockImplementation(async (url: string) => {
-      const envelope = url.includes('generativelanguage.googleapis.com')
-        ? geminiInteraction(invalidRaw)
-        : { choices: [{ finish_reason: 'stop', message: { content: invalidRaw } }] };
+      const envelope = url.endsWith('/embeddings')
+        ? embeddingEnvelope(samplePayload)
+        : url.includes('generativelanguage.googleapis.com')
+          ? geminiInteraction(invalidRaw)
+          : openRouterCompletion(invalidRaw);
       return new Response(JSON.stringify(envelope), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -576,8 +805,8 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(response.status).toBe(502);
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model)).toEqual([
-      'deepseek-v4-flash-free',
-      'nvidia/nemotron-3.5-lightning-30b-a3b',
+      'nvidia/nemotron-3-embed-1b:free',
+      'nvidia/nemotron-3-super-120b-a12b:free',
       'gemini-3.6-flash',
       'gemini-3.5-flash-lite',
     ]);
@@ -594,9 +823,11 @@ describe('generate-lesson-quizzes resource optimization', () => {
 
   it('does not call Gemini when GEMINI_API_KEY is missing and reports the secret once', async () => {
     const invalidRaw = JSON.stringify({ quizzes: [] });
-    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
-      choices: [{ finish_reason: 'stop', message: { content: invalidRaw } }],
-    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const fetchMock = vi.fn().mockImplementation(async (url: string) => new Response(JSON.stringify(
+      url.endsWith('/embeddings')
+        ? embeddingEnvelope(samplePayload)
+        : openRouterCompletion(invalidRaw),
+    ), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubGlobal('Deno', {
       env: { get: (name: string) => name === 'GEMINI_API_KEY' ? undefined : 'provider-key' },
@@ -613,7 +844,27 @@ describe('generate-lesson-quizzes resource optimization', () => {
       .toHaveLength(1);
   });
 
-  it('rejects declared legacy-sized requests before parsing or calling a provider', async () => {
+  it('rejects malformed request JSON without exposing request content', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const privateContent = 'DO_NOT_LOG_LESSON_CONTENT';
+
+    const response = await handleRequest(new Request('https://example.test/generate-lesson-quizzes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: `{"plan":{"title":"${privateContent}`,
+    }));
+    const body = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(body).toEqual({ error: 'Invalid payload', code: 'INVALID_PAYLOAD' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(privateContent);
+  });
+
+  it('rejects declared or measured legacy-sized requests before calling a provider', async () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     vi.spyOn(console, 'log').mockImplementation(() => {});
@@ -624,6 +875,13 @@ describe('generate-lesson-quizzes resource optimization', () => {
       body: '{}',
     }));
     expect(response.status).toBe(413);
+
+    const measuredResponse = await handleRequest(new Request('https://example.test/generate-lesson-quizzes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ padding: 'x'.repeat(250_000) }),
+    }));
+    expect(measuredResponse.status).toBe(413);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 

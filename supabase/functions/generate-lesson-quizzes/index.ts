@@ -1,26 +1,30 @@
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
-const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const NVIDIA_MODEL = 'nvidia/nemotron-3.5-lightning-30b-a3b';
-const ZEN_API_URL = 'https://opencode.ai/zen/v1/chat/completions';
-const ZEN_MODEL = 'deepseek-v4-flash-free';
+const OPENROUTER_CHAT_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const OPENROUTER_EMBEDDINGS_API_URL = 'https://openrouter.ai/api/v1/embeddings';
+const OPENROUTER_GENERATION_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
+const OPENROUTER_EMBEDDING_MODEL = 'nvidia/nemotron-3-embed-1b:free';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const GEMINI_36_MODEL = 'gemini-3.6-flash';
 const GEMINI_35_LITE_MODEL = 'gemini-3.5-flash-lite';
 // Production timings ranged from 18–82 seconds. Forty-five seconds retains the
-// normal 18–40 second path while preventing one pathological provider call from
-// consuming the worker for the full 82-second outlier.
+// normal 18–40 second path while preventing one pathological generation call
+// from consuming the worker for the full 82-second outlier.
 const AI_ATTEMPT_TIMEOUT_MS = 45_000;
+const EMBEDDING_ATTEMPT_TIMEOUT_MS = 5_000;
 const WALL_CLOCK_BUDGET_MS = 75_000;
-// Zen and NVIDIA share the first 45 seconds. Gemini 3.6 may then use the
-// remaining time except for the final 15 seconds reserved for 3.5 Flash-Lite.
+// Embedding preprocessing and OpenRouter generation share the first 45 seconds.
+// Gemini 3.6 may then use the remaining time except for the final 15 seconds
+// reserved for Gemini 3.5 Flash-Lite.
 const GOOGLE_FALLBACK_RESERVED_BUDGET_MS = 30_000;
 const FINAL_GOOGLE_ATTEMPT_RESERVED_BUDGET_MS = 15_000;
 
-// The request-global schedule is Zen → NVIDIA → Gemini 3.6 → Gemini 3.5
-// Flash-Lite. There are no duplicate transport or structural retries.
+// The request-global schedule is OpenRouter embedding → OpenRouter generation
+// → Gemini 3.6 → Gemini 3.5 Flash-Lite. There are no duplicate transport or
+// structural retries.
 const MAX_PROVIDER_ATTEMPTS_PER_REQUEST = 4;
 export const PROVIDER_MAX_TOKENS = 1800;
+const MAX_REQUEST_BYTES = 250_000;
 const MAX_RESPONSE_BYTES_WARN = 50_000;
 const MAX_CONTEXT_CHARS = 3_700;
 const MAX_PROMPT_CHARS = 8_000;
@@ -62,7 +66,12 @@ interface ParsedCandidate {
 }
 
 type GenerationStrategy = 'initial';
-type ProviderName = 'zen' | 'nvidia' | 'gemini';
+type ProviderName = 'openrouter-embedding' | 'openrouter' | 'gemini';
+
+export interface EmbeddingBatch {
+  inputs: string[];
+  periodIndexes: number[];
+}
 
 export interface QuizShapeDiagnostics {
   quizCount: number | null;
@@ -239,6 +248,12 @@ function boundedText(value: unknown, maxChars: number): string {
   return strip(boundedRaw).slice(0, maxChars).trim();
 }
 
+function boundedEducationalLabel(value: unknown, maxChars: number, fallback: string): string {
+  const label = boundedText(value, maxChars);
+  const uuidPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  return !label || uuidPattern.test(label) ? fallback : label;
+}
+
 function truncateDeterministically(value: string, maxChars: number): string {
   if (value.length <= maxChars) return value;
   const marker = '\n… [context truncated]';
@@ -250,14 +265,15 @@ export function buildCompactLessonContext(payload: GeneratePayload, maxChars = M
   const plan = payload.plan || {};
   const className = boundedText(plan.class_name || plan.class, 120);
   const grade = boundedText(plan.grade, 60) || boundedText(className.match(/\d+/)?.[0] || className, 60);
-  const subject = boundedText(payload.subject || plan.subject, 160);
+  const sourceSubject = boundedText(payload.subject || plan.subject, 160);
+  const subject = boundedEducationalLabel(sourceSubject, 160, 'Lesson subject');
   const lessonTitle = boundedText(plan.title || plan.lesson_title, 320);
 
   const subjectPeriods = (payload.periods || [])
     .filter((period) => {
       if (!period) return false;
       const periodSubject = boundedText(period.subject, 160);
-      return !periodSubject || periodSubject.toLowerCase() === subject.toLowerCase();
+      return !periodSubject || periodSubject.toLowerCase() === sourceSubject.toLowerCase();
     })
     .slice(0, 24);
 
@@ -336,6 +352,168 @@ export function buildCompactLessonContext(payload: GeneratePayload, maxChars = M
   ].filter((section): section is string => Boolean(section));
 
   return truncateDeterministically(sections.join('\n\n'), Math.max(0, maxChars));
+}
+
+/** Build one bounded embedding query plus same-subject period candidates. */
+export function buildEmbeddingBatch(payload: GeneratePayload): EmbeddingBatch {
+  const plan = payload.plan || {};
+  const sourceSubject = boundedText(payload.subject || plan.subject, 160);
+  const subject = boundedEducationalLabel(sourceSubject, 160, 'Lesson subject');
+  const lessonTitle = boundedText(plan.title || plan.lesson_title, 320);
+  const relevantPeriods = (payload.periods || [])
+    .map((period, periodIndex) => ({ period, periodIndex }))
+    .filter(({ period }) => {
+      const periodSubject = boundedText(period?.subject, 160);
+      return Boolean(period) && (!periodSubject || periodSubject.toLowerCase() === sourceSubject.toLowerCase());
+    })
+    .slice(0, 24);
+
+  const queryObjectives: string[] = [];
+  const seenObjectives = new Set<string>();
+  const addObjective = (value: unknown) => {
+    const objective = boundedText(value, 220);
+    const key = objective.toLowerCase();
+    if (objective && !seenObjectives.has(key) && queryObjectives.length < 12) {
+      seenObjectives.add(key);
+      queryObjectives.push(objective);
+    }
+  };
+  addObjective(plan.objective || plan.learning_objective);
+  relevantPeriods.forEach(({ period }) => addObjective(period.objective || period.learning_objective));
+
+  const query = [
+    subject && `Subject: ${subject}`,
+    lessonTitle && `Lesson title: ${lessonTitle}`,
+    queryObjectives.length > 0 && `Learning objectives: ${queryObjectives.join('; ')}`,
+    'Find the lesson periods most useful for balanced, age-appropriate assessment questions.',
+  ].filter(Boolean).join(' | ').slice(0, 1_500);
+
+  const inputs = [query];
+  const periodIndexes: number[] = [];
+  for (const { period, periodIndex } of relevantPeriods) {
+    const number = boundedText(period.period_number ?? periodIndex + 1, 12);
+    const topic = boundedText(period.topic, 180);
+    const objective = boundedText(period.objective || period.learning_objective, 240);
+    const activities = boundedText(period.activities, 280);
+    const details = Array.isArray(period.details)
+      ? period.details
+          .slice(0, 4)
+          .map((detail: any) => boundedText(detail?.activity, 120))
+          .filter(Boolean)
+      : [];
+    const educationalParts = [
+      topic && `Topic: ${topic}`,
+      objective && `Objective: ${objective}`,
+      activities && `Activities: ${activities}`,
+      details.length > 0 && `Key actions: ${details.join('; ')}`,
+    ].filter(Boolean);
+    if (educationalParts.length === 0) continue;
+
+    const candidate = [`Period ${number}`, ...educationalParts].join(' | ').slice(0, 900);
+    inputs.push(candidate);
+    periodIndexes.push(periodIndex);
+  }
+
+  return { inputs, periodIndexes };
+}
+
+function embeddingVector(value: unknown, expectedLength?: number): number[] {
+  if (!Array.isArray(value) || value.length === 0 || value.length > 8_192) {
+    throw new Error('Embedding response contains an invalid vector length');
+  }
+  if (expectedLength !== undefined && value.length !== expectedLength) {
+    throw new Error('Embedding response contains inconsistent vector dimensions');
+  }
+  const vector = value as number[];
+  if (vector.some((entry) => typeof entry !== 'number' || !Number.isFinite(entry))) {
+    throw new Error('Embedding response contains a non-finite vector value');
+  }
+  return vector;
+}
+
+function cosineSimilarity(left: number[], right: number[]): number {
+  let dot = 0;
+  let leftMagnitude = 0;
+  let rightMagnitude = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftMagnitude += left[index] * left[index];
+    rightMagnitude += right[index] * right[index];
+  }
+  if (leftMagnitude === 0 || rightMagnitude === 0) {
+    throw new Error('Embedding response contains a zero-magnitude vector');
+  }
+  if (!Number.isFinite(dot) || !Number.isFinite(leftMagnitude) || !Number.isFinite(rightMagnitude)) {
+    throw new Error('Embedding response produces an invalid cosine similarity');
+  }
+  const denominator = Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude);
+  const similarity = dot / denominator;
+  if (!Number.isFinite(denominator) || !Number.isFinite(similarity)) {
+    throw new Error('Embedding response produces an invalid cosine similarity');
+  }
+  return similarity;
+}
+
+/**
+ * Select relevant periods only when the deterministic context would truncate.
+ * Selected periods are restored to their original order so lesson chronology is
+ * preserved. Invalid embeddings throw and the caller retains the original order.
+ */
+export function rankPeriodsByEmbeddings(
+  payload: GeneratePayload,
+  batch: EmbeddingBatch,
+  data: unknown,
+): GeneratePayload {
+  const items = Array.isArray(data) ? data : [];
+  if (items.length !== batch.inputs.length || batch.periodIndexes.length !== batch.inputs.length - 1) {
+    throw new Error('Embedding response count does not match request inputs');
+  }
+
+  const byIndex = new Map<number, unknown>();
+  for (const item of items) {
+    const index = (item as any)?.index;
+    if (!Number.isInteger(index) || index < 0 || index >= batch.inputs.length || byIndex.has(index)) {
+      throw new Error('Embedding response contains an invalid index');
+    }
+    byIndex.set(index, (item as any)?.embedding);
+  }
+
+  const queryVector = embeddingVector(byIndex.get(0));
+  const scores = batch.periodIndexes.map((periodIndex, candidateIndex) => ({
+    periodIndex,
+    sourceOrder: candidateIndex,
+    score: cosineSimilarity(
+      queryVector,
+      embeddingVector(byIndex.get(candidateIndex + 1), queryVector.length),
+    ),
+  }));
+
+  if (!buildCompactLessonContext(payload).includes('[context truncated]')) return payload;
+
+  scores.sort((left, right) => right.score - left.score || left.sourceOrder - right.sourceOrder);
+  const selected = new Set<number>();
+  for (const candidate of scores) {
+    const proposed = new Set(selected).add(candidate.periodIndex);
+    const proposedPayload: GeneratePayload = {
+      ...payload,
+      periods: [...proposed]
+        .sort((left, right) => left - right)
+        .map((periodIndex) => payload.periods[periodIndex])
+        .filter(Boolean),
+    };
+    if (!buildCompactLessonContext(proposedPayload).includes('[context truncated]')) {
+      selected.add(candidate.periodIndex);
+    }
+  }
+
+  if (selected.size === 0) return payload;
+  return {
+    ...payload,
+    periods: [...selected]
+      .sort((left, right) => left - right)
+      .map((periodIndex) => payload.periods[periodIndex])
+      .filter(Boolean),
+  };
 }
 
 /** Build a strict prompt whose normal path is below 6,000 chars and can never exceed 8,000. */
@@ -441,14 +619,14 @@ export function parseProviderResponse(body: unknown): Pick<ProviderOutput, 'raw'
   const envelope = body as any;
   const choice = envelope?.choices?.[0];
   const message = choice?.message ?? choice?.delta ?? {};
+  // Reasoning fields are deliberately ignored: only final answer content may
+  // enter JSON parsing and application validation.
   const raw = (
     typeof message.content === 'string'
       ? message.content
       : typeof choice?.text === 'string'
         ? choice.text
-        : typeof message.reasoning_content === 'string'
-          ? message.reasoning_content
-          : ''
+        : ''
   ).trim();
   return {
     raw,
@@ -475,15 +653,15 @@ export function parseGeminiResponse(body: unknown): Pick<ProviderOutput, 'raw' |
 }
 
 function providerForUrl(url: string): ProviderName {
-  if (url === NVIDIA_API_URL) return 'nvidia';
+  if (url === OPENROUTER_EMBEDDINGS_API_URL) return 'openrouter-embedding';
   if (url === GEMINI_API_URL) return 'gemini';
-  return 'zen';
+  return 'openrouter';
 }
 
-// Gemini Interactions supports this JSON Schema subset, including exact array
-// lengths and tuple-style prefixItems. Application validation still checks
-// semantic constraints such as non-empty/distinct options before returning.
-const GEMINI_MULTIPLE_CHOICE_SCHEMA = {
+// Both OpenRouter structured outputs and Gemini Interactions receive the same
+// exact 3×4 JSON Schema. Application validation still checks semantic
+// constraints such as non-empty/distinct options before returning.
+const MULTIPLE_CHOICE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -500,7 +678,7 @@ const GEMINI_MULTIPLE_CHOICE_SCHEMA = {
   required: ['type', 'question', 'options', 'correctIndex'],
 };
 
-const GEMINI_DIRECT_ANSWER_SCHEMA = {
+const DIRECT_ANSWER_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -511,7 +689,7 @@ const GEMINI_DIRECT_ANSWER_SCHEMA = {
   required: ['type', 'question', 'rubric'],
 };
 
-const GEMINI_QUIZ_RESPONSE_SCHEMA = {
+const QUIZ_RESPONSE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
   properties: {
@@ -529,10 +707,10 @@ const GEMINI_QUIZ_RESPONSE_SCHEMA = {
             minItems: 4,
             maxItems: 4,
             prefixItems: [
-              GEMINI_MULTIPLE_CHOICE_SCHEMA,
-              GEMINI_MULTIPLE_CHOICE_SCHEMA,
-              GEMINI_MULTIPLE_CHOICE_SCHEMA,
-              GEMINI_DIRECT_ANSWER_SCHEMA,
+              MULTIPLE_CHOICE_SCHEMA,
+              MULTIPLE_CHOICE_SCHEMA,
+              MULTIPLE_CHOICE_SCHEMA,
+              DIRECT_ANSWER_SCHEMA,
             ],
           },
         },
@@ -542,6 +720,160 @@ const GEMINI_QUIZ_RESPONSE_SCHEMA = {
   },
   required: ['quizzes'],
 };
+
+/**
+ * Make the one advisory embedding call. Any transport, JSON, or vector error is
+ * allowed to escape so the handler can retain deterministic period order and
+ * continue to generation without a retry.
+ */
+async function preprocessPeriodsWithEmbeddings(
+  payload: GeneratePayload,
+  apiKey: string,
+  deadline: number,
+  diagnostics: RequestDiagnostics,
+): Promise<GeneratePayload> {
+  const batch = buildEmbeddingBatch(payload);
+  if (batch.periodIndexes.length === 0) {
+    console.log('[generate-lesson-quizzes] embedding preprocessing skipped', {
+      provider: 'openrouter-embedding',
+      model: OPENROUTER_EMBEDDING_MODEL,
+      reason: 'no_candidates',
+      totalProviderAttempts: diagnostics.providerAttempts,
+      executionMs: Date.now() - diagnostics.startedAt,
+    });
+    return payload;
+  }
+  if (diagnostics.providerAttempts >= MAX_PROVIDER_ATTEMPTS_PER_REQUEST) {
+    const guardError: any = new Error('Provider attempt guard reached');
+    guardError.code = 'PROVIDER_ATTEMPT_GUARD';
+    throw guardError;
+  }
+
+  const remaining = remainingMs(deadline);
+  if (remaining <= 0) {
+    const budgetError: any = new Error('Embedding preprocessing budget exceeded');
+    budgetError.code = 'EMBEDDING_BUDGET_EXCEEDED';
+    throw budgetError;
+  }
+
+  diagnostics.providerAttempts += 1;
+  const attempt = diagnostics.providerAttempts;
+  const inputChars = batch.inputs.reduce((total, input) => total + input.length, 0);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.min(EMBEDDING_ATTEMPT_TIMEOUT_MS, remaining));
+  const startedAt = Date.now();
+  let httpStatus: number | null = null;
+  let responseChars: number | null = null;
+  let responseBytes: number | null = null;
+  let validJson: boolean | null = null;
+  let validationResult: 'not_run' | 'passed' | 'failed' = 'not_run';
+
+  console.log('[generate-lesson-quizzes] provider request', {
+    provider: 'openrouter-embedding',
+    model: OPENROUTER_EMBEDDING_MODEL,
+    strategy: 'preprocessing',
+    attempt,
+    inputCount: batch.inputs.length,
+    candidateCount: batch.periodIndexes.length,
+    inputChars,
+    totalProviderAttempts: diagnostics.providerAttempts,
+  });
+
+  try {
+    const response = await fetch(OPENROUTER_EMBEDDINGS_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: OPENROUTER_EMBEDDING_MODEL,
+        input: batch.inputs,
+        encoding_format: 'float',
+      }),
+      signal: controller.signal,
+    });
+    httpStatus = response.status;
+    let responseText = await response.text();
+    responseChars = responseText.length;
+    responseBytes = new TextEncoder().encode(responseText).byteLength;
+    if (!response.ok) {
+      const err: any = new Error(`Embedding API error: HTTP ${response.status}`);
+      err.status = response.status;
+      err.code = 'PROVIDER_HTTP_ERROR';
+      throw err;
+    }
+
+    let envelope: any;
+    try {
+      envelope = JSON.parse(responseText);
+      responseText = '';
+      validJson = true;
+    } catch {
+      validJson = false;
+      const err: any = new Error('Embedding provider returned invalid JSON');
+      err.code = 'INVALID_EMBEDDING_JSON';
+      throw err;
+    }
+
+    let rankedPayload: GeneratePayload;
+    try {
+      rankedPayload = rankPeriodsByEmbeddings(payload, batch, envelope?.data);
+      validationResult = 'passed';
+    } catch (err) {
+      validationResult = 'failed';
+      throw err;
+    }
+
+    console.log('[generate-lesson-quizzes] embedding metadata', {
+      provider: 'openrouter-embedding',
+      model: OPENROUTER_EMBEDDING_MODEL,
+      strategy: 'preprocessing',
+      attempt,
+      httpStatus,
+      validJson,
+      validationResult,
+      quizCount: null,
+      questionCounts: [],
+      responseChars,
+      responseBytes,
+      latencyMs: Date.now() - startedAt,
+      inputChars,
+      inputCount: batch.inputs.length,
+      candidateCount: batch.periodIndexes.length,
+      rankingApplied: rankedPayload !== payload,
+      selectedPeriodCount: rankedPayload.periods.length,
+      executionMs: Date.now() - diagnostics.startedAt,
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
+    return rankedPayload;
+  } catch (err: any) {
+    console.error('[generate-lesson-quizzes] embedding metadata', {
+      provider: 'openrouter-embedding',
+      model: OPENROUTER_EMBEDDING_MODEL,
+      strategy: 'preprocessing',
+      attempt,
+      httpStatus,
+      validJson,
+      validationResult,
+      quizCount: null,
+      questionCounts: [],
+      responseChars,
+      responseBytes,
+      latencyMs: Date.now() - startedAt,
+      inputChars,
+      inputCount: batch.inputs.length,
+      candidateCount: batch.periodIndexes.length,
+      executionMs: Date.now() - diagnostics.startedAt,
+      rateLimited: httpStatus === 429,
+      errorCode: typeof err?.code === 'string' ? err.code : diagnosticErrorCode(err),
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 async function sendProviderRequest(
   prompt: string,
@@ -559,7 +891,7 @@ async function sendProviderRequest(
       response_format: {
         type: 'text',
         mime_type: 'application/json',
-        schema: GEMINI_QUIZ_RESPONSE_SCHEMA,
+        schema: QUIZ_RESPONSE_SCHEMA,
       },
       generation_config: {
         max_output_tokens: PROVIDER_MAX_TOKENS,
@@ -574,29 +906,34 @@ async function sendProviderRequest(
     });
   }
 
-  // Nemotron 3.5 documents JSON-object mode (not full json_schema enforcement),
-  // so exact 3×4 counts remain application-validated. Thinking is disabled so
-  // the output budget is reserved for the client-consumed JSON.
-  const isNvidia = url === NVIDIA_API_URL;
   const serializedRequest = JSON.stringify({
     model,
     messages: [
       {
         role: 'system',
-        content: 'Generate rigorous school quizzes. Return only one valid JSON object.',
+        content: 'Generate rigorous school quizzes and return only the schema-conforming JSON result.',
       },
       { role: 'user', content: prompt },
     ],
-    temperature: isNvidia ? 1 : 0.7,
-    top_p: isNvidia ? 0.95 : 0.9,
+    temperature: 0.7,
+    top_p: 0.95,
     max_tokens: PROVIDER_MAX_TOKENS,
     stream: false,
-    ...(isNvidia
-      ? {
-          response_format: { type: 'json_object' },
-          chat_template_kwargs: { enable_thinking: false },
-        }
-      : {}),
+    reasoning: {
+      effort: 'minimal',
+      exclude: true,
+    },
+    provider: {
+      require_parameters: true,
+    },
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'lesson_quizzes',
+        strict: true,
+        schema: QUIZ_RESPONSE_SCHEMA,
+      },
+    },
   });
   return fetch(url, {
     method: 'POST',
@@ -615,8 +952,8 @@ async function callProvider(
   apiKey: string,
   signal: AbortSignal,
   diagnostics: RequestDiagnostics,
-  url = ZEN_API_URL,
-  model = ZEN_MODEL,
+  url: string,
+  model: string,
   strategy: GenerationStrategy = 'initial',
 ): Promise<ProviderOutput> {
   if (prompt.length > MAX_PROMPT_CHARS) {
@@ -643,31 +980,47 @@ async function callProvider(
   });
 
   const response = await sendProviderRequest(prompt, apiKey, signal, url, model);
+  let responseText = await response.text();
+  const responseChars = responseText.length;
+  const responseBytes = new TextEncoder().encode(responseText).byteLength;
   const latencyMs = Date.now() - startedAt;
   if (!response.ok) {
-    // Read only to classify a known Zen error; never expose provider body text.
-    const errorBody = await response.text();
-    const freeUsageLimit =
-      provider === 'zen' && response.status === 429 && /FreeUsageLimitError/i.test(errorBody.slice(0, 4_000));
+    // Provider text is measured but never logged or returned.
     const err: any = new Error(`${model} API error: HTTP ${response.status}`);
     err.status = response.status;
-    err.code = freeUsageLimit ? 'ZEN_FREE_USAGE_LIMIT' : 'PROVIDER_HTTP_ERROR';
+    err.code = 'PROVIDER_HTTP_ERROR';
     err.attempt = attempt;
-    err.responseChars = errorBody.length;
-    err.responseBytes = new TextEncoder().encode(errorBody).byteLength;
+    err.responseChars = responseChars;
+    err.responseBytes = responseBytes;
     err.latencyMs = latencyMs;
     throw err;
   }
 
-  const envelope: unknown = await response.json();
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(responseText);
+    responseText = '';
+  } catch {
+    const err: any = new Error('Provider returned an invalid JSON envelope');
+    err.status = response.status;
+    err.code = 'INVALID_PROVIDER_ENVELOPE';
+    err.attempt = attempt;
+    err.validJson = false;
+    err.responseChars = responseChars;
+    err.responseBytes = responseBytes;
+    err.latencyMs = latencyMs;
+    throw err;
+  }
+
   const output = provider === 'gemini' ? parseGeminiResponse(envelope) : parseProviderResponse(envelope);
   if (!output.raw) {
     const err: any = new Error('Empty LLM response');
     err.status = response.status;
     err.code = 'EMPTY_PROVIDER_RESPONSE';
     err.attempt = attempt;
-    err.responseChars = 0;
-    err.responseBytes = 0;
+    err.validJson = true;
+    err.responseChars = responseChars;
+    err.responseBytes = responseBytes;
     err.latencyMs = latencyMs;
     throw err;
   }
@@ -705,7 +1058,7 @@ async function callProviderWithTimeout(
       strategy,
       attempt: typeof err?.attempt === 'number' ? err.attempt : diagnostics.providerAttempts,
       httpStatus: status ?? null,
-      validJson: null,
+      validJson: typeof err?.validJson === 'boolean' ? err.validJson : null,
       validationResult: 'not_run',
       quizCount: null,
       questionCounts: [],
@@ -764,7 +1117,6 @@ async function requestParsedCandidate(
       latencyMs: output.latencyMs,
       promptChars: prompt.length,
       executionMs: Date.now() - diagnostics.startedAt,
-      finishReason: output.finishReason,
       totalProviderAttempts: diagnostics.providerAttempts,
     });
     const err: any = new Error('Provider returned invalid JSON');
@@ -866,7 +1218,7 @@ export async function handleRequest(req: Request): Promise<Response> {
   try {
     // Avoid parsing a stale or non-browser caller's legacy multi-megabyte payload.
     const declaredLength = Number(req.headers.get('content-length') || 0);
-    if (declaredLength > 250_000) {
+    if (declaredLength > MAX_REQUEST_BYTES) {
       console.warn('[generate-lesson-quizzes] request rejected by size guard', {
         requestBytes: declaredLength,
       });
@@ -881,25 +1233,86 @@ export async function handleRequest(req: Request): Promise<Response> {
       );
     }
 
-    const payload: GeneratePayload = await req.json();
-    if (!payload.plan || !payload.subject || !Array.isArray(payload.periods)) {
+    let requestText: string;
+    try {
+      requestText = await req.text();
+    } catch (err) {
+      console.error('[generate-lesson-quizzes] request body read failed', {
+        errorCode: diagnosticErrorCode(err),
+      });
+      return returnResponse({ error: 'Invalid payload', code: 'INVALID_PAYLOAD' }, 400, undefined, diagnostics);
+    }
+    const requestBytes = new TextEncoder().encode(requestText).byteLength;
+    if (requestBytes > MAX_REQUEST_BYTES) {
+      console.warn('[generate-lesson-quizzes] request rejected by size guard', { requestBytes });
+      return returnResponse(
+        { error: 'Quiz generation request is too large', code: 'REQUEST_TOO_LARGE' },
+        413,
+        undefined,
+        diagnostics,
+      );
+    }
+
+    let payload: GeneratePayload;
+    try {
+      payload = JSON.parse(requestText);
+      requestText = '';
+    } catch (err) {
+      console.error('[generate-lesson-quizzes] invalid request JSON', {
+        errorCode: diagnosticErrorCode(err),
+      });
+      return returnResponse({ error: 'Invalid payload', code: 'INVALID_PAYLOAD' }, 400, undefined, diagnostics);
+    }
+    const hasPlan = Boolean(payload?.plan && typeof payload.plan === 'object' && !Array.isArray(payload.plan));
+    const hasSubject = typeof payload?.subject === 'string' && Boolean(payload.subject.trim());
+    const periodsIsArray = Array.isArray(payload?.periods);
+    if (!payload || typeof payload !== 'object' || !hasPlan || !hasSubject || !periodsIsArray) {
       console.error('[generate-lesson-quizzes] invalid payload', {
-        hasPlan: Boolean(payload.plan),
-        hasSubject: Boolean(payload.subject),
-        periodsIsArray: Array.isArray(payload.periods),
+        hasPlan,
+        hasSubject,
+        periodsIsArray,
       });
       return returnResponse({ error: 'Invalid payload', code: 'INVALID_PAYLOAD' }, 400, undefined, diagnostics);
     }
 
-    const prompt = buildCompactPrompt(payload);
     const edgeEnv = Deno.env;
-    const zenKey = edgeEnv.get('ZEN_API_KEY');
-    const nvidiaKey = edgeEnv.get('NVIDIA_API_KEY');
+    const openRouterKey = edgeEnv.get('OPENROUTER_API_KEY');
     const geminiKey = edgeEnv.get('GEMINI_API_KEY');
-    const preGoogleDeadline = geminiKey ? deadline - GOOGLE_FALLBACK_RESERVED_BUDGET_MS : deadline;
+    const openRouterGenerationDeadline = deadline - GOOGLE_FALLBACK_RESERVED_BUDGET_MS;
     const gemini36Deadline = deadline - FINAL_GOOGLE_ATTEMPT_RESERVED_BUDGET_MS;
+    const embeddingDeadline = Math.min(
+      deadline,
+      diagnostics.startedAt + EMBEDDING_ATTEMPT_TIMEOUT_MS,
+    );
+    const reportedMissingSecrets = new Set<string>();
+    let generationPayload = payload;
     let lastError: unknown;
 
+    if (openRouterKey) {
+      try {
+        generationPayload = await preprocessPeriodsWithEmbeddings(
+          payload,
+          openRouterKey,
+          embeddingDeadline,
+          diagnostics,
+        );
+      } catch (err) {
+        // Embeddings are advisory. Preserve the original deterministic source
+        // order, count the failed call, and continue to OpenRouter generation.
+        console.warn('[generate-lesson-quizzes] embedding fallback applied', {
+          provider: 'openrouter-embedding',
+          model: OPENROUTER_EMBEDDING_MODEL,
+          errorCode: diagnosticErrorCode(err),
+          executionMs: Date.now() - diagnostics.startedAt,
+          totalProviderAttempts: diagnostics.providerAttempts,
+        });
+      }
+    } else {
+      console.error('[generate-lesson-quizzes] OPENROUTER_API_KEY missing');
+      reportedMissingSecrets.add('OPENROUTER_API_KEY');
+    }
+
+    const prompt = buildCompactPrompt(generationPayload);
     const routes: Array<{
       provider: ProviderName;
       model: string;
@@ -909,20 +1322,12 @@ export async function handleRequest(req: Request): Promise<Response> {
       attemptDeadline: number;
     }> = [
       {
-        provider: 'zen',
-        model: ZEN_MODEL,
-        url: ZEN_API_URL,
-        apiKey: zenKey,
-        secretName: 'ZEN_API_KEY',
-        attemptDeadline: preGoogleDeadline,
-      },
-      {
-        provider: 'nvidia',
-        model: NVIDIA_MODEL,
-        url: NVIDIA_API_URL,
-        apiKey: nvidiaKey,
-        secretName: 'NVIDIA_API_KEY',
-        attemptDeadline: preGoogleDeadline,
+        provider: 'openrouter',
+        model: OPENROUTER_GENERATION_MODEL,
+        url: OPENROUTER_CHAT_API_URL,
+        apiKey: openRouterKey,
+        secretName: 'OPENROUTER_API_KEY',
+        attemptDeadline: openRouterGenerationDeadline,
       },
       {
         provider: 'gemini',
@@ -941,7 +1346,6 @@ export async function handleRequest(req: Request): Promise<Response> {
         attemptDeadline: deadline,
       },
     ];
-    const reportedMissingSecrets = new Set<string>();
 
     for (const route of routes) {
       if (!route.apiKey) {

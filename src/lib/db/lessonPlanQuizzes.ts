@@ -60,11 +60,12 @@ export function buildQuizGenerationRequest(
     },
     subject: compactSubject,
     periods: subjectPeriods
-      .filter((period) => !period.subject || bounded(period.subject, 160).toLowerCase() === compactSubject.toLowerCase())
       .slice(0, 24)
       .map((period) => ({
         period_number: period.period_number,
-        subject: bounded(period.subject || compactSubject, 160),
+        // The stored value is commonly a database subject ID. The caller has
+        // already selected these periods, so send only the educational label.
+        subject: compactSubject,
         topic: bounded(period.topic, 180),
         objective: period.objective ? bounded(period.objective, 260) : null,
         activities: bounded(period.activities, 320),
@@ -145,6 +146,16 @@ function buildSubjectIdResolver(rows: Array<{ id: string; name?: string | null }
     if (!v) return null;
     if (byId.has(v)) return v;
     return byName.get(v.toLowerCase()) ?? null;
+  };
+}
+
+function buildSubjectLabelResolver(rows: Array<{ id: string; name?: string | null }>): (value: string) => string {
+  const byId = new Map(rows.map((row) => [row.id, row.name?.trim() || 'Lesson subject'] as const));
+  const uuidPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+  return (value) => {
+    const storedValue = (value || '').trim();
+    return byId.get(storedValue) || (uuidPattern.test(storedValue) ? 'Lesson subject' : storedValue) || 'Lesson subject';
   };
 }
 
@@ -239,6 +250,7 @@ export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]>
     const { data: subjectRows, error: subjectsError } = await supabase.from('subjects').select('id, name');
     if (subjectsError) throw subjectsError;
     const resolveSubjectId = buildSubjectIdResolver(subjectRows || []);
+    const resolveSubjectLabel = buildSubjectLabelResolver(subjectRows || []);
 
     const subjects = unique(periods.filter((p) => !p.is_free && p.subject && p.subject !== '__FREE__').map((p) => p.subject!));
     const quizRows: Quiz[] = [];
@@ -248,7 +260,7 @@ export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]>
     for (const subject of subjects) {
       const subjectPeriods = periods.filter((p) => p.subject === subject && !p.is_free);
       if (!subjectPeriods.length) continue;
-      const generatedQuizzes = await generateWithLLM(plan, subject, subjectPeriods);
+      const generatedQuizzes = await generateWithLLM(plan, resolveSubjectLabel(subject), subjectPeriods);
       for (const generated of generatedQuizzes) {
         const quiz = buildQuizRow(plan, subject, generated);
         quizRows.push(quiz);
