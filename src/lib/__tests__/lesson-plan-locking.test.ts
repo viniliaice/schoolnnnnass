@@ -114,37 +114,19 @@ describe('AI review timeout (#4)', () => {
     });
   });
 
-  it('falls back to expiring a stuck plan client-side', async () => {
-    mockRpc.mockResolvedValue({ data: null, error: { message: 'function missing' } });
-    const sink = { updates: [] as any[] };
-    stubPlanStatus('submitted', sink);
+  it('surfaces sweep failures without bypassing the RPC through direct updates', async () => {
+    const error = { message: 'function missing' };
+    mockRpc.mockResolvedValue({ data: null, error });
 
-    const longAgo = new Date(Date.now() - 10 * 60_000).toISOString();
-    const expired = await expireStuckAiReviews([
-      { id: 'p1', status: 'submitted', ai_started_at: longAgo, updated_at: longAgo, teacher_id: 't1' } as any,
-    ]);
-
-    expect(expired).toEqual(['p1']);
-    expect(sink.updates[0].status).toBe('ai_failed');
-    expect(sink.updates[0].ai_failure_reason).toMatch(/timed out/i);
+    await expect(expireStuckAiReviews()).rejects.toBe(error);
+    expect(mockFrom).not.toHaveBeenCalled();
   });
 
-  it('leaves a plan alone while it is still within the timeout window', async () => {
-    mockRpc.mockResolvedValue({ data: null, error: { message: 'function missing' } });
-    const justNow = new Date().toISOString();
-    const expired = await expireStuckAiReviews([
-      { id: 'p1', status: 'submitted', ai_started_at: justNow, updated_at: justNow, teacher_id: 't1' } as any,
-    ]);
-    expect(expired).toEqual([]);
-  });
+  it('returns an empty list when the authoritative sweep finds nothing stale', async () => {
+    mockRpc.mockResolvedValue({ data: [], error: null });
 
-  it('ignores plans that are not waiting on the AI', async () => {
-    mockRpc.mockResolvedValue({ data: null, error: { message: 'function missing' } });
-    const longAgo = new Date(Date.now() - 60 * 60_000).toISOString();
-    const expired = await expireStuckAiReviews([
-      { id: 'p1', status: 'approved', ai_started_at: longAgo, updated_at: longAgo, teacher_id: 't1' } as any,
-    ]);
-    expect(expired).toEqual([]);
+    await expect(expireStuckAiReviews()).resolves.toEqual([]);
+    expect(mockFrom).not.toHaveBeenCalled();
   });
 
   it('has a timeout well under the 107 minutes observed in the bug report', () => {

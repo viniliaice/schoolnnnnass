@@ -1,11 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRole } from '../../context/RoleContext';
-import { useTeacherPlans, usePlanWithPeriods, usePeriodAiReviews } from '../../lib/hooks/useLessonPlans';
+import {
+  useTeacherPlans,
+  usePlanWithPeriods,
+  usePeriodAiReviews,
+  useLessonPlanQuizPreviews,
+  useGenerateLessonPlanQuizzes,
+} from '../../lib/hooks/useLessonPlans';
 import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
 import { LessonPlanPeriod, PlanStatus, Subject, DAYS_OF_WEEK, isPlanEditable } from '../../types';
 import {
   FileText, CheckCircle, Clock, AlertTriangle, XCircle,
-  ChevronLeft, Pencil, Search, FolderOpen, Loader2, Unlock, CalendarRange,
+  ChevronLeft, ChevronRight, Pencil, Search, FolderOpen, Loader2, Unlock, CalendarRange,
+  HelpCircle, RotateCcw,
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
@@ -13,10 +20,11 @@ import { ExportLessonPlanPdfButton } from '../../components/lesson-planner/Expor
 import { LessonPlanPdfDocument } from '../shared/LessonPlanPdfDocument';
 import { describePlanWeek } from '../../utils/weekDates';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
+import { useToast } from '../../context/ToastContext';
 
 const STATUS_META: Record<PlanStatus, { label: string; icon: typeof FileText; chip: string; help: string }> = {
   draft:      { label: 'Draft',      icon: Pencil,        chip: 'bg-slate-100 text-slate-600',     help: 'Not submitted yet — only you can see this.' },
-  submitted:  { label: 'Submitted',  icon: Clock,         chip: 'bg-blue-100 text-blue-700',       help: 'Sent to your supervisor for review.' },
+  submitted:  { label: 'AI review pending', icon: Clock, chip: 'bg-blue-100 text-blue-700', help: 'Submitted and locked. AI review is running in the background.' },
   in_review:  { label: 'In review',  icon: Clock,         chip: 'bg-amber-100 text-amber-700',     help: 'Waiting on your supervisor\'s decision.' },
   approved:   { label: 'Approved',   icon: CheckCircle,   chip: 'bg-emerald-100 text-emerald-700', help: 'Your supervisor approved this plan.' },
   rejected:   { label: 'Revisions',  icon: XCircle,       chip: 'bg-rose-100 text-rose-700',       help: 'Your supervisor asked for revisions — see their comment.' },
@@ -215,8 +223,30 @@ function PlanDetail({
   onEditPlan?: (planId: string) => void;
 }) {
   const { data, isLoading } = usePlanWithPeriods(planId);
-  const { data: periodAiReviews = [] } = usePeriodAiReviews(planId);
+  const aiReviewPending = data?.plan.status === 'submitted' || data?.plan.status === 'in_review';
+  const { data: periodAiReviews = [] } = usePeriodAiReviews(planId, aiReviewPending);
   const { data: unitPlans = [] } = useUnitPlansByClass(data?.plan.class_name ?? null);
+  const { data: quizPreviews = [] } = useLessonPlanQuizPreviews(planId);
+  const generateQuizzesMut = useGenerateLessonPlanQuizzes();
+  const { addToast } = useToast();
+  const [quizzesOpen, setQuizzesOpen] = useState(false);
+  const [quizError, setQuizError] = useState<string | null>(null);
+
+  const handleGenerateQuizzes = async () => {
+    setQuizError(null);
+    try {
+      await generateQuizzesMut.mutateAsync(planId);
+      setQuizzesOpen(true);
+      addToast({
+        type: 'success',
+        title: quizPreviews.length > 0 ? 'New quiz set ready' : 'Quizzes generated',
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unable to generate quizzes';
+      setQuizError(message);
+      addToast({ type: 'error', title: 'Failed to generate quizzes', description: message.slice(0, 400) });
+    }
+  };
 
   if (isLoading || !data) {
     return (
@@ -287,6 +317,82 @@ function PlanDetail({
             <Stat label="Activities" value={read.reduce((n, p) => n + p.details.length, 0)} />
           </div>
         </div>
+
+        <section className="no-print overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm">
+          <button
+            type="button"
+            onClick={() => setQuizzesOpen((open) => !open)}
+            className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left transition hover:bg-slate-50"
+          >
+            <span className="flex items-center gap-2 font-bold text-slate-900">
+              <HelpCircle className="h-5 w-5 text-indigo-600" /> Student quizzes ({quizPreviews.length})
+            </span>
+            <ChevronRight className={cn('h-4 w-4 text-slate-400 transition-transform', quizzesOpen && 'rotate-90')} />
+          </button>
+          {quizzesOpen && (
+            <div className="space-y-3 border-t border-slate-100 p-5">
+              {quizError && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 text-sm text-rose-800">
+                  <p className="font-semibold">Could not generate a new quiz set.</p>
+                  <p className="mt-1 break-words">{quizError}</p>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-3 rounded-xl border border-indigo-100 bg-indigo-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+                <p className="text-sm text-indigo-800">
+                  {quizPreviews.length > 0
+                    ? 'Preview the current questions or replace them with a completely new validated set.'
+                    : 'No generated quizzes are available yet. Create a student-focused set from this plan.'}
+                </p>
+                <button
+                  type="button"
+                  onClick={handleGenerateQuizzes}
+                  disabled={generateQuizzesMut.isPending}
+                  className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {generateQuizzesMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                  {generateQuizzesMut.isPending
+                    ? 'Generating new set…'
+                    : quizPreviews.length > 0 ? 'Redo quiz set' : 'Generate quizzes'}
+                </button>
+              </div>
+
+              {quizPreviews.map(({ quiz, questions }) => (
+                <details key={quiz.id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
+                  <summary className="cursor-pointer text-sm font-bold text-slate-800">
+                    {quiz.title} · {questions.length} questions
+                  </summary>
+                  <ol className="mt-3 space-y-2 text-sm text-slate-700">
+                    {questions.map((question, index) => (
+                      <li key={question.id} className="rounded-lg bg-white p-3">
+                        <p><span className="font-bold">{index + 1}.</span> {question.promptSnapshot}</p>
+                        {question.optionsSnapshot?.length ? (
+                          <ul className="mt-2 grid gap-1 text-xs text-slate-600 sm:grid-cols-2">
+                            {question.optionsSnapshot.map((option) => (
+                              <li
+                                key={option.label}
+                                className={cn(
+                                  'rounded-md border px-2 py-1',
+                                  question.correctAnswerSnapshot === option.label
+                                    ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+                                    : 'border-slate-200 bg-slate-50',
+                                )}
+                              >
+                                <span className="font-bold">{option.label}.</span> {option.text}
+                              </li>
+                            ))}
+                          </ul>
+                        ) : (
+                          <p className="mt-2 text-xs font-medium text-slate-500">Direct answer</p>
+                        )}
+                      </li>
+                    ))}
+                  </ol>
+                </details>
+              ))}
+            </div>
+          )}
+        </section>
 
         <PlanReadView
           periods={read}
