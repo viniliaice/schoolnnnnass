@@ -36,14 +36,19 @@ describe('background lesson-plan review database contract', () => {
     );
   });
 
-  it('creates a fresh retry token under the same row lock before deleting old output', () => {
+  it('creates a fresh retry token without letting an owner erase an active supervisor review', () => {
     const body = functionBody(migration, 'retry_lesson_plan_ai_review');
     expect(body).toContain('FOR UPDATE');
     expect(body).toContain("COALESCE(v_role, '') NOT IN ('supervisor', 'admin')");
+    expect(body).toContain("IF v_plan.status <> 'ai_failed'");
+    expect(body).toContain('Only a supervisor or administrator may retry an active lesson-plan review.');
     expect(body).toContain('DELETE FROM lesson_period_ai_reviews');
     expect(body).toContain('DELETE FROM ai_reviews');
     expect(body).toContain("SET status = 'submitted'");
     expect(body).toContain('ai_started_at = v_started_at');
+    expect(body.indexOf("IF v_plan.status <> 'ai_failed'")).toBeLessThan(
+      body.indexOf('DELETE FROM ai_reviews'),
+    );
   });
 
   it('atomically persists aggregate and per-period output for only the exact pending attempt', () => {

@@ -163,15 +163,24 @@ BEGIN
       USING ERRCODE = 'P0002';
   END IF;
 
-  IF v_plan.teacher_id IS DISTINCT FROM v_profile_id
-     AND COALESCE(v_role, '') NOT IN ('supervisor', 'admin') THEN
-    RAISE EXCEPTION 'You may not retry the AI review for lesson plan %.', p_plan_id
-      USING ERRCODE = '42501';
-  END IF;
-
   IF v_plan.status NOT IN ('submitted', 'ai_failed', 'in_review') THEN
     RAISE EXCEPTION 'Lesson plan % cannot retry AI review from status %.', p_plan_id, v_plan.status
       USING ERRCODE = 'check_violation';
+  END IF;
+
+  IF COALESCE(v_role, '') NOT IN ('supervisor', 'admin') THEN
+    IF v_plan.teacher_id IS DISTINCT FROM v_profile_id THEN
+      RAISE EXCEPTION 'You may not retry the AI review for lesson plan %.', p_plan_id
+        USING ERRCODE = '42501';
+    END IF;
+
+    -- Owners may recover a failed attempt, but may not cancel a live attempt or
+    -- erase a review that has already reached the supervisor. Supervisors/admins
+    -- retain the broader retry control used by the review screen.
+    IF v_plan.status <> 'ai_failed' THEN
+      RAISE EXCEPTION 'Only a supervisor or administrator may retry an active lesson-plan review.'
+        USING ERRCODE = '42501';
+    END IF;
   END IF;
 
   DELETE FROM lesson_period_ai_reviews WHERE plan_id = p_plan_id;
