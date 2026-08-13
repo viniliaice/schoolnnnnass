@@ -1,11 +1,11 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.99.3';
 
-const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
-const OPENROUTER_MODEL = 'nvidia/nemotron-3.5-lightning:free';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const GEMINI_36_MODEL = 'gemini-3.6-flash';
 const GEMINI_35_LITE_MODEL = 'gemini-3.5-flash-lite';
+const PROVIDER_MAX_OUTPUT_TOKENS = 16_384;
 const PROVIDER_MAX_RETRIES = 1;
+const MAX_PROVIDER_ATTEMPTS_PER_REQUEST = 4;
 const BASE_BACKOFF_MS = 800;
 
 /**
@@ -154,39 +154,33 @@ interface ReviewJob {
   payload: ReviewPayload;
   teacherId: string;
   attemptStartedAt: string;
-  openRouterApiKey?: string;
   geminiApiKey?: string;
   requestStartedAt: number;
 }
 
-type ProviderName = 'openrouter' | 'gemini';
+interface RequestDiagnostics {
+  startedAt: number;
+  providerAttempts: number;
+}
 
 export interface ProviderRoute {
-  provider: ProviderName;
+  provider: 'gemini';
   url: string;
   model: string;
   apiKey: string | undefined;
-  secretName: 'OPENROUTER_API_KEY' | 'GEMINI_API_KEY';
+  secretName: 'GEMINI_API_KEY';
+  retryMalformedOutput?: boolean;
 }
 
-export function buildProviderRoutes(
-  openRouterApiKey?: string,
-  geminiApiKey?: string,
-): ProviderRoute[] {
+export function buildProviderRoutes(geminiApiKey?: string): ProviderRoute[] {
   return [
-    {
-      provider: 'openrouter',
-      url: OPENROUTER_API_URL,
-      model: OPENROUTER_MODEL,
-      apiKey: openRouterApiKey,
-      secretName: 'OPENROUTER_API_KEY',
-    },
     {
       provider: 'gemini',
       url: GEMINI_API_URL,
       model: GEMINI_36_MODEL,
       apiKey: geminiApiKey,
       secretName: 'GEMINI_API_KEY',
+      retryMalformedOutput: true,
     },
     {
       provider: 'gemini',
@@ -198,8 +192,17 @@ export function buildProviderRoutes(
   ];
 }
 
-interface ProviderError extends Error {
+interface ProviderAttemptError extends Error {
+  code?: string;
   status?: number;
+  attempt?: number;
+  validJson?: boolean;
+  validationResult?: 'passed' | 'failed' | 'not_run';
+  responseChars?: number;
+  responseBytes?: number;
+  latencyMs?: number;
+  categoryCount?: number | null;
+  periodReviewCount?: number | null;
 }
 
 const CORS_HEADERS = {
@@ -251,64 +254,78 @@ export async function callLLM(
   prompt: string,
   route: ProviderRoute,
   signal: AbortSignal,
+  diagnostics: RequestDiagnostics = { startedAt: Date.now(), providerAttempts: 0 },
+  strategy: 'initial' | 'retry' = 'initial',
 ): Promise<{ result: ReviewResult; usage: TokenUsage }> {
-  const bodyPayload = route.provider === 'gemini'
-    ? {
+  if (diagnostics.providerAttempts >= MAX_PROVIDER_ATTEMPTS_PER_REQUEST) {
+    const error = new Error('Provider attempt budget exhausted') as ProviderAttemptError;
+    error.code = 'PROVIDER_ATTEMPT_BUDGET_EXHAUSTED';
+    throw error;
+  }
+
+  diagnostics.providerAttempts += 1;
+  const attempt = diagnostics.providerAttempts;
+  const attemptStartedAt = Date.now();
+
+  console.log('[generate-lesson-review] provider request', {
+    provider: route.provider,
+    model: route.model,
+    strategy,
+    attempt,
+    promptChars: prompt.length,
+    maxTokens: PROVIDER_MAX_OUTPUT_TOKENS,
+    totalProviderAttempts: diagnostics.providerAttempts,
+  });
+
+  try {
+    const response = await fetch(route.url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': route.apiKey!,
+      },
+      body: JSON.stringify({
         model: route.model,
         input: prompt,
         system_instruction: SYSTEM_PROMPT,
         generation_config: {
-          max_output_tokens: 16384,
+          max_output_tokens: PROVIDER_MAX_OUTPUT_TOKENS,
           thinking_level: 'minimal',
         },
-      }
-    : {
-        model: route.model,
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: prompt },
-        ],
-        temperature: 1,
-        top_p: 0.95,
-        max_tokens: 16384,
-        stream: false,
-        reasoning: { effort: 'minimal', exclude: true },
-      };
+      }),
+      signal,
+    });
 
-  const response = await fetch(route.url, {
-    method: 'POST',
-    headers: route.provider === 'gemini'
-      ? {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': route.apiKey!,
-        }
-      : {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${route.apiKey}`,
-        },
-    body: JSON.stringify(bodyPayload),
-    signal,
-  });
+    const responseText = await response.text();
+    const envelopeChars = responseText.length;
+    const envelopeBytes = new TextEncoder().encode(responseText).length;
+    if (!response.ok) {
+      const error: ProviderAttemptError = response.status === 429
+        ? new RateLimitError('Rate limited')
+        : response.status === 401
+          ? new APIKeyError('Invalid API key')
+          : new Error(`Gemini API error: HTTP ${response.status}`);
+      error.code = 'PROVIDER_HTTP_ERROR';
+      error.status = response.status;
+      error.responseChars = envelopeChars;
+      error.responseBytes = envelopeBytes;
+      throw error;
+    }
 
-  if (!response.ok) {
-    const error: ProviderError = response.status === 429
-      ? new RateLimitError('Rate limited')
-      : response.status === 401
-        ? new APIKeyError('Invalid API key')
-        : new Error(`${route.provider} API error: HTTP ${response.status}`);
-    error.status = response.status;
-    throw error;
-  }
+    let body: any;
+    try {
+      body = JSON.parse(responseText);
+    } catch {
+      const error = new MalformedJSONError('Provider returned an invalid JSON envelope') as ProviderAttemptError;
+      error.code = 'INVALID_PROVIDER_ENVELOPE';
+      error.status = response.status;
+      error.validJson = false;
+      error.responseChars = envelopeChars;
+      error.responseBytes = envelopeBytes;
+      throw error;
+    }
 
-  let body: any;
-  try {
-    body = await response.json();
-  } catch {
-    throw new MalformedJSONError('Provider returned an invalid JSON envelope');
-  }
-
-  let content = '';
-  if (route.provider === 'gemini') {
+    let content = '';
     if (Array.isArray(body?.steps)) {
       for (const step of body.steps) {
         if (step?.type !== 'model_output' || !Array.isArray(step.content)) continue;
@@ -317,20 +334,219 @@ export async function callLLM(
         }
       }
     }
-  } else {
-    content = typeof body?.choices?.[0]?.message?.content === 'string'
-      ? body.choices[0].message.content
-      : '';
-  }
-  if (!content.trim()) throw new MalformedJSONError('Empty response from LLM');
+    if (!content.trim()) {
+      const error = new MalformedJSONError('Empty response from LLM') as ProviderAttemptError;
+      error.code = 'EMPTY_PROVIDER_RESPONSE';
+      error.status = response.status;
+      error.validJson = true;
+      error.responseChars = envelopeChars;
+      error.responseBytes = envelopeBytes;
+      throw error;
+    }
 
+    const responseChars = content.length;
+    const responseBytes = new TextEncoder().encode(content).length;
+    let parsed: unknown;
+    try {
+      parsed = parseReviewJSON(content);
+    } catch (error) {
+      const providerError = annotateProviderError(error, {
+        status: response.status,
+        attempt,
+        validJson: false,
+        validationResult: 'not_run',
+        responseChars,
+        responseBytes,
+        latencyMs: Date.now() - attemptStartedAt,
+        categoryCount: null,
+        periodReviewCount: null,
+      });
+      console.error('[generate-lesson-review] provider output metadata', {
+        provider: route.provider,
+        model: route.model,
+        strategy,
+        attempt,
+        httpStatus: response.status,
+        validJson: false,
+        validationResult: 'not_run',
+        categoryCount: null,
+        periodReviewCount: null,
+        responseChars,
+        responseBytes,
+        latencyMs: providerError.latencyMs,
+        promptChars: prompt.length,
+        executionMs: Date.now() - diagnostics.startedAt,
+        totalProviderAttempts: diagnostics.providerAttempts,
+      });
+      throw providerError;
+    }
+
+    const shape = summarizeReviewShape(parsed);
+    let result: ReviewResult;
+    try {
+      result = validateReviewResult(parsed);
+    } catch (error) {
+      const providerError = annotateProviderError(error, {
+        code: 'INVALID_REVIEW_RESPONSE',
+        status: response.status,
+        attempt,
+        validJson: true,
+        validationResult: 'failed',
+        responseChars,
+        responseBytes,
+        latencyMs: Date.now() - attemptStartedAt,
+        ...shape,
+      });
+      console.error('[generate-lesson-review] validation metadata', {
+        provider: route.provider,
+        model: route.model,
+        strategy,
+        attempt,
+        httpStatus: response.status,
+        validJson: true,
+        validationResult: 'failed',
+        ...shape,
+        responseChars,
+        responseBytes,
+        latencyMs: providerError.latencyMs,
+        promptChars: prompt.length,
+        executionMs: Date.now() - diagnostics.startedAt,
+        totalProviderAttempts: diagnostics.providerAttempts,
+      });
+      throw providerError;
+    }
+
+    const latencyMs = Date.now() - attemptStartedAt;
+    console.log('[generate-lesson-review] validation metadata', {
+      provider: route.provider,
+      model: route.model,
+      strategy,
+      attempt,
+      httpStatus: response.status,
+      validJson: true,
+      validationResult: 'passed',
+      ...shape,
+      responseChars,
+      responseBytes,
+      latencyMs,
+      promptChars: prompt.length,
+      executionMs: Date.now() - diagnostics.startedAt,
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
+
+    return {
+      result,
+      usage: {
+        input_tokens: body.usage?.prompt_tokens ?? body.usage?.input_tokens ?? 0,
+        output_tokens: body.usage?.completion_tokens ?? body.usage?.output_tokens ?? 0,
+      },
+    };
+  } catch (error) {
+    const providerError = annotateProviderError(error, {
+      code: error instanceof Error && error.name === 'AbortError' ? 'PROVIDER_TIMEOUT' : undefined,
+      attempt,
+      validationResult: 'not_run',
+      latencyMs: Date.now() - attemptStartedAt,
+    });
+    console.error('[generate-lesson-review] provider attempt failed', {
+      provider: route.provider,
+      model: route.model,
+      strategy,
+      attempt: providerError.attempt ?? attempt,
+      httpStatus: providerError.status ?? null,
+      validJson: typeof providerError.validJson === 'boolean' ? providerError.validJson : null,
+      validationResult: providerError.validationResult ?? 'not_run',
+      categoryCount: providerError.categoryCount ?? null,
+      periodReviewCount: providerError.periodReviewCount ?? null,
+      responseChars: typeof providerError.responseChars === 'number' ? providerError.responseChars : null,
+      responseBytes: typeof providerError.responseBytes === 'number' ? providerError.responseBytes : null,
+      latencyMs: providerError.latencyMs ?? Date.now() - attemptStartedAt,
+      promptChars: prompt.length,
+      executionMs: Date.now() - diagnostics.startedAt,
+      rateLimited: providerError.status === 429,
+      errorCode: diagnosticErrorCode(providerError),
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
+    throw providerError;
+  }
+}
+
+function summarizeReviewShape(value: unknown): {
+  categoryCount: number | null;
+  periodReviewCount: number | null;
+} {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { categoryCount: null, periodReviewCount: null };
+  }
+
+  const candidate = value as Record<string, unknown>;
+  const categoryScores = candidate.category_scores;
   return {
-    result: parseAndValidateJSON(content),
-    usage: {
-      input_tokens: body.usage?.prompt_tokens ?? body.usage?.input_tokens ?? 0,
-      output_tokens: body.usage?.completion_tokens ?? body.usage?.output_tokens ?? 0,
-    },
+    categoryCount: categoryScores && typeof categoryScores === 'object' && !Array.isArray(categoryScores)
+      ? Object.keys(categoryScores).length
+      : null,
+    periodReviewCount: Array.isArray(candidate.period_reviews) ? candidate.period_reviews.length : null,
   };
+}
+
+function annotateProviderError(
+  error: unknown,
+  metadata: Partial<ProviderAttemptError>,
+): ProviderAttemptError {
+  const providerError = error instanceof Error
+    ? error as ProviderAttemptError
+    : new Error('Unknown provider failure') as ProviderAttemptError;
+
+  for (const [key, value] of Object.entries(metadata)) {
+    if ((providerError as unknown as Record<string, unknown>)[key] === undefined) {
+      (providerError as unknown as Record<string, unknown>)[key] = value;
+    }
+  }
+  return providerError;
+}
+
+function diagnosticErrorCode(error: unknown): string {
+  const providerError = error as ProviderAttemptError | undefined;
+  if (providerError?.code) return providerError.code;
+  if (error instanceof RateLimitError) return 'RATE_LIMIT';
+  if (error instanceof APIKeyError) return 'API_KEY_ERROR';
+  if (error instanceof MalformedJSONError) return 'MALFORMED_JSON';
+  if (error instanceof SaveReviewError) return 'SAVE_REVIEW_ERROR';
+  if (error instanceof Error && error.name === 'AbortError') return 'PROVIDER_TIMEOUT';
+  return 'UNKNOWN_ERROR';
+}
+
+function parseReviewJSON(content: string): unknown {
+  const cleaned = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    const error = new MalformedJSONError('LLM returned invalid JSON') as ProviderAttemptError;
+    error.code = 'INVALID_PROVIDER_JSON';
+    throw error;
+  }
+}
+
+function validateReviewResult(parsed: unknown): ReviewResult {
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new MalformedJSONError('Invalid review response');
+  }
+
+  const candidate = parsed as Record<string, any>;
+  if (!candidate.category_scores || typeof candidate.category_scores !== 'object') {
+    throw new MalformedJSONError('Missing or invalid category_scores');
+  }
+  if (!Number.isFinite(candidate.total_score) || !Number.isFinite(candidate.percentage)) {
+    throw new MalformedJSONError('Missing or invalid total_score/percentage');
+  }
+  if (!candidate.executive_summary || !candidate.performance_level) {
+    throw new MalformedJSONError('Missing review summary or performance level');
+  }
+  if (candidate.period_reviews !== undefined && !Array.isArray(candidate.period_reviews)) {
+    throw new MalformedJSONError('Invalid period_reviews');
+  }
+
+  return candidate as unknown as ReviewResult;
 }
 
 export function isRetriableStatus(status: number): boolean {
@@ -345,6 +561,7 @@ export async function callLLMWithRetry(
   prompt: string,
   route: ProviderRoute,
   onRetry: () => void,
+  diagnostics: RequestDiagnostics = { startedAt: Date.now(), providerAttempts: 0 },
 ): Promise<{ result: ReviewResult; usage: TokenUsage }> {
   let lastError: unknown;
 
@@ -352,12 +569,18 @@ export async function callLLMWithRetry(
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), AI_ATTEMPT_TIMEOUT_MS);
     try {
-      return await callLLM(prompt, route, controller.signal);
+      return await callLLM(
+        prompt,
+        route,
+        controller.signal,
+        diagnostics,
+        attempt === 0 ? 'initial' : 'retry',
+      );
     } catch (error) {
       lastError = error;
-      const status = (error as ProviderError)?.status;
+      const status = (error as ProviderAttemptError)?.status;
       const retriableHttpStatus = status !== undefined && isRetriableStatus(status);
-      const retriableMalformedPrimary = route.provider === 'openrouter'
+      const retriableMalformedPrimary = route.retryMalformedOutput === true
         && error instanceof MalformedJSONError;
       if ((!retriableHttpStatus && !retriableMalformedPrimary) || attempt === PROVIDER_MAX_RETRIES) break;
 
@@ -372,31 +595,6 @@ export async function callLLMWithRetry(
   }
 
   throw lastError;
-}
-
-function parseAndValidateJSON(content: string): ReviewResult {
-  const cleaned = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-  let parsed: any;
-  try {
-    parsed = JSON.parse(cleaned);
-  } catch {
-    throw new MalformedJSONError('LLM returned invalid JSON');
-  }
-
-  if (!parsed.category_scores || typeof parsed.category_scores !== 'object') {
-    throw new MalformedJSONError('Missing or invalid category_scores');
-  }
-  if (!Number.isFinite(parsed.total_score) || !Number.isFinite(parsed.percentage)) {
-    throw new MalformedJSONError('Missing or invalid total_score/percentage');
-  }
-  if (!parsed.executive_summary || !parsed.performance_level) {
-    throw new MalformedJSONError('Missing review summary or performance level');
-  }
-  if (parsed.period_reviews !== undefined && !Array.isArray(parsed.period_reviews)) {
-    throw new MalformedJSONError('Invalid period_reviews');
-  }
-
-  return parsed as ReviewResult;
 }
 
 class RateLimitError extends Error {
@@ -624,10 +822,13 @@ async function generateAndPersistReview(job: ReviewJob): Promise<void> {
     payload,
     teacherId,
     attemptStartedAt,
-    openRouterApiKey,
     geminiApiKey,
     requestStartedAt,
   } = job;
+  const diagnostics: RequestDiagnostics = {
+    startedAt: requestStartedAt,
+    providerAttempts: 0,
+  };
 
   try {
     const promptText = buildPrompt(payload);
@@ -636,34 +837,70 @@ async function generateAndPersistReview(job: ReviewJob): Promise<void> {
     let totalInputTokens = 0;
     let totalOutputTokens = 0;
     let retryCount = 0;
-    let modelUsed = OPENROUTER_MODEL;
-    const routes = buildProviderRoutes(openRouterApiKey, geminiApiKey);
+    let modelUsed = GEMINI_36_MODEL;
+    const routes = buildProviderRoutes(geminiApiKey);
     const reportedMissingSecrets = new Set<string>();
 
     for (const route of routes) {
       if (!route.apiKey) {
         if (!reportedMissingSecrets.has(route.secretName)) {
-          console.error(`generate-lesson-review ${route.secretName} is not configured.`);
+          console.error('[generate-lesson-review] provider configuration failed', {
+            provider: route.provider,
+            model: route.model,
+            errorCode: 'MISSING_PROVIDER_KEY',
+            totalProviderAttempts: diagnostics.providerAttempts,
+            executionMs: Date.now() - diagnostics.startedAt,
+          });
           reportedMissingSecrets.add(route.secretName);
         }
         continue;
       }
 
       try {
-        const { result, usage } = await callLLMWithRetry(promptText, route, () => {
-          retryCount++;
-        });
+        const routeStartedAt = Date.now();
+        const { result, usage } = await callLLMWithRetry(
+          promptText,
+          route,
+          () => {
+            retryCount++;
+          },
+          diagnostics,
+        );
         reviewResult = result;
         totalInputTokens = usage.input_tokens;
         totalOutputTokens = usage.output_tokens;
         modelUsed = route.model;
+        console.log('[generate-lesson-review] provider succeeded', {
+          provider: route.provider,
+          model: route.model,
+          promptChars: promptText.length,
+          inputTokens: usage.input_tokens,
+          outputTokens: usage.output_tokens,
+          latencyMs: Date.now() - routeStartedAt,
+          executionMs: Date.now() - diagnostics.startedAt,
+          totalProviderAttempts: diagnostics.providerAttempts,
+        });
         break;
       } catch (error) {
         lastError = error as Error;
+        console.error('[generate-lesson-review] provider failed final', {
+          provider: route.provider,
+          model: route.model,
+          errorCode: diagnosticErrorCode(error),
+          executionMs: Date.now() - diagnostics.startedAt,
+          totalProviderAttempts: diagnostics.providerAttempts,
+        });
       }
     }
 
-    if (!reviewResult) throw lastError || new Error('AI review generation failed.');
+    if (!reviewResult) {
+      console.error('[generate-lesson-review] failed all providers', {
+        errorCode: diagnosticErrorCode(lastError),
+        executionMs: Date.now() - diagnostics.startedAt,
+        totalProviderAttempts: diagnostics.providerAttempts,
+      });
+      throw lastError || new Error('AI review generation failed.');
+    }
 
     const latencyMs = Date.now() - requestStartedAt;
     const percentage = Math.max(0, Math.min(100, Math.round(reviewResult.percentage)));
@@ -710,13 +947,28 @@ async function generateAndPersistReview(job: ReviewJob): Promise<void> {
     );
     if (persistError) throw new SaveReviewError(`Failed to save AI review: ${persistError.message}`);
     if (!persisted) {
-      console.log(`Discarded stale AI review attempt for ${payload.plan_id}`);
+      console.info('[generate-lesson-review] stale attempt discarded', {
+        model: modelUsed,
+        executionMs: Date.now() - diagnostics.startedAt,
+        totalProviderAttempts: diagnostics.providerAttempts,
+      });
       return;
     }
 
     await logAttempt(supabase, payload.plan_id, teacherId, 'success', null, null, latencyMs);
+    console.log('[generate-lesson-review] success', {
+      provider: 'gemini',
+      model: modelUsed,
+      executionMs: Date.now() - diagnostics.startedAt,
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
   } catch (error) {
-    console.error(`AI review background job failed for ${payload.plan_id}:`, error);
+    const details = failureDetails(error);
+    console.error('[generate-lesson-review] background job failed', {
+      errorCode: details.code,
+      executionMs: Date.now() - diagnostics.startedAt,
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
     await markPlanFailed(
       supabase,
       payload.plan_id,
@@ -728,9 +980,14 @@ async function generateAndPersistReview(job: ReviewJob): Promise<void> {
   }
 }
 
+console.log('[generate-lesson-review] module initialized');
 // @ts-ignore Supabase Edge Runtime provides the native Deno global.
 Deno.serve(async (req: Request) => {
   const requestStartedAt = Date.now();
+  console.log('[generate-lesson-review] handler entered', {
+    method: req.method,
+    hasAuthorizationHeader: req.headers.has('Authorization'),
+  });
 
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS });
@@ -859,10 +1116,15 @@ Deno.serve(async (req: Request) => {
       return corsResponse({ error: error.message, code: 'TOKEN_OVERFLOW' }, { status: 413 });
     }
 
-    const openRouterApiKey = Deno.env.get('OPENROUTER_API_KEY');
     const geminiApiKey = Deno.env.get('GEMINI_API_KEY');
-    if (!openRouterApiKey && !geminiApiKey) {
-      const error = new APIKeyError('No AI provider API key is configured.');
+    if (!geminiApiKey) {
+      const error = new APIKeyError('The Gemini API key is not configured.');
+      console.error('[generate-lesson-review] provider configuration failed', {
+        provider: 'gemini',
+        errorCode: 'MISSING_PROVIDER_KEY',
+        executionMs: Date.now() - requestStartedAt,
+        totalProviderAttempts: 0,
+      });
       await markPlanFailed(supabase, planId, plan.teacher_id, plan.ai_started_at, error, Date.now() - requestStartedAt);
       return corsResponse({ error: error.message, code: 'API_KEY_ERROR' }, { status: 500 });
     }
@@ -872,7 +1134,6 @@ Deno.serve(async (req: Request) => {
       payload,
       teacherId: plan.teacher_id,
       attemptStartedAt: plan.ai_started_at,
-      openRouterApiKey,
       geminiApiKey,
       requestStartedAt,
     });
@@ -887,13 +1148,21 @@ Deno.serve(async (req: Request) => {
       void task;
     }
 
+    console.log('[generate-lesson-review] background job dispatched', {
+      periodCount: periods.length,
+      unitContextCount: unitContexts.length,
+      executionMs: Date.now() - requestStartedAt,
+    });
     return corsResponse({
       plan_id: planId,
       status: 'accepted',
       ai_started_at: plan.ai_started_at,
     }, { status: 202 });
   } catch (error) {
-    console.error('generate-lesson-review dispatch failed:', error);
+    console.error('[generate-lesson-review] dispatch failed', {
+      errorCode: diagnosticErrorCode(error),
+      executionMs: Date.now() - requestStartedAt,
+    });
     return corsResponse({
       error: 'Internal server error',
       code: 'INTERNAL_ERROR',

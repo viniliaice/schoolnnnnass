@@ -1,16 +1,17 @@
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('https://esm.sh/@supabase/supabase-js@2.99.3', () => ({
   createClient: vi.fn(),
 }));
 
 interface ReviewProviderModule {
-  buildProviderRoutes: (openRouterApiKey?: string, geminiApiKey?: string) => Array<{
-    provider: 'openrouter' | 'gemini';
+  buildProviderRoutes: (geminiApiKey?: string) => Array<{
+    provider: 'gemini';
     url: string;
     model: string;
     apiKey: string | undefined;
-    secretName: 'OPENROUTER_API_KEY' | 'GEMINI_API_KEY';
+    secretName: 'GEMINI_API_KEY';
+    retryMalformedOutput?: boolean;
   }>;
   callLLM: (
     prompt: string,
@@ -43,19 +44,12 @@ const validReview = {
   period_reviews: [],
 };
 
-function openRouterEnvelope() {
-  return {
-    choices: [{ message: { content: JSON.stringify(validReview) } }],
-    usage: { prompt_tokens: 120, completion_tokens: 80 },
-  };
-}
-
-function geminiEnvelope() {
+function geminiEnvelope(review: unknown = validReview) {
   return {
     status: 'completed',
     steps: [
       { type: 'thought', content: [{ type: 'text', text: 'must not be parsed' }] },
-      { type: 'model_output', content: [{ type: 'text', text: JSON.stringify(validReview) }] },
+      { type: 'model_output', content: [{ type: 'text', text: JSON.stringify(review) }] },
     ],
     usage: { input_tokens: 130, output_tokens: 90 },
   };
@@ -66,7 +60,16 @@ beforeAll(async () => {
     serve: vi.fn(),
     env: { get: vi.fn() },
   });
+  const moduleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
   providerModule = await import('../../../supabase/functions/generate-lesson-review/index');
+  expect(moduleLogSpy).toHaveBeenCalledWith('[generate-lesson-review] module initialized');
+  moduleLogSpy.mockRestore();
+});
+
+beforeEach(() => {
+  vi.spyOn(console, 'log').mockImplementation(() => undefined);
+  vi.spyOn(console, 'info').mockImplementation(() => undefined);
+  vi.spyOn(console, 'error').mockImplementation(() => undefined);
 });
 
 afterEach(() => {
@@ -79,21 +82,33 @@ afterAll(() => {
 });
 
 describe('generate-lesson-review provider layer', () => {
-  it('builds the fixed Lightning → Gemini 3.6 → Gemini 3.5 Lite route order', () => {
-    expect(providerModule.buildProviderRoutes('openrouter-key', 'gemini-key')).toEqual([
-      {
-        provider: 'openrouter',
-        url: 'https://openrouter.ai/api/v1/chat/completions',
-        model: 'nvidia/nemotron-3.5-lightning:free',
-        apiKey: 'openrouter-key',
-        secretName: 'OPENROUTER_API_KEY',
-      },
+  it('registers without top-level secret reads and logs before OPTIONS handling', async () => {
+    const deno = (globalThis as any).Deno;
+    expect(deno.serve).toHaveBeenCalledOnce();
+    expect(deno.env.get).not.toHaveBeenCalled();
+
+    const handler = deno.serve.mock.calls[0][0] as (request: Request) => Promise<Response>;
+    const response = await handler(new Request('https://example.test/generate-lesson-review', {
+      method: 'OPTIONS',
+    }));
+
+    expect(response.status).toBe(204);
+    expect(console.log).toHaveBeenCalledWith(
+      '[generate-lesson-review] handler entered',
+      { method: 'OPTIONS', hasAuthorizationHeader: false },
+    );
+    expect(deno.env.get).not.toHaveBeenCalled();
+  });
+
+  it('builds the fixed Gemini 3.6 → Gemini 3.5 Lite route order', () => {
+    expect(providerModule.buildProviderRoutes('gemini-key')).toEqual([
       {
         provider: 'gemini',
         url: 'https://generativelanguage.googleapis.com/v1beta/interactions',
         model: 'gemini-3.6-flash',
         apiKey: 'gemini-key',
         secretName: 'GEMINI_API_KEY',
+        retryMalformedOutput: true,
       },
       {
         provider: 'gemini',
@@ -105,52 +120,19 @@ describe('generate-lesson-review provider layer', () => {
     ]);
   });
 
-  it('sends the unchanged prompt through the Lightning OpenRouter request', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(openRouterEnvelope()), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    }));
-    vi.stubGlobal('fetch', fetchMock);
-    const route = providerModule.buildProviderRoutes('openrouter-key', 'gemini-key')[0];
-
-    const output = await providerModule.callLLM('EXACT REVIEW PROMPT', route, new AbortController().signal);
-
-    expect(output.result).toEqual(validReview);
-    expect(output.usage).toEqual({ input_tokens: 120, output_tokens: 80 });
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock.mock.calls[0][0]).toBe('https://openrouter.ai/api/v1/chat/completions');
-    const request = fetchMock.mock.calls[0][1] as RequestInit;
-    const body = JSON.parse(String(request.body));
-    expect(body).toEqual(expect.objectContaining({
-      model: 'nvidia/nemotron-3.5-lightning:free',
-      temperature: 1,
-      top_p: 0.95,
-      max_tokens: 16384,
-      stream: false,
-      reasoning: { effort: 'minimal', exclude: true },
-    }));
-    expect(body.messages[0].content).toContain('You are an expert instructional coach');
-    expect(body.messages[1]).toEqual({ role: 'user', content: 'EXACT REVIEW PROMPT' });
-    expect(body).not.toHaveProperty('response_format');
-    expect(body).not.toHaveProperty('provider');
-    expect(request.headers).toEqual({
-      'Content-Type': 'application/json',
-      Authorization: 'Bearer openrouter-key',
-    });
-  });
-
   it('uses the Gemini Interactions envelope without parsing thought steps', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(geminiEnvelope()), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     }));
     vi.stubGlobal('fetch', fetchMock);
-    const route = providerModule.buildProviderRoutes('openrouter-key', 'gemini-key')[1];
+    const route = providerModule.buildProviderRoutes('gemini-key')[0];
 
     const output = await providerModule.callLLM('EXACT REVIEW PROMPT', route, new AbortController().signal);
 
     expect(output.result).toEqual(validReview);
     expect(output.usage).toEqual({ input_tokens: 130, output_tokens: 90 });
+    expect(fetchMock).toHaveBeenCalledOnce();
     expect(fetchMock.mock.calls[0][0]).toBe('https://generativelanguage.googleapis.com/v1beta/interactions');
     const request = fetchMock.mock.calls[0][1] as RequestInit;
     const body = JSON.parse(String(request.body));
@@ -168,27 +150,58 @@ describe('generate-lesson-review provider layer', () => {
       'Content-Type': 'application/json',
       'x-goog-api-key': 'gemini-key',
     });
+
+    expect(console.log).toHaveBeenCalledWith(
+      '[generate-lesson-review] provider request',
+      expect.objectContaining({
+        provider: 'gemini',
+        model: 'gemini-3.6-flash',
+        strategy: 'initial',
+        attempt: 1,
+        promptChars: 19,
+        maxTokens: 16384,
+        totalProviderAttempts: 1,
+      }),
+    );
+    expect(console.log).toHaveBeenCalledWith(
+      '[generate-lesson-review] validation metadata',
+      expect.objectContaining({
+        provider: 'gemini',
+        model: 'gemini-3.6-flash',
+        validJson: true,
+        validationResult: 'passed',
+        categoryCount: 1,
+        periodReviewCount: 0,
+        totalProviderAttempts: 1,
+      }),
+    );
+    const logs = JSON.stringify([
+      vi.mocked(console.log).mock.calls,
+      vi.mocked(console.info).mock.calls,
+      vi.mocked(console.error).mock.calls,
+    ]);
+    expect(logs).not.toContain('EXACT REVIEW PROMPT');
+    expect(logs).not.toContain('A complete review.');
+    expect(logs).not.toContain('must not be parsed');
   });
 
   it.each([
-    { routeIndex: 0, model: 'Lightning', envelope: openRouterEnvelope },
-    { routeIndex: 1, model: 'Gemini 3.6', envelope: geminiEnvelope },
-    { routeIndex: 2, model: 'Gemini 3.5 Lite', envelope: geminiEnvelope },
+    { routeIndex: 0, model: 'Gemini 3.6' },
+    { routeIndex: 1, model: 'Gemini 3.5 Lite' },
   ])('retries a $model 503 once with backoff before returning the result', async ({
     routeIndex,
-    envelope,
   }) => {
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0);
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(new Response('{}', { status: 503 }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(envelope()), {
+      .mockResolvedValueOnce(new Response(JSON.stringify(geminiEnvelope()), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }));
     vi.stubGlobal('fetch', fetchMock);
     const onRetry = vi.fn();
-    const route = providerModule.buildProviderRoutes('openrouter-key', 'gemini-key')[routeIndex];
+    const route = providerModule.buildProviderRoutes('gemini-key')[routeIndex];
 
     const pending = providerModule.callLLMWithRetry('EXACT REVIEW PROMPT', route, onRetry);
     await vi.advanceTimersByTimeAsync(799);
@@ -201,22 +214,37 @@ describe('generate-lesson-review provider layer', () => {
     expect(onRetry).toHaveBeenCalledOnce();
     expect([429, 502, 503, 504, 529].every(providerModule.isRetriableStatus)).toBe(true);
     expect([400, 401, 500].some(providerModule.isRetriableStatus)).toBe(false);
+    expect(console.error).toHaveBeenCalledWith(
+      '[generate-lesson-review] provider attempt failed',
+      expect.objectContaining({
+        provider: 'gemini',
+        strategy: 'initial',
+        attempt: 1,
+        httpStatus: 503,
+        errorCode: 'PROVIDER_HTTP_ERROR',
+        totalProviderAttempts: 1,
+      }),
+    );
+    expect(console.log).toHaveBeenCalledWith(
+      '[generate-lesson-review] provider request',
+      expect.objectContaining({ strategy: 'retry', attempt: 2, totalProviderAttempts: 2 }),
+    );
   });
 
   it('preserves the primary malformed-output retry without applying HTTP backoff', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({ choices: [] }), {
+      .mockResolvedValueOnce(new Response(JSON.stringify({ steps: [] }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }))
-      .mockResolvedValueOnce(new Response(JSON.stringify(openRouterEnvelope()), {
+      .mockResolvedValueOnce(new Response(JSON.stringify(geminiEnvelope()), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }));
     vi.stubGlobal('fetch', fetchMock);
     const onRetry = vi.fn();
-    const route = providerModule.buildProviderRoutes('openrouter-key', 'gemini-key')[0];
+    const route = providerModule.buildProviderRoutes('gemini-key')[0];
 
     const output = await providerModule.callLLMWithRetry('EXACT REVIEW PROMPT', route, onRetry);
 
@@ -224,5 +252,61 @@ describe('generate-lesson-review provider layer', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(onRetry).toHaveBeenCalledOnce();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('does not retry malformed output from the final fallback model', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ steps: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    const onRetry = vi.fn();
+    const route = providerModule.buildProviderRoutes('gemini-key')[1];
+
+    await expect(providerModule.callLLMWithRetry('EXACT REVIEW PROMPT', route, onRetry))
+      .rejects.toThrow('Empty response from LLM');
+
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it('logs bounded failed validation metadata without logging review content', async () => {
+    const invalidReview = {
+      category_scores: { curriculum_alignment: { score: 4, explanation: 'PRIVATE REVIEW CONTENT' } },
+      period_reviews: [],
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify(geminiEnvelope(invalidReview)), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    })));
+    const route = providerModule.buildProviderRoutes('gemini-key')[0];
+
+    await expect(providerModule.callLLM('PRIVATE PROMPT CONTENT', route, new AbortController().signal))
+      .rejects.toThrow('Missing or invalid total_score/percentage');
+
+    expect(console.error).toHaveBeenCalledWith(
+      '[generate-lesson-review] validation metadata',
+      expect.objectContaining({
+        validJson: true,
+        validationResult: 'failed',
+        categoryCount: 1,
+        periodReviewCount: 0,
+      }),
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      '[generate-lesson-review] provider attempt failed',
+      expect.objectContaining({
+        validJson: true,
+        validationResult: 'failed',
+        errorCode: 'INVALID_REVIEW_RESPONSE',
+      }),
+    );
+    const logs = JSON.stringify([
+      vi.mocked(console.log).mock.calls,
+      vi.mocked(console.info).mock.calls,
+      vi.mocked(console.error).mock.calls,
+    ]);
+    expect(logs).not.toContain('PRIVATE PROMPT CONTENT');
+    expect(logs).not.toContain('PRIVATE REVIEW CONTENT');
   });
 });

@@ -66,23 +66,21 @@ describe('background Edge Function contract', () => {
     expect(edgeFunction).toContain("if (req.method !== 'POST')");
   });
 
-  it('uses OpenRouter Lightning, Gemini 3.6, then Gemini 3.5 Lite', () => {
+  it('uses Gemini 3.6, then Gemini 3.5 Lite, with no OpenRouter residue', () => {
     const routes = edgeFunction.slice(
       edgeFunction.indexOf('export function buildProviderRoutes('),
-      edgeFunction.indexOf('interface ProviderError'),
+      edgeFunction.indexOf('interface ProviderAttemptError'),
     );
-    const lightningIndex = routes.indexOf('model: OPENROUTER_MODEL');
     const gemini36Index = routes.indexOf('model: GEMINI_36_MODEL');
     const gemini35Index = routes.indexOf('model: GEMINI_35_LITE_MODEL');
 
-    expect(edgeFunction).toContain("const OPENROUTER_MODEL = 'nvidia/nemotron-3.5-lightning:free'");
     expect(edgeFunction).toContain("const GEMINI_36_MODEL = 'gemini-3.6-flash'");
     expect(edgeFunction).toContain("const GEMINI_35_LITE_MODEL = 'gemini-3.5-flash-lite'");
-    expect(edgeFunction).toContain("Deno.env.get('OPENROUTER_API_KEY')");
     expect(edgeFunction).toContain("Deno.env.get('GEMINI_API_KEY')");
-    expect(lightningIndex).toBeGreaterThan(-1);
-    expect(gemini36Index).toBeGreaterThan(lightningIndex);
+    expect(gemini36Index).toBeGreaterThan(-1);
     expect(gemini35Index).toBeGreaterThan(gemini36Index);
+    expect(edgeFunction).not.toMatch(/openrouter|nemotron/i);
+    expect(edgeFunction).not.toContain('OPENROUTER_API_KEY');
     expect(edgeFunction).not.toContain('NVIDIA_API_KEY');
     expect(edgeFunction).not.toContain('ZEN_API_KEY');
   });
@@ -97,12 +95,35 @@ describe('background Edge Function contract', () => {
       expect(retryPolicy).toContain(`status === ${status}`);
     }
     expect(edgeFunction).toContain('const PROVIDER_MAX_RETRIES = 1');
+    expect(edgeFunction).toContain('const MAX_PROVIDER_ATTEMPTS_PER_REQUEST = 4');
     expect(edgeFunction).toContain('const retriableHttpStatus = status !== undefined && isRetriableStatus(status)');
     expect(edgeFunction).toContain('if (retriableHttpStatus) {');
     expect(edgeFunction).toContain('BASE_BACKOFF_MS * Math.pow(2, attempt)');
     expect(edgeFunction).toContain('await sleep(backoff)');
-    expect(edgeFunction).toContain("const retriableMalformedPrimary = route.provider === 'openrouter'");
-    expect(edgeFunction).toContain('callLLMWithRetry(promptText, route');
+    expect(edgeFunction).toContain('const retriableMalformedPrimary = route.retryMalformedOutput === true');
+    expect(edgeFunction).toContain('callLLMWithRetry(');
+  });
+
+  it('logs bounded handler, provider, validation, success, and failure lifecycle events', () => {
+    const moduleIndex = edgeFunction.indexOf("'[generate-lesson-review] module initialized'");
+    const serveIndex = edgeFunction.indexOf('Deno.serve(async (req: Request) => {');
+    const handlerIndex = edgeFunction.indexOf("'[generate-lesson-review] handler entered'");
+    const methodCheckIndex = edgeFunction.indexOf("if (req.method === 'OPTIONS')");
+
+    expect(moduleIndex).toBeGreaterThan(-1);
+    expect(moduleIndex).toBeLessThan(serveIndex);
+    expect(edgeFunction.slice(0, moduleIndex)).not.toContain('Deno.env.get');
+    expect(handlerIndex).toBeGreaterThan(serveIndex);
+    expect(handlerIndex).toBeLessThan(methodCheckIndex);
+    expect(edgeFunction).toContain("'[generate-lesson-review] background job dispatched'");
+    expect(edgeFunction).toContain("'[generate-lesson-review] provider request'");
+    expect(edgeFunction).toContain("'[generate-lesson-review] validation metadata'");
+    expect(edgeFunction).toContain("'[generate-lesson-review] provider succeeded'");
+    expect(edgeFunction).toContain("'[generate-lesson-review] provider attempt failed'");
+    expect(edgeFunction).toContain("'[generate-lesson-review] provider failed final'");
+    expect(edgeFunction).toContain("'[generate-lesson-review] failed all providers'");
+    expect(edgeFunction).toContain("'[generate-lesson-review] success'");
+    expect(edgeFunction).not.toMatch(/console\.(?:log|info|error)\([^\n]*(?:promptText|payload|reviewResult|content|body)/);
   });
 
   it('preserves the complete review prompts and period mapping byte-for-byte', () => {
