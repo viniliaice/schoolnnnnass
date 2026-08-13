@@ -294,7 +294,8 @@ export async function fetchReviewByPlanId(planId: string): Promise<AIReview | nu
 
 export async function retryAIReview(planId: string): Promise<ReviewDispatchResponse> {
   // Reset to an explicit pending state and create a fresh attempt timestamp.
-  // The RPC allows the owner or a supervisor/admin and rejects final statuses.
+  // Owners may recover only their own ai_failed attempt; supervisors/admins
+  // retain broader retry control. The RPC rejects all other state/actor pairs.
   const { data: queued, error: queueError } = await supabase.rpc('retry_lesson_plan_ai_review', {
     p_plan_id: planId,
   });

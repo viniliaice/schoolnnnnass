@@ -130,8 +130,9 @@ $$;
 REVOKE ALL ON FUNCTION submit_lesson_plan_for_review(TEXT) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION submit_lesson_plan_for_review(TEXT) TO authenticated;
 
--- Retry/redo transition for the owner or a supervisor/admin. It creates a new
--- attempt timestamp so a late result from an older attempt can be discarded.
+-- Retry/redo transition. Owners may recover their own ai_failed attempt;
+-- supervisors/admins may also reset submitted or in_review attempts. Every
+-- allowed retry creates a timestamp so a late older result is discarded.
 CREATE OR REPLACE FUNCTION retry_lesson_plan_ai_review(p_plan_id TEXT)
 RETURNS SETOF lesson_plans
   LANGUAGE plpgsql
