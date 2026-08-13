@@ -2,7 +2,9 @@ import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
 const OPENROUTER_CHAT_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 const OPENROUTER_EMBEDDINGS_API_URL = 'https://openrouter.ai/api/v1/embeddings';
-const OPENROUTER_GENERATION_MODEL = 'nvidia/nemotron-3-super-120b-a12b:free';
+// 2026-08-13: Lightning replaces Nemotron 3 Super after production requests
+// frequently hit the 45-second ceiling or returned invalid quiz output.
+const OPENROUTER_GENERATION_MODEL = 'nvidia/nemotron-3.5-lightning:free';
 const OPENROUTER_EMBEDDING_MODEL = 'nvidia/nemotron-3-embed-1b:free';
 const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
 const GEMINI_36_MODEL = 'gemini-3.6-flash';
@@ -906,6 +908,9 @@ async function sendProviderRequest(
     });
   }
 
+  // Lightning does not advertise response_format support on OpenRouter. The
+  // explicit JSON-only prompt and strict post-response validation remain the
+  // schema boundary; malformed output falls through to Gemini unchanged.
   const serializedRequest = JSON.stringify({
     model,
     messages: [
@@ -922,17 +927,6 @@ async function sendProviderRequest(
     reasoning: {
       effort: 'minimal',
       exclude: true,
-    },
-    provider: {
-      require_parameters: true,
-    },
-    response_format: {
-      type: 'json_schema',
-      json_schema: {
-        name: 'lesson_quizzes',
-        strict: true,
-        schema: QUIZ_RESPONSE_SCHEMA,
-      },
     },
   });
   return fetch(url, {

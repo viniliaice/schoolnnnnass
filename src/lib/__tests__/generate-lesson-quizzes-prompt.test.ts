@@ -417,7 +417,7 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(() => validateQuizResponse(wrappedIncomplete)).toThrow(/exactly 3 quizzes/i);
   });
 
-  it('uses bounded embedding preprocessing and strict OpenRouter 3×4 generation on success', async () => {
+  it('uses bounded embedding preprocessing and JSON-only Lightning generation on success', async () => {
     const providerResult = makeValidResponse(true);
     const raw = JSON.stringify(providerResult);
     const fetchMock = vi.fn()
@@ -462,28 +462,17 @@ describe('generate-lesson-quizzes resource optimization', () => {
 
     const providerBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
     expect(providerBody).toEqual(expect.objectContaining({
-      model: 'nvidia/nemotron-3-super-120b-a12b:free',
+      model: 'nvidia/nemotron-3.5-lightning:free',
       temperature: 0.7,
       top_p: 0.95,
       max_tokens: PROVIDER_MAX_TOKENS,
       stream: false,
       reasoning: { effort: 'minimal', exclude: true },
-      provider: { require_parameters: true },
     }));
     expect(providerBody.max_tokens).toBe(1_800);
     expect(providerBody.messages[1].content.length).toBeLessThan(6_000);
-    expect(providerBody.response_format.type).toBe('json_schema');
-    expect(providerBody.response_format.json_schema).toEqual(expect.objectContaining({
-      name: 'lesson_quizzes',
-      strict: true,
-    }));
-    const schema = providerBody.response_format.json_schema.schema;
-    expect(schema.properties.quizzes).toEqual(expect.objectContaining({ minItems: 3, maxItems: 3 }));
-    expect(schema.properties.quizzes.items.properties.questions).toEqual(expect.objectContaining({
-      minItems: 4,
-      maxItems: 4,
-    }));
-    expect(schema.properties.quizzes.items.properties.questions.prefixItems).toHaveLength(4);
+    expect(providerBody).not.toHaveProperty('provider');
+    expect(providerBody).not.toHaveProperty('response_format');
     expect(fetchMock.mock.calls[1][1]?.headers).toEqual({
       'Content-Type': 'application/json',
       Authorization: 'Bearer openrouter-key',
@@ -609,7 +598,7 @@ describe('generate-lesson-quizzes resource optimization', () => {
     ]);
     expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model)).toEqual([
       'nvidia/nemotron-3-embed-1b:free',
-      'nvidia/nemotron-3-super-120b-a12b:free',
+      'nvidia/nemotron-3.5-lightning:free',
       'gemini-3.6-flash',
       'gemini-3.5-flash-lite',
     ]);
@@ -806,7 +795,7 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model)).toEqual([
       'nvidia/nemotron-3-embed-1b:free',
-      'nvidia/nemotron-3-super-120b-a12b:free',
+      'nvidia/nemotron-3.5-lightning:free',
       'gemini-3.6-flash',
       'gemini-3.5-flash-lite',
     ]);
