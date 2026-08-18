@@ -133,6 +133,48 @@ export interface QuizQualityContext {
   learningObjectives?: Array<string | null | undefined>;
 }
 
+export const QUIZ_VALIDATION_ERROR_CODES = [
+  'QUIZ_COUNT',
+  'QUIZ_SHAPE',
+  'QUESTION_SHAPE',
+  'QUESTION_TYPE',
+  'OPTION_SHAPE',
+  'CORRECT_INDEX',
+  'DIRECT_ANSWER_SHAPE',
+  'DUPLICATE_QUESTION',
+  'DUPLICATE_ANSWER_SET',
+  'PLACEHOLDER_OR_TRUNCATION',
+  'FORBIDDEN_CONTEXT',
+  'NUMERIC_DISTRACTOR',
+  'ARITHMETIC_ANSWER',
+  'UNKNOWN_VALIDATION',
+] as const;
+
+export type QuizValidationErrorCode = typeof QUIZ_VALIDATION_ERROR_CODES[number];
+const QUIZ_VALIDATION_ERROR_CODE_SET = new Set<string>(QUIZ_VALIDATION_ERROR_CODES);
+
+class QuizValidationError extends Error {
+  readonly validationErrorCode: QuizValidationErrorCode;
+
+  constructor(validationErrorCode: QuizValidationErrorCode, message: string) {
+    super(message);
+    this.name = 'QuizValidationError';
+    this.validationErrorCode = validationErrorCode;
+  }
+}
+
+function failQuizValidation(validationErrorCode: QuizValidationErrorCode, message: string): never {
+  throw new QuizValidationError(validationErrorCode, message);
+}
+
+/** Return only a fixed allowlisted category; never derive telemetry from model content. */
+export function quizValidationErrorCode(error: unknown): QuizValidationErrorCode {
+  const value = (error as { validationErrorCode?: unknown })?.validationErrorCode;
+  return typeof value === 'string' && QUIZ_VALIDATION_ERROR_CODE_SET.has(value)
+    ? value as QuizValidationErrorCode
+    : 'UNKNOWN_VALIDATION';
+}
+
 function normalizeAssessmentText(value: string): string {
   return strip(value)
     .normalize('NFKC')
@@ -146,43 +188,54 @@ function normalizeAssessmentText(value: string): string {
 
 function validateGeneratedQuizStructure(input: any, questionsPerQuiz: number, directAnswerMin: number): void {
   if (typeof input?.title !== 'string' || !strip(input.title)) {
-    throw new Error('Generated quiz is missing a title');
+    failQuizValidation('QUIZ_SHAPE', 'Generated quiz is missing a title');
   }
   if (!Array.isArray(input.questions) || input.questions.length !== questionsPerQuiz) {
-    throw new Error(`Generated quiz must contain exactly ${questionsPerQuiz} questions`);
+    failQuizValidation('QUIZ_SHAPE', `Generated quiz must contain exactly ${questionsPerQuiz} questions`);
   }
 
   const seen = new Set<string>();
   let directCount = 0;
   input.questions.forEach((q: any, index: number) => {
-    if (typeof q?.question !== 'string') throw new Error(`Question ${index + 1} is missing question text`);
+    if (typeof q?.question !== 'string') {
+      failQuizValidation('QUESTION_SHAPE', `Question ${index + 1} is missing question text`);
+    }
     const normalized = normalizeAssessmentText(q.question);
-    if (!normalized || seen.has(normalized)) throw new Error(`Generated quiz has duplicate/empty question at ${index + 1}`);
+    if (!normalized || seen.has(normalized)) {
+      failQuizValidation('DUPLICATE_QUESTION', `Generated quiz has duplicate/empty question at ${index + 1}`);
+    }
     seen.add(normalized);
+
+    // Keep application validation aligned with the strict provider schema:
+    // three multiple-choice questions followed by one direct-answer question.
+    const expectedType = index < questionsPerQuiz - directAnswerMin ? 'multiple_choice' : 'direct_answer';
+    if (q.type !== expectedType) {
+      failQuizValidation('QUESTION_TYPE', `Question ${index + 1} has invalid type or position`);
+    }
 
     if (q.type === 'multiple_choice') {
       if (!Array.isArray(q.options) || q.options.length !== 4 || q.options.some((o: unknown) => typeof o !== 'string' || !strip(o))) {
-        throw new Error(`Question ${index + 1} must have exactly 4 non-empty options`);
+        failQuizValidation('OPTION_SHAPE', `Question ${index + 1} must have exactly 4 non-empty options`);
       }
       if (new Set(q.options.map((o: string) => normalizeAssessmentText(o))).size !== 4) {
-        throw new Error(`Question ${index + 1} options are not distinct`);
+        failQuizValidation('OPTION_SHAPE', `Question ${index + 1} options are not distinct`);
       }
       if (!Number.isInteger(q.correctIndex) || q.correctIndex < 0 || q.correctIndex > 3) {
-        throw new Error(`Question ${index + 1} has invalid correctIndex`);
+        failQuizValidation('CORRECT_INDEX', `Question ${index + 1} has invalid correctIndex`);
       }
     } else if (q.type === 'direct_answer') {
       directCount += 1;
-      if (q.options && q.options.length > 0) throw new Error(`Direct-answer question ${index + 1} must not have options`);
-      if (typeof q.rubric !== 'string' || !strip(q.rubric)) {
-        throw new Error(`Direct-answer question ${index + 1} must have a rubric`);
+      if (q.options && q.options.length > 0) {
+        failQuizValidation('DIRECT_ANSWER_SHAPE', `Direct-answer question ${index + 1} must not have options`);
       }
-    } else {
-      throw new Error(`Question ${index + 1} has invalid type`);
+      if (typeof q.rubric !== 'string' || !strip(q.rubric)) {
+        failQuizValidation('DIRECT_ANSWER_SHAPE', `Direct-answer question ${index + 1} must have a rubric`);
+      }
     }
   });
 
-  if (directCount < directAnswerMin) {
-    throw new Error(`Generated quiz must include at least ${directAnswerMin} direct-answer question(s)`);
+  if (directCount !== directAnswerMin) {
+    failQuizValidation('DIRECT_ANSWER_SHAPE', `Generated quiz must include exactly ${directAnswerMin} direct-answer question(s)`);
   }
 }
 
@@ -248,10 +301,12 @@ function parseArithmeticExpression(question: string): { result: number } | null 
   else if (operator === '-') result = left - right;
   else if (operator === '*' || operator === '×' || operator === 'x') result = left * right;
   else {
-    if (right === 0) throw new Error('Arithmetic question divides by zero');
+    if (right === 0) failQuizValidation('ARITHMETIC_ANSWER', 'Arithmetic question divides by zero');
     result = left / right;
   }
-  if (!Number.isFinite(result)) throw new Error('Arithmetic question has a non-finite answer');
+  if (!Number.isFinite(result)) {
+    failQuizValidation('ARITHMETIC_ANSWER', 'Arithmetic question has a non-finite answer');
+  }
   return { result };
 }
 
@@ -268,18 +323,18 @@ function validateNumericOptions(question: any, label: string): void {
   const parsedOptions = question.options.map(parseNumericOption);
   const numericCount = parsedOptions.filter(Boolean).length;
   if (numericCount > 0 && numericCount < question.options.length) {
-    throw new Error(`${label} mixes numeric answers with malformed numeric distractors`);
+    failQuizValidation('NUMERIC_DISTRACTOR', `${label} mixes numeric answers with malformed numeric distractors`);
   }
   if (numericCount !== question.options.length) return;
 
   const numericOptions = parsedOptions as NumericOption[];
   if (new Set(numericOptions.map((option) => option.kind)).size !== 1) {
-    throw new Error(`${label} numeric distractors must use the same value type`);
+    failQuizValidation('NUMERIC_DISTRACTOR', `${label} numeric distractors must use the same value type`);
   }
   for (let left = 0; left < numericOptions.length; left += 1) {
     for (let right = left + 1; right < numericOptions.length; right += 1) {
       if (nearlyEqual(numericOptions[left].value, numericOptions[right].value)) {
-        throw new Error(`${label} has duplicate numeric answer values`);
+        failQuizValidation('NUMERIC_DISTRACTOR', `${label} has duplicate numeric answer values`);
       }
     }
   }
@@ -289,8 +344,12 @@ function validateNumericOptions(question: any, label: string): void {
   const matching = numericOptions
     .map((option, index) => nearlyEqual(option.value, expression.result) ? index : -1)
     .filter((index) => index >= 0);
-  if (matching.length !== 1) throw new Error(`${label} must contain exactly one solved arithmetic answer`);
-  if (question.correctIndex !== matching[0]) throw new Error(`${label} correctIndex does not match the solved arithmetic answer`);
+  if (matching.length !== 1) {
+    failQuizValidation('ARITHMETIC_ANSWER', `${label} must contain exactly one solved arithmetic answer`);
+  }
+  if (question.correctIndex !== matching[0]) {
+    failQuizValidation('ARITHMETIC_ANSWER', `${label} correctIndex does not match the solved arithmetic answer`);
+  }
 }
 
 function validateDirectArithmetic(question: any, label: string): void {
@@ -301,40 +360,46 @@ function validateDirectArithmetic(question: any, label: string): void {
     .match(/[+-]?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?/g)
     ?.map((value: string) => Number(value.replace(/,/g, ''))) || [];
   if (!rubricNumbers.some((value: number) => nearlyEqual(value, expression.result))) {
-    throw new Error(`${label} rubric does not include the solved arithmetic answer`);
+    failQuizValidation('ARITHMETIC_ANSWER', `${label} rubric does not include the solved arithmetic answer`);
   }
 }
 
 /** High-confidence semantic checks; general subject truth remains the model's job. */
 export function validateQuizQuality(input: unknown, context: QuizQualityContext = {}): void {
   const quizzes = (input as any)?.quizzes;
-  if (!Array.isArray(quizzes)) throw new Error('Quiz quality validation requires quizzes');
+  if (!Array.isArray(quizzes)) {
+    failQuizValidation('QUIZ_SHAPE', 'Quiz quality validation requires quizzes');
+  }
   const seenQuestions = new Set<string>();
   const seenAnswerSets = new Set<string>();
 
   quizzes.forEach((quiz: any, quizIndex: number) => {
     if (PLACEHOLDER_PATTERN.test(quiz.title) || TRUNCATION_PATTERN.test(quiz.title)) {
-      throw new Error(`Quiz ${quizIndex + 1} title contains placeholder or truncated text`);
+      failQuizValidation('PLACEHOLDER_OR_TRUNCATION', `Quiz ${quizIndex + 1} title contains placeholder or truncated text`);
     }
     quiz.questions.forEach((question: any, questionIndex: number) => {
       const label = `Quiz ${quizIndex + 1} question ${questionIndex + 1}`;
       const normalizedQuestion = normalizeAssessmentText(question.question);
-      if (seenQuestions.has(normalizedQuestion)) throw new Error(`${label} duplicates a question from another quiz`);
+      if (seenQuestions.has(normalizedQuestion)) {
+        failQuizValidation('DUPLICATE_QUESTION', `${label} duplicates a question from another quiz`);
+      }
       seenQuestions.add(normalizedQuestion);
 
       const assessmentText = [question.question, ...(question.options || []), question.rubric || ''].filter(Boolean);
       if (assessmentText.some((value: string) => PLACEHOLDER_PATTERN.test(value) || TRUNCATION_PATTERN.test(value))) {
-        throw new Error(`${label} contains placeholder or truncated text`);
+        failQuizValidation('PLACEHOLDER_OR_TRUNCATION', `${label} contains placeholder or truncated text`);
       }
       for (const rule of FORBIDDEN_ASSESSMENT_PATTERNS) {
         if (assessmentText.some((value: string) => rule.pattern.test(value)) && !objectiveAllows(rule, context)) {
-          throw new Error(`${label} asks about teacher delivery, resources, or lesson planning`);
+          failQuizValidation('FORBIDDEN_CONTEXT', `${label} asks about teacher delivery, resources, or lesson planning`);
         }
       }
 
       if (question.type === 'multiple_choice' && question.options) {
         const answerSet = question.options.map(normalizeAssessmentText).sort().join('|');
-        if (seenAnswerSets.has(answerSet)) throw new Error(`${label} repeats an answer set from another question`);
+        if (seenAnswerSets.has(answerSet)) {
+          failQuizValidation('DUPLICATE_ANSWER_SET', `${label} repeats an answer set from another question`);
+        }
         seenAnswerSets.add(answerSet);
       }
       validateNumericOptions(question, label);
@@ -363,7 +428,7 @@ export function validateQuizResponse(
 ): void {
   const quizzes = (input as any)?.quizzes;
   if (!Array.isArray(quizzes) || quizzes.length !== quizCount) {
-    throw new Error(`LLM must return exactly ${quizCount} quizzes`);
+    failQuizValidation('QUIZ_COUNT', `LLM must return exactly ${quizCount} quizzes`);
   }
   quizzes.forEach((quiz: unknown) => validateGeneratedQuizStructure(quiz, questionsPerQuiz, directAnswerMin));
   validateQuizQuality(input, qualityContext);
@@ -927,6 +992,7 @@ function validateCandidateWithTelemetry(
       httpStatus: 200,
       validJson: true,
       validationResult: 'passed',
+      validationErrorCode: null,
       ...summarizeQuizShape(candidate.value),
       responseChars: candidate.responseChars,
       responseBytes: candidate.responseBytes,
@@ -945,6 +1011,7 @@ function validateCandidateWithTelemetry(
       httpStatus: 200,
       validJson: true,
       validationResult: 'failed',
+      validationErrorCode: quizValidationErrorCode(validationError),
       ...summarizeQuizShape(candidate.value),
       responseChars: candidate.responseChars,
       responseBytes: candidate.responseBytes,
@@ -989,9 +1056,12 @@ async function attemptGenerationWithValidation(
       diagnostics,
       qualityContext,
     );
-  } catch {
+  } catch (validationError) {
     const err: any = new Error('Quiz generation returned invalid structured output');
     err.code = 'INVALID_QUIZ_RESPONSE';
+    // Preserve only the allowlisted category across the generic public-facing
+    // wrapper. Raw validator messages and generated content are discarded.
+    err.validationErrorCode = quizValidationErrorCode(validationError);
     throw err;
   }
 }

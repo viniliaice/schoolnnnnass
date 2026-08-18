@@ -44,24 +44,36 @@ describe('lesson plan quiz generation validation', () => {
         explanation: 'Regrouping happens after combining the ones.',
       },
       {
-        type: 'direct_answer' as const,
-        question: 'Explain how to solve 46 + 28 using regrouping.',
-        options: null,
-        correctIndex: null,
-        rubric: 'A correct answer adds ones, regroups 14 ones as 1 ten and 4 ones, then adds tens to get 74.',
-      },
-      {
         type: 'multiple_choice' as const,
         question: 'What is 46 + 28?',
         options: ['74', '64', '68', '84'],
         correctIndex: 0,
         explanation: 'Adding the ones and tens with regrouping gives 74.',
       },
+      {
+        type: 'direct_answer' as const,
+        question: 'Explain how to solve 46 + 28 using regrouping.',
+        options: null,
+        correctIndex: null,
+        rubric: 'A correct answer adds ones, regroups 14 ones as 1 ten and 4 ones, then adds tens to get 74.',
+      },
     ],
   };
 
-  it('accepts a mixed quiz with multiple-choice and direct-answer questions', () => {
+  it('accepts exactly three multiple-choice questions followed by one direct answer', () => {
     expect(validateGeneratedQuiz(validQuiz)).toBe(validQuiz);
+  });
+
+  it('rejects otherwise valid questions in the wrong type order', () => {
+    expect(() => validateGeneratedQuiz({
+      ...validQuiz,
+      questions: [
+        validQuiz.questions[0],
+        validQuiz.questions[1],
+        validQuiz.questions[3],
+        validQuiz.questions[2],
+      ],
+    })).toThrow(/invalid type or position/i);
   });
 
   it('rejects direct-answer questions with options', () => {
@@ -70,8 +82,8 @@ describe('lesson plan quiz generation validation', () => {
       questions: [
         validQuiz.questions[0],
         validQuiz.questions[1],
-        { ...validQuiz.questions[2], options: ['A', 'B'] },
-        validQuiz.questions[3],
+        validQuiz.questions[2],
+        { ...validQuiz.questions[3], options: ['A', 'B'] },
       ],
     })).toThrow(/must not have options/i);
   });
@@ -82,8 +94,8 @@ describe('lesson plan quiz generation validation', () => {
       questions: [
         validQuiz.questions[0],
         validQuiz.questions[1],
-        { ...validQuiz.questions[2], rubric: '' },
-        validQuiz.questions[3],
+        validQuiz.questions[2],
+        { ...validQuiz.questions[3], rubric: '' },
       ],
     })).toThrow(/must have a rubric/i);
   });

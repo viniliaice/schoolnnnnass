@@ -7,7 +7,7 @@ vi.mock('../supabase', () => ({
 }));
 
 import { supabase } from '../supabase';
-import { createQuestion, getQuestionsByTeacher, createQuiz, getQuizWithQuestions, submitAttempt } from '../db/quizzes';
+import { createQuestion, getQuestionsByTeacher, getQuizzesByTeacher, createQuiz, getQuizWithQuestions, submitAttempt } from '../db/quizzes';
 
 vi.mock('../db/exams', () => ({
   createExam: vi.fn(),
@@ -71,6 +71,24 @@ describe('quiz DB layer', () => {
 
     const result = await getQuestionsByTeacher('t1');
     expect(result).toEqual(questions);
+  });
+
+  it('getQuizzesByTeacher excludes supervisor-generated lesson-plan previews', async () => {
+    const quizzes = [
+      { id: 'quiz-manual', teacherId: 't1', auto_generated: false },
+      { id: 'quiz-preview', teacherId: 't1', auto_generated: true },
+    ];
+    let query: ReturnType<typeof buildChain> | undefined;
+    mockFrom.mockImplementation(() => {
+      query = buildChain({ data: quizzes, error: null });
+      return query;
+    });
+
+    const result = await getQuizzesByTeacher('t1');
+
+    expect(result).toEqual([quizzes[0]]);
+    expect(query?.eq).toHaveBeenNthCalledWith(1, 'teacherId', 't1');
+    expect(query?.eq).toHaveBeenNthCalledWith(2, 'auto_generated', false);
   });
 
   it('createQuiz inserts quiz and junction rows', async () => {

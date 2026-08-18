@@ -134,22 +134,6 @@ export function LessonPlanReview() {
     }
   }, [addToast, generateQuizzesMut, selectedPlanId]);
 
-  const handleGenerateMissingAssets = useCallback(async () => {
-    if (!selectedPlanId) return;
-    setQuizError(null);
-    try {
-      await regeneratePeriodReviewMut.mutateAsync(selectedPlanId);
-      await generateQuizzesMut.mutateAsync(selectedPlanId);
-      setQuizzesOpen(true);
-      addToast({ type: 'success', title: 'AI review and quizzes generated' });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
-      setQuizError(msg);
-      console.error('[LessonPlanReview] generate missing assets failed', { error: msg });
-      addToast({ type: 'error', title: 'Failed to generate review assets', description: msg.slice(0, 400) });
-    }
-  }, [addToast, generateQuizzesMut, regeneratePeriodReviewMut, selectedPlanId]);
-
   const handleAddQuizToBank = useCallback(async (quizId: string) => {
     if (!selectedPlanId) return;
     try {
@@ -281,17 +265,6 @@ export function LessonPlanReview() {
                     <span className={cn('w-fit rounded-full px-3 py-1.5 text-xs font-semibold', STATUS_CHIP[plan.status])}>
                       {waitingOnAi ? 'AI review pending' : plan.status === 'ai_failed' ? 'AI failed' : plan.status.replace('_', ' ')}
                     </span>
-                    {!waitingOnAi && (periodAiReviews.length === 0 || quizPreviews.length === 0) && (
-                      <button
-                        type="button"
-                        onClick={handleGenerateMissingAssets}
-                        disabled={regeneratePeriodReviewMut.isPending || generateQuizzesMut.isPending}
-                        className="no-print flex min-h-11 w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-70 sm:w-auto"
-                      >
-                        {(regeneratePeriodReviewMut.isPending || generateQuizzesMut.isPending) ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
-                        {(regeneratePeriodReviewMut.isPending || generateQuizzesMut.isPending) ? t('lessonReview.generatingNow') : t('lessonReview.generateNow')}
-                      </button>
-                    )}
                     {!waitingOnAi && <button
                       type="button"
                       onClick={handleRegeneratePeriodReview}

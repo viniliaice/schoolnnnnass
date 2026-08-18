@@ -150,21 +150,57 @@ describe('lesson-plan quiz replacement ordering', () => {
     expect(mockState.events.some((event) => event.startsWith('delete:'))).toBe(false);
   });
 
-  it('defines an owner-scoped transaction that deletes and inserts inside PostgreSQL', () => {
+  it('leaves the already-applied owner-scoped migration intact', () => {
     const migration = readFileSync(
       new URL('../../../supabase/migrations/20260813_atomic_lesson_plan_quiz_replacement.sql', import.meta.url),
       'utf8',
     );
 
     expect(migration).toContain('CREATE OR REPLACE FUNCTION replace_generated_lesson_plan_quizzes');
-    expect(migration).toContain('SECURITY DEFINER');
-    expect(migration).toContain('FOR UPDATE');
     expect(migration).toContain('v_plan_teacher_id IS DISTINCT FROM v_profile_id');
+  });
+
+  it('replaces the RPC in a later migration with supervisor/admin actor authorization', () => {
+    const migration = readFileSync(
+      new URL('../../../supabase/migrations/20260818_supervisor_atomic_lesson_plan_quiz_replacement.sql', import.meta.url),
+      'utf8',
+    );
+
+    expect(migration).toContain('CREATE OR REPLACE FUNCTION replace_generated_lesson_plan_quizzes');
+    expect(migration).toContain('SECURITY DEFINER');
+    expect(migration).toContain('SELECT id, role INTO v_actor_profile_id, v_actor_role');
+    expect(migration).toContain("COALESCE(v_actor_role, '') NOT IN ('supervisor', 'admin')");
+    expect(migration).toContain('Only a supervisor or administrator may replace generated lesson-plan quizzes.');
+    expect(migration).not.toContain('v_plan_teacher_id IS DISTINCT FROM v_actor_profile_id');
+  });
+
+  it('locks the plan and requires every replacement quiz and question to belong to its teacher', () => {
+    const migration = readFileSync(
+      new URL('../../../supabase/migrations/20260818_supervisor_atomic_lesson_plan_quiz_replacement.sql', import.meta.url),
+      'utf8',
+    );
+
+    expect(migration).toContain('FOR UPDATE');
+    expect(migration).toContain("quiz.value ->> 'teacherId' IS DISTINCT FROM v_plan_teacher_id");
+    expect(migration).toContain("question.value ->> 'teacherId' IS DISTINCT FROM v_plan_teacher_id");
+    expect(migration).toContain("quiz.value ->> 'lesson_plan_id' IS DISTINCT FROM p_plan_id");
+    expect(migration).toContain("question.value ->> 'source_lesson_plan_id' IS DISTINCT FROM p_plan_id");
+  });
+
+  it('preserves validation and all delete/insert work inside one PostgreSQL function transaction', () => {
+    const migration = readFileSync(
+      new URL('../../../supabase/migrations/20260818_supervisor_atomic_lesson_plan_quiz_replacement.sql', import.meta.url),
+      'utf8',
+    );
+
+    expect(migration).toContain("jsonb_typeof(p_quizzes) IS DISTINCT FROM 'array'");
+    expect(migration).toContain('v_question_count <> v_quiz_count * 4');
     expect(migration).toContain('DELETE FROM quizzes');
     expect(migration).toContain('DELETE FROM questions');
     expect(migration).toContain('INSERT INTO quizzes');
     expect(migration).toContain('INSERT INTO questions');
     expect(migration).toContain('INSERT INTO quiz_questions');
+    expect(migration).not.toMatch(/\b(COMMIT|ROLLBACK)\b/);
     expect(migration).toContain('GRANT EXECUTE ON FUNCTION replace_generated_lesson_plan_quizzes');
   });
 });

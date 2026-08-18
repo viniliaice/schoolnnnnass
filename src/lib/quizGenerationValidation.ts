@@ -56,6 +56,13 @@ function validateGeneratedQuizStructure(input: GeneratedQuiz): GeneratedQuiz {
     if (!normalized || seen.has(normalized)) throw new Error(`Generated quiz has duplicate/empty question at ${index + 1}`);
     seen.add(normalized);
 
+    const expectedType = index < QUIZ_GENERATION_DEFAULTS.questionsPerQuiz - QUIZ_GENERATION_DEFAULTS.directAnswerMinPerQuiz
+      ? 'multiple_choice'
+      : 'direct_answer';
+    if (q.type !== expectedType) {
+      throw new Error(`Question ${index + 1} has invalid type or position`);
+    }
+
     if (q.type === 'multiple_choice') {
       if (!Array.isArray(q.options) || q.options.length !== 4 || q.options.some((option) => !strip(option))) {
         throw new Error(`Question ${index + 1} must have exactly 4 non-empty options`);
@@ -75,8 +82,8 @@ function validateGeneratedQuizStructure(input: GeneratedQuiz): GeneratedQuiz {
     }
   });
 
-  if (directCount < QUIZ_GENERATION_DEFAULTS.directAnswerMinPerQuiz) {
-    throw new Error('Generated quiz must include at least one direct-answer question');
+  if (directCount !== QUIZ_GENERATION_DEFAULTS.directAnswerMinPerQuiz) {
+    throw new Error('Generated quiz must include exactly one direct-answer question in the final position');
   }
   return input;
 }

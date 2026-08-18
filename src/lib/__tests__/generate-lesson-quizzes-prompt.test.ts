@@ -9,12 +9,14 @@ vi.mock('../supabase', () => ({
 
 import {
   PROVIDER_MAX_TOKENS,
+  QUIZ_VALIDATION_ERROR_CODES,
   buildCompactLessonContext,
   buildCompactPrompt,
   handleRequest,
   normalizeQuizResponse,
   parseGeminiResponse,
   parseQuizJson,
+  quizValidationErrorCode,
   returnResponse,
   summarizeQuizShape,
   validateQuizResponse,
@@ -265,6 +267,11 @@ describe('generate-lesson-quizzes resource optimization', () => {
     delete missingRubric.quizzes[2].questions[3].rubric;
     expect(() => validateQuizResponse(missingRubric)).toThrow(/must have a rubric/i);
 
+    const wrongQuestionOrder = makeValidResponse() as any;
+    [wrongQuestionOrder.quizzes[0].questions[0], wrongQuestionOrder.quizzes[0].questions[3]] =
+      [wrongQuestionOrder.quizzes[0].questions[3], wrongQuestionOrder.quizzes[0].questions[0]];
+    expect(() => validateQuizResponse(wrongQuestionOrder)).toThrow(/invalid type or position/i);
+
     const normalized = normalizeQuizResponse(providerResult);
     expect(normalized.quizzes).toHaveLength(3);
     expect(normalized.quizzes[0].questions).toHaveLength(4);
@@ -298,6 +305,48 @@ describe('generate-lesson-quizzes resource optimization', () => {
     expect(() => validateQuizResponse(arithmetic)).toThrow(/correctIndex does not match/i);
     arithmetic.quizzes[0].questions[0].correctIndex = 1;
     expect(() => validateQuizResponse(arithmetic)).not.toThrow();
+  });
+
+  it('maps validation failures to fixed bounded privacy-safe categories', () => {
+    const categoryFor = (value: unknown) => {
+      try {
+        validateQuizResponse(value);
+        return null;
+      } catch (error) {
+        return quizValidationErrorCode(error);
+      }
+    };
+
+    const wrongCount = makeValidResponse() as any;
+    wrongCount.quizzes.pop();
+    expect(categoryFor(wrongCount)).toBe('QUIZ_COUNT');
+
+    const wrongPosition = makeValidResponse() as any;
+    [wrongPosition.quizzes[0].questions[0], wrongPosition.quizzes[0].questions[3]] =
+      [wrongPosition.quizzes[0].questions[3], wrongPosition.quizzes[0].questions[0]];
+    expect(categoryFor(wrongPosition)).toBe('QUESTION_TYPE');
+
+    const forbiddenContext = makeValidResponse() as any;
+    forbiddenContext.quizzes[0].questions[0].question = 'Which worksheet page should the teacher assign?';
+    expect(categoryFor(forbiddenContext)).toBe('FORBIDDEN_CONTEXT');
+
+    const numericDistractor = makeValidResponse() as any;
+    numericDistractor.quizzes[0].questions[0] = {
+      type: 'multiple_choice',
+      question: 'What is 31 + 12?',
+      options: ['42', 'forty-three', '44', '53'],
+      correctIndex: 1,
+    };
+    expect(categoryFor(numericDistractor)).toBe('NUMERIC_DISTRACTOR');
+
+    expect(quizValidationErrorCode(new Error('PRIVATE_RAW_EXCEPTION_MESSAGE'))).toBe('UNKNOWN_VALIDATION');
+    expect(new Set(QUIZ_VALIDATION_ERROR_CODES).size).toBe(QUIZ_VALIDATION_ERROR_CODES.length);
+    expect(QUIZ_VALIDATION_ERROR_CODES).toEqual(expect.arrayContaining([
+      'FORBIDDEN_CONTEXT',
+      'ARITHMETIC_ANSWER',
+      'UNKNOWN_VALIDATION',
+    ]));
+    expect(QUIZ_VALIDATION_ERROR_CODES.every((code) => /^[A-Z_]{1,32}$/.test(code))).toBe(true);
   });
 
   it('extracts only model-output text from Gemini envelopes', () => {
@@ -377,6 +426,7 @@ describe('generate-lesson-quizzes resource optimization', () => {
         httpStatus: 200,
         validJson: true,
         validationResult: 'passed',
+        validationErrorCode: null,
         quizCount: 3,
         questionCounts: [4, 4, 4],
         responseChars: raw.length,
@@ -428,6 +478,7 @@ describe('generate-lesson-quizzes resource optimization', () => {
         provider: 'gemini',
         model: 'gemini-3.6-flash',
         validationResult: 'failed',
+        validationErrorCode: 'FORBIDDEN_CONTEXT',
         validJson: true,
       }),
     );
@@ -624,12 +675,19 @@ describe('generate-lesson-quizzes resource optimization', () => {
     });
   });
 
-  it('rejects invalid output after both Gemini calls without logging or returning generated content', async () => {
-    const invalidRaw = JSON.stringify({
-      quizzes: [{ title: 'DO_NOT_LOG_GENERATED_CONTENT', questions: [] }],
-    });
+  it('reports only an allowlisted category when both candidates fail validation', async () => {
+    const privateQuestion = 'PRIVATE_QUESTION: Which worksheet page should the teacher assign?';
+    const privateAnswer = 'PRIVATE_ANSWER';
+    const privateLessonContent = 'PRIVATE_LESSON_CONTENT';
+    const privateReasoning = 'PRIVATE_REASONING';
+    const invalid = makeValidResponse() as any;
+    invalid.quizzes[0].questions[0].question = privateQuestion;
+    invalid.quizzes[0].questions[0].options = [0, 1, 2, 3].map((index) => `${privateAnswer}_${index}`);
+    const invalidRaw = JSON.stringify(invalid);
+    const providerEnvelope = geminiInteraction(invalidRaw);
+    providerEnvelope.steps[0].content[0].text = privateReasoning;
     const fetchMock = vi.fn().mockImplementation(async () => {
-      return new Response(JSON.stringify(geminiInteraction(invalidRaw)), {
+      return new Response(JSON.stringify(providerEnvelope), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
@@ -638,8 +696,12 @@ describe('generate-lesson-quizzes resource optimization', () => {
     vi.stubGlobal('Deno', { env: { get: () => 'provider-key' } });
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const payload = {
+      ...samplePayload,
+      plan: { ...samplePayload.plan, title: privateLessonContent },
+    };
 
-    const response = await handleRequest(generationRequest());
+    const response = await handleRequest(generationRequest(payload));
     const body = await response.json();
 
     expect(response.status).toBe(502);
@@ -653,10 +715,30 @@ describe('generate-lesson-quizzes resource optimization', () => {
       code: 'QUIZ_GENERATION_FAILED',
       provider: 'all',
     }));
+    expect(body).not.toHaveProperty('validationErrorCode');
     expect(body).not.toHaveProperty('raw_excerpt');
+
+    const validationLogs = errorSpy.mock.calls.filter(
+      (call) => call[0] === '[generate-lesson-quizzes] validation metadata',
+    );
+    expect(validationLogs).toHaveLength(2);
+    expect(validationLogs.every((call) => (
+      (call[1] as Record<string, unknown>).validationErrorCode === 'FORBIDDEN_CONTEXT'
+    ))).toBe(true);
+
     const diagnostics = JSON.stringify([...logSpy.mock.calls, ...errorSpy.mock.calls]);
-    expect(diagnostics).not.toContain('DO_NOT_LOG_GENERATED_CONTENT');
-    expect(diagnostics).not.toContain(invalidRaw);
+    const serializedBody = JSON.stringify(body);
+    for (const secret of [
+      privateQuestion,
+      privateAnswer,
+      privateLessonContent,
+      privateReasoning,
+      'asks about teacher delivery, resources, or lesson planning',
+      invalidRaw,
+    ]) {
+      expect(diagnostics).not.toContain(secret);
+      expect(serializedBody).not.toContain(secret);
+    }
   });
 
   it('does not call Gemini when GEMINI_API_KEY is missing and reports the secret once', async () => {
