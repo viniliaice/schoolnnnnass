@@ -1,26 +1,27 @@
+// @ts-ignore -- this HTTPS module is resolved by the Deno Edge runtime.
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
-const NVIDIA_API_URL = 'https://integrate.api.nvidia.com/v1/chat/completions';
-const NVIDIA_MODEL = 'nvidia/nemotron-3-ultra-550b-a55b';
-const ZEN_API_URL = 'https://opencode.ai/zen/v1/chat/completions';
-const ZEN_MODEL = 'deepseek-v4-flash-free';
-const AI_ATTEMPT_TIMEOUT_MS = 70_000; // matches generate-lesson-review
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/interactions';
+const GEMINI_36_MODEL = 'gemini-3.6-flash';
+const GEMINI_35_LITE_MODEL = 'gemini-3.5-flash-lite';
+// Production timings ranged from 18–82 seconds. Forty-five seconds retains the
+// normal 18–40 second path while preventing one pathological generation call
+// from consuming the worker for the full 82-second outlier.
+const AI_ATTEMPT_TIMEOUT_MS = 45_000;
+const WALL_CLOCK_BUDGET_MS = 75_000;
+// Gemini 3.6 may use the request budget except for the final 15 seconds reserved
+// for Gemini 3.5 Flash-Lite.
+const FINAL_GOOGLE_ATTEMPT_RESERVED_BUDGET_MS = 15_000;
 
-/**
- * Overall wall-clock budget for a single request. Without this, the worst case
- * (VALIDATION retries x two-provider fallback x per-attempt timeout) could run
- * for minutes, past the client-side AI_REVIEW_TIMEOUT_MINUTES (3 min) watchdog.
- * Every provider attempt and repair call is capped to the remaining budget, so
- * one request can never run longer than this.
- */
-const WALL_CLOCK_BUDGET_MS = 120_000;
-
-// Retry / backoff tuning
-const PROVIDER_MAX_RETRIES = 2; // retries on 529/429 before falling back
-const VALIDATION_MAX_RETRIES = 2; // full-generation retries when structured-output validation fails
-const BASE_BACKOFF_MS = 800;
-const REPAIR_TIMEOUT_MS = 30_000;
+// The request-global schedule is Gemini 3.6 → Gemini 3.5 Flash-Lite. There are
+// no duplicate transport or structural retries.
+const MAX_PROVIDER_ATTEMPTS_PER_REQUEST = 2;
+export const PROVIDER_MAX_TOKENS = 1800;
+const MAX_REQUEST_BYTES = 250_000;
 const MAX_RESPONSE_BYTES_WARN = 50_000;
+const MAX_CONTEXT_CHARS = 3_700;
+const MAX_PROMPT_CHARS = 8_000;
+const TARGET_PROMPT_CHARS = 6_000;
 
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
@@ -35,16 +36,71 @@ interface GeneratePayload {
   questions_per_quiz?: number;
   direct_answer_min?: number;
   periods: Array<Record<string, unknown>>;
-  unit_plans?: Array<Record<string, unknown>>;
 }
+
+interface RequestDiagnostics {
+  startedAt: number;
+  providerAttempts: number;
+}
+
+interface ProviderOutput {
+  raw: string;
+  finishReason: string | null;
+  attempt: number;
+  latencyMs: number;
+}
+
+interface ParsedCandidate {
+  value: unknown;
+  responseChars: number;
+  responseBytes: number;
+  attempt: number;
+  latencyMs: number;
+}
+
+type GenerationStrategy = 'initial';
+type ProviderName = 'gemini';
+
+export interface QuizShapeDiagnostics {
+  quizCount: number | null;
+  questionCounts: Array<number | null>;
+}
+
+interface GeneratedMultipleChoice {
+  type: 'multiple_choice';
+  question: string;
+  options: string[];
+  correctIndex: number;
+  explanation?: string;
+}
+
+interface GeneratedDirectAnswer {
+  type: 'direct_answer';
+  question: string;
+  rubric: string;
+}
+
+type GeneratedQuestion = GeneratedMultipleChoice | GeneratedDirectAnswer;
+interface GeneratedQuiz { title: string; questions: GeneratedQuestion[] }
+export interface GeneratedQuizResponse { quizzes: GeneratedQuiz[] }
 
 export function errorMessage(err: unknown): string {
   if (err instanceof Error) return `${err.name}: ${err.message}`;
   return String(err);
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function diagnosticErrorCode(err: unknown): string {
+  const code = (err as { code?: unknown })?.code;
+  if (typeof code === 'string' && code) return code.slice(0, 80);
+  return err instanceof Error ? err.name.slice(0, 80) : 'UNKNOWN_ERROR';
+}
+
+/** Rule name only. Never include stems, options, or generated text. */
+export function validationRuleFromError(err: unknown): string | null {
+  if (!(err instanceof Error) || !err.message) return null;
+  const message = err.message.replace(/\s+/g, ' ').trim().slice(0, 160);
+  if (!message) return null;
+  return message;
 }
 
 /** Milliseconds left before the overall request budget expires (never negative). */
@@ -56,18 +112,19 @@ export function strip(value: string | null | undefined): string {
   return (value || '').replace(/\s+/g, ' ').trim();
 }
 
-/**
- * Requirement 5 & 9: Streamlined returnResponse with response size guard and memory diagnostics.
- * Serializes data once and measures responseBytes before returning.
- */
-export function returnResponse(data: unknown, status = 200, init?: ResponseInit): Response {
+/** Serialize the final body once, then reuse the same string for measurement and response. */
+export function returnResponse(
+  data: unknown,
+  status = 200,
+  init?: ResponseInit,
+  diagnostics?: RequestDiagnostics,
+): Response {
   const serialized = typeof data === 'string' ? data : JSON.stringify(data);
-  const responseBytes = serialized.length;
+  const responseBytes = new TextEncoder().encode(serialized).byteLength;
+  const executionMs = diagnostics ? Date.now() - diagnostics.startedAt : undefined;
+  const totalProviderAttempts = diagnostics?.providerAttempts;
 
-  // Requirement 6: Before returning
-  console.log({ responseBytes });
-
-  // Requirement 9: Response size guard
+  console.log({ responseBytes, executionMs, totalProviderAttempts });
   if (responseBytes > MAX_RESPONSE_BYTES_WARN) {
     console.warn('[generate-lesson-quizzes] warning: unexpectedly large response size', { responseBytes });
   }
@@ -80,596 +137,1068 @@ export function returnResponse(data: unknown, status = 200, init?: ResponseInit)
 }
 
 // ── Validation (mirrors src/lib/quizGenerationValidation.ts) ───────────────
-export function validateGeneratedQuiz(input: any): void {
-  if (!input?.title?.trim()) throw new Error('Generated quiz is missing a title');
-  if (!Array.isArray(input.questions) || input.questions.length < 3 || input.questions.length > 5) {
-    throw new Error('Generated quiz must contain 3–5 questions');
+export interface QuizQualityContext {
+  learningObjectives?: Array<string | null | undefined>;
+}
+
+function normalizeAssessmentText(value: string): string {
+  return strip(value)
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/^\s*(?:question|q)\s*\d+[.):\-]?\s*/i, '')
+    // Keep arithmetic operators: 12 + 3 and 12 - 3 are not duplicates.
+    .replace(/[^\p{L}\p{N}+*×÷/=-]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function validateGeneratedQuizStructure(input: any, questionsPerQuiz: number, directAnswerMin: number): void {
+  if (typeof input?.title !== 'string' || !strip(input.title)) {
+    throw new Error('Generated quiz is missing a title');
   }
+  if (!Array.isArray(input.questions) || input.questions.length !== questionsPerQuiz) {
+    throw new Error(`Generated quiz must contain exactly ${questionsPerQuiz} questions`);
+  }
+
   const seen = new Set<string>();
   let directCount = 0;
   input.questions.forEach((q: any, index: number) => {
-    const normalized = strip(q.question).toLowerCase();
+    if (typeof q?.question !== 'string') throw new Error(`Question ${index + 1} is missing question text`);
+    const normalized = normalizeAssessmentText(q.question);
     if (!normalized || seen.has(normalized)) throw new Error(`Generated quiz has duplicate/empty question at ${index + 1}`);
     seen.add(normalized);
+
     if (q.type === 'multiple_choice') {
-      if (!Array.isArray(q.options) || q.options.length !== 4) throw new Error(`Question ${index + 1} must have exactly 4 options`);
-      if (new Set(q.options.map((o: string) => strip(o).toLowerCase())).size !== 4) throw new Error(`Question ${index + 1} options are not distinct`);
-      if (!Number.isInteger(q.correctIndex) || q.correctIndex < 0 || q.correctIndex > 3) throw new Error(`Question ${index + 1} has invalid correctIndex`);
+      if (!Array.isArray(q.options) || q.options.length !== 4 || q.options.some((o: unknown) => typeof o !== 'string' || !strip(o))) {
+        throw new Error(`Question ${index + 1} must have exactly 4 non-empty options`);
+      }
+      if (new Set(q.options.map((o: string) => normalizeAssessmentText(o))).size !== 4) {
+        throw new Error(`Question ${index + 1} options are not distinct`);
+      }
+      if (!Number.isInteger(q.correctIndex) || q.correctIndex < 0 || q.correctIndex > 3) {
+        throw new Error(`Question ${index + 1} has invalid correctIndex`);
+      }
     } else if (q.type === 'direct_answer') {
       directCount += 1;
       if (q.options && q.options.length > 0) throw new Error(`Direct-answer question ${index + 1} must not have options`);
-      if (!strip(q.rubric)) throw new Error(`Direct-answer question ${index + 1} must have a rubric`);
+      if (typeof q.rubric !== 'string' || !strip(q.rubric)) {
+        throw new Error(`Direct-answer question ${index + 1} must have a rubric`);
+      }
     } else {
       throw new Error(`Question ${index + 1} has invalid type`);
     }
   });
-  if (directCount < 1) throw new Error('Generated quiz must include at least one direct-answer question');
-}
 
-/**
- * Requirement 4: Streamlined validation that checks structure without copying or stringifying large JSON.
- */
-export function validate(input: unknown): void {
-  const quizzes = (input as any)?.quizzes;
-  const expected = 3;
-  if (!Array.isArray(quizzes) || quizzes.length !== expected) {
-    throw new Error(`LLM must return exactly ${expected} quizzes`);
+  if (directCount < directAnswerMin) {
+    throw new Error(`Generated quiz must include at least ${directAnswerMin} direct-answer question(s)`);
   }
-  quizzes.forEach(validateGeneratedQuiz);
 }
 
-function findOffendingQuestions(input: unknown): Array<{ quizIndex: number; questionIndex: number }> {
-  const result: Array<{ quizIndex: number; questionIndex: number }> = [];
+interface ForbiddenAssessmentRule {
+  pattern: RegExp;
+  /** Closely matching objective language; not a category-wide exemption. */
+  objectivePattern: RegExp;
+}
+const FORBIDDEN_ASSESSMENT_PATTERNS: ForbiddenAssessmentRule[] = [
+  { pattern: /\b(?:teacher|instructor|educator)(?:'s|s)?\b/i, objectivePattern: /\b(?:teacher|instructor|educator)(?:'s|s)?\b/i },
+  { pattern: /\b(?:teaching|instructional|classroom)\s+(?:method|strategy|technique)\b/i, objectivePattern: /\b(?:teaching|instructional|classroom)\s+(?:method|strategy|technique)\b/i },
+  { pattern: /\bworksheet(?:s)?\b/i, objectivePattern: /\bworksheet(?:s)?\b/i },
+  { pattern: /\bworkbook(?:s)?\b/i, objectivePattern: /\bworkbook(?:s)?\b/i },
+  { pattern: /\btextbook(?:s)?\b/i, objectivePattern: /\btextbook(?:s)?\b/i },
+  { pattern: /\bhandout(?:s)?\b/i, objectivePattern: /\bhandout(?:s)?\b/i },
+  { pattern: /\bresource(?:s)?\b/i, objectivePattern: /\bresource(?:s)?\b/i },
+  { pattern: /\bslide(?:s|\s+number)?\b/i, objectivePattern: /\bslide(?:s|\s+number)?\b/i },
+  { pattern: /\bpage(?:\s+\d+)?\b/i, objectivePattern: /\bpage(?:s|\s+\d+)?\b/i },
+  { pattern: /\bchart(?:s)?\b/i, objectivePattern: /\bchart(?:s)?\b/i },
+  { pattern: /\bdiagram(?:s)?\b/i, objectivePattern: /\bdiagram(?:s)?\b/i },
+  { pattern: /\btable(?:s)?\b/i, objectivePattern: /\btable(?:s)?\b/i },
+  { pattern: /\bimage(?:s)?\b/i, objectivePattern: /\bimage(?:s)?\b/i },
+  { pattern: /\bpassage(?:s)?\b/i, objectivePattern: /\bpassage(?:s)?\b/i },
+  { pattern: /\blesson plan(?:ning)?\b/i, objectivePattern: /\blesson plan(?:ning)?\b/i },
+  { pattern: /\blearning objective(?:s)?\b/i, objectivePattern: /\blearning objective(?:s)?\b/i },
+  { pattern: /\b(?:period number|lesson metadata|database id|identifier|correctindex|quiz generation|json|prompt)\b/i, objectivePattern: /\b(?:period number|lesson metadata|database id|identifier|correctindex|quiz generation|json|prompt)\b/i },
+  { pattern: /\b(?:warm[- ]?up|plenary|lesson|class|period)\s+activit(?:y|ies)\b/i, objectivePattern: /\b(?:warm[- ]?up|plenary|lesson|class|period)\s+activit(?:y|ies)\b/i },
+  { pattern: /\bactivit(?:y|ies)\s+(?:in|during|from)\s+(?:the\s+)?(?:lesson|class|period)\b/i, objectivePattern: /\bactivit(?:y|ies)\s+(?:in|during|from)\s+(?:the\s+)?(?:lesson|class|period)\b/i },
+  { pattern: /\b(?:method|strategy|technique)\s+(?:used|chosen|planned)\s+(?:in|for)\s+(?:the\s+)?(?:lesson|class)\b/i, objectivePattern: /\b(?:method|strategy|technique)\s+(?:used|chosen|planned)\s+(?:in|for)\s+(?:the\s+)?(?:lesson|class)\b/i },
+  { pattern: /\b(?:attendance|group size|due date|submission instructions|grading (?:method|policy)|mark allocation|how many minutes)\b/i, objectivePattern: /\b(?:attendance|group size|due date|submission instructions|grading (?:method|policy)|mark allocation|how many minutes)\b/i },
+];
+const PLACEHOLDER_PATTERN = /(?:\b(?:tbd|todo|lorem ipsum|placeholder|answer here|fill this in)\b|\[(?:insert|replace|add)[^\]]*\]|\b(?:insert|write)\s+(?:question|answer|option|text)\s+here\b|^\s*(?:question|option)\s*[a-d1-9](?:[.?:\-]|\s*$))/i;
+const TRUNCATION_PATTERN = /(?:\[(?:context\s+)?truncated\]|(?:\.{3}|…|\betc\.)\s*$)/i;
+
+function objectiveAllows(rule: ForbiddenAssessmentRule, context: QuizQualityContext): boolean {
+  return (context.learningObjectives || []).some((objective) => (
+    typeof objective === 'string' && rule.objectivePattern.test(objective)
+  ));
+}
+
+interface NumericOption { value: number; kind: string }
+
+function parseNumericOption(value: string): NumericOption | null {
+  const normalized = strip(value).replace(/[−–—]/g, '-');
+  const match = normalized.match(/^([$£€])?\s*([+-]?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?)(%)?(?:\s*([\p{L}°]+))?$/u);
+  if (!match) return null;
+  const numericValue = Number(match[2].replace(/,/g, ''));
+  if (!Number.isFinite(numericValue)) return null;
+  const unit = (match[4] || '').toLowerCase();
+  const kind = match[1] ? `currency:${match[1]}` : match[3] ? 'percent' : unit ? `unit:${unit}` : 'number';
+  return { value: numericValue, kind };
+}
+
+function parseArithmeticExpression(question: string): { result: number } | null {
+  const normalized = question.replace(/[−–—]/g, '-');
+  const match = normalized.match(/(?:^|[^\d.])(-?\d+(?:\.\d+)?)\s*([+*×÷/]|\s[xX]\s|-)\s*(-?\d+(?:\.\d+)?)(?!\d|\.\d)/);
+  if (!match) return null;
+  const left = Number(match[1]);
+  const right = Number(match[3]);
+  const operator = match[2].trim().toLowerCase();
+  let result: number;
+  if (operator === '+') result = left + right;
+  else if (operator === '-') result = left - right;
+  else if (operator === '*' || operator === '×' || operator === 'x') result = left * right;
+  else {
+    if (right === 0) throw new Error('Arithmetic question divides by zero');
+    result = left / right;
+  }
+  if (!Number.isFinite(result)) throw new Error('Arithmetic question has a non-finite answer');
+  return { result };
+}
+
+function nearlyEqual(left: number, right: number): boolean {
+  return Math.abs(left - right) <= 1e-9 * Math.max(1, Math.abs(left), Math.abs(right));
+}
+
+function asksForArithmeticResult(question: string): boolean {
+  return /\b(?:what is|calculate|compute|solve|evaluate|find (?:the )?(?:answer|value|result|sum|difference|product|quotient)|how (?:do|would|can|should) (?:you|a student)?\s*solve|explain how to solve)\b|(?:equals|equal to)\s*\?*\s*$/i.test(question);
+}
+
+function validateNumericOptions(question: any, label: string): void {
+  if (question.type !== 'multiple_choice' || !question.options) return;
+  const parsedOptions = question.options.map(parseNumericOption);
+  const numericCount = parsedOptions.filter(Boolean).length;
+  if (numericCount > 0 && numericCount < question.options.length) {
+    throw new Error(`${label} mixes numeric answers with malformed numeric distractors`);
+  }
+  if (numericCount !== question.options.length) return;
+
+  const numericOptions = parsedOptions as NumericOption[];
+  if (new Set(numericOptions.map((option) => option.kind)).size !== 1) {
+    throw new Error(`${label} numeric distractors must use the same value type`);
+  }
+  for (let left = 0; left < numericOptions.length; left += 1) {
+    for (let right = left + 1; right < numericOptions.length; right += 1) {
+      if (nearlyEqual(numericOptions[left].value, numericOptions[right].value)) {
+        throw new Error(`${label} has duplicate numeric answer values`);
+      }
+    }
+  }
+
+  const expression = parseArithmeticExpression(question.question);
+  if (!expression || !asksForArithmeticResult(question.question)) return;
+  const matching = numericOptions
+    .map((option, index) => nearlyEqual(option.value, expression.result) ? index : -1)
+    .filter((index) => index >= 0);
+  if (matching.length !== 1) throw new Error(`${label} must contain exactly one solved arithmetic answer`);
+  if (question.correctIndex !== matching[0]) throw new Error(`${label} correctIndex does not match the solved arithmetic answer`);
+}
+
+function validateDirectArithmetic(question: any, label: string): void {
+  if (question.type !== 'direct_answer' || !question.rubric || !asksForArithmeticResult(question.question)) return;
+  const expression = parseArithmeticExpression(question.question);
+  if (!expression) return;
+  const rubricNumbers = question.rubric
+    .match(/[+-]?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?/g)
+    ?.map((value: string) => Number(value.replace(/,/g, ''))) || [];
+  if (!rubricNumbers.some((value: number) => nearlyEqual(value, expression.result))) {
+    throw new Error(`${label} rubric does not include the solved arithmetic answer`);
+  }
+}
+
+/** High-confidence semantic checks; general subject truth remains the model's job. */
+export function validateQuizQuality(input: unknown, context: QuizQualityContext = {}): void {
   const quizzes = (input as any)?.quizzes;
-  if (!Array.isArray(quizzes)) return result;
-  quizzes.forEach((quiz: any, qi: number) => {
-    if (!Array.isArray(quiz.questions)) return;
-    quiz.questions.forEach((q: any, qIdx: number) => {
-      if (q.type === 'multiple_choice' && Array.isArray(q.options) && q.options.length === 4) {
-        if (new Set(q.options.map((o: string) => strip(o).toLowerCase())).size !== 4) {
-          result.push({ quizIndex: qi, questionIndex: qIdx });
+  if (!Array.isArray(quizzes)) throw new Error('Quiz quality validation requires quizzes');
+  const seenQuestions = new Set<string>();
+  const seenAnswerSets = new Set<string>();
+
+  quizzes.forEach((quiz: any, quizIndex: number) => {
+    if (PLACEHOLDER_PATTERN.test(quiz.title) || TRUNCATION_PATTERN.test(quiz.title)) {
+      throw new Error(`Quiz ${quizIndex + 1} title contains placeholder or truncated text`);
+    }
+    quiz.questions.forEach((question: any, questionIndex: number) => {
+      const label = `Quiz ${quizIndex + 1} question ${questionIndex + 1}`;
+      const normalizedQuestion = normalizeAssessmentText(question.question);
+      if (seenQuestions.has(normalizedQuestion)) throw new Error(`${label} duplicates a question from another quiz`);
+      seenQuestions.add(normalizedQuestion);
+
+      const assessmentText = [question.question, ...(question.options || []), question.rubric || ''].filter(Boolean);
+      if (assessmentText.some((value: string) => PLACEHOLDER_PATTERN.test(value) || TRUNCATION_PATTERN.test(value))) {
+        throw new Error(`${label} contains placeholder or truncated text`);
+      }
+      for (const rule of FORBIDDEN_ASSESSMENT_PATTERNS) {
+        if (assessmentText.some((value: string) => rule.pattern.test(value)) && !objectiveAllows(rule, context)) {
+          throw new Error(`${label} asks about teacher delivery, resources, or lesson planning`);
         }
       }
+
+      if (question.type === 'multiple_choice' && question.options) {
+        const answerSet = question.options.map(normalizeAssessmentText).sort().join('|');
+        if (seenAnswerSets.has(answerSet)) throw new Error(`${label} repeats an answer set from another question`);
+        seenAnswerSets.add(answerSet);
+      }
+      validateNumericOptions(question, label);
+      validateDirectArithmetic(question, label);
     });
   });
-  return result;
 }
 
-/**
- * Requirement 7: Compress lesson context into concise text instead of dumping raw JSON.
- * Requirement 8: Eliminate unnecessary unit_plans data completely.
- */
-export function buildCompactLessonContext(payload: GeneratePayload): string {
+function qualityContextFromPayload(payload: GeneratePayload): QuizQualityContext {
   const plan = payload.plan || {};
-  const className = strip(String(plan.class_name || plan.class || ''));
-  const grade = strip(String(plan.grade || '')) || (className.match(/\d+/)?.[0] || className);
-  const subject = strip(payload.subject || String(plan.subject || ''));
-  const lessonTitle = strip(String(plan.title || plan.lesson_title || ''));
+  return {
+    learningObjectives: [
+      plan.objective,
+      plan.learning_objective,
+      ...(payload.periods || []).flatMap((period) => [period.objective, period.learning_objective]),
+    ].filter((value): value is string => typeof value === 'string'),
+  };
+}
 
-  // Requirement 1 & 8: Only the periods for this subject; omit unit_plans entirely.
-  const subjectPeriods = (payload.periods || []).filter((p) => {
-    if (!p) return false;
-    const pSub = strip(String(p.subject || ''));
-    return !pSub || pSub.toLowerCase() === subject.toLowerCase();
-  });
+export function validateQuizResponse(
+  input: unknown,
+  quizCount = 3,
+  questionsPerQuiz = 4,
+  directAnswerMin = 1,
+  qualityContext: QuizQualityContext = {},
+): void {
+  const quizzes = (input as any)?.quizzes;
+  if (!Array.isArray(quizzes) || quizzes.length !== quizCount) {
+    throw new Error(`LLM must return exactly ${quizCount} quizzes`);
+  }
+  quizzes.forEach((quiz: unknown) => validateGeneratedQuizStructure(quiz, questionsPerQuiz, directAnswerMin));
+  validateQuizQuality(input, qualityContext);
+}
 
-  const topics = Array.from(new Set(subjectPeriods.map((p) => strip(String(p.topic || ''))).filter(Boolean)));
+// Backward-compatible export used by the existing focused tests.
+export function validate(input: unknown): void {
+  validateQuizResponse(input);
+}
 
-  const objectives = Array.from(
-    new Set(
-      subjectPeriods
-        .map((p) => strip(String(p.objective || p.learning_objective || '')))
-        .concat(strip(String(plan.objective || plan.learning_objective || '')))
-        .filter(Boolean)
-    )
+/** Bounded structural metadata for diagnostics; never includes generated content. */
+export function summarizeQuizShape(input: unknown): QuizShapeDiagnostics {
+  const quizzes = (input as any)?.quizzes;
+  if (!Array.isArray(quizzes)) return { quizCount: null, questionCounts: [] };
+  return {
+    quizCount: quizzes.length,
+    questionCounts: quizzes.slice(0, 10).map((quiz: any) => (
+      Array.isArray(quiz?.questions) ? quiz.questions.length : null
+    )),
+  };
+}
+
+/** Drop provider-added metadata and retain only fields consumed by the client. */
+export function normalizeQuizResponse(input: unknown): GeneratedQuizResponse {
+  const quizzes = (input as any).quizzes.map((quiz: any) => ({
+    title: strip(quiz.title),
+    questions: quiz.questions.map((question: any) => {
+      if (question.type === 'multiple_choice') {
+        const normalized: GeneratedMultipleChoice = {
+          type: 'multiple_choice',
+          question: strip(question.question),
+          options: question.options.map((option: string) => strip(option)),
+          correctIndex: question.correctIndex,
+        };
+        if (typeof question.explanation === 'string' && strip(question.explanation)) {
+          normalized.explanation = strip(question.explanation);
+        }
+        return normalized;
+      }
+      return {
+        type: 'direct_answer' as const,
+        question: strip(question.question),
+        rubric: strip(question.rubric),
+      };
+    }),
+  }));
+  return { quizzes };
+}
+
+function boundedText(value: unknown, maxChars: number): string {
+  if (value === null || value === undefined) return '';
+  const raw = String(value);
+  // Avoid normalizing an unbounded metadata value before truncating it.
+  const boundedRaw = raw.length > maxChars * 4 ? raw.slice(0, maxChars * 4) : raw;
+  return strip(boundedRaw).slice(0, maxChars).trim();
+}
+
+function boundedEducationalLabel(value: unknown, maxChars: number, fallback: string): string {
+  const label = boundedText(value, maxChars);
+  const uuidPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+  return !label || uuidPattern.test(label) ? fallback : label;
+}
+
+function truncateDeterministically(value: string, maxChars: number): string {
+  if (value.length <= maxChars) return value;
+  const marker = '\n… [context truncated]';
+  return `${value.slice(0, Math.max(0, maxChars - marker.length)).trimEnd()}${marker}`;
+}
+
+/** Build only the bounded lesson facts the model needs; database metadata is ignored. */
+export function buildCompactLessonContext(payload: GeneratePayload, maxChars = MAX_CONTEXT_CHARS): string {
+  const plan = payload.plan || {};
+  const className = boundedText(plan.class_name || plan.class, 120);
+  const grade = boundedText(plan.grade, 60) || boundedText(className.match(/\d+/)?.[0] || className, 60);
+  const sourceSubject = boundedText(payload.subject || plan.subject, 160);
+  const subject = boundedEducationalLabel(sourceSubject, 160, 'Lesson subject');
+  const lessonTitle = boundedText(plan.title || plan.lesson_title, 320);
+
+  const subjectPeriods = (payload.periods || [])
+    .filter((period) => {
+      if (!period) return false;
+      const periodSubject = boundedText(period.subject, 160);
+      return !periodSubject || periodSubject.toLowerCase() === sourceSubject.toLowerCase();
+    })
+    .slice(0, 24);
+
+  const uniqueValues = (values: unknown[], itemLimit: number, charLimit: number): string[] => {
+    const unique = new Set<string>();
+    for (const value of values) {
+      const text = boundedText(value, charLimit);
+      if (text) unique.add(text);
+      if (unique.size >= itemLimit) break;
+    }
+    return [...unique];
+  };
+
+  const topics = uniqueValues(subjectPeriods.map((period) => period.topic), 12, 180);
+  const objectives = uniqueValues(
+    [plan.objective, plan.learning_objective, ...subjectPeriods.map((period) => period.objective || period.learning_objective)],
+    12,
+    260,
   );
 
-  const vocabItems = new Set<string>();
-  const addVocab = (val: unknown) => {
-    if (!val) return;
-    if (Array.isArray(val)) {
-      val.forEach((v) => {
-        const s = strip(String(v || ''));
-        if (s) vocabItems.add(s);
-      });
-    } else if (typeof val === 'string') {
-      val.split(/[,;\n]/).forEach((v) => {
-        const s = strip(v);
-        if (s) vocabItems.add(s);
-      });
+  const vocabulary: string[] = [];
+  const seenVocabulary = new Set<string>();
+  const addVocabulary = (value: unknown) => {
+    if (seenVocabulary.size >= 32 || !value) return;
+    const candidates = Array.isArray(value)
+      ? value.slice(0, 32)
+      : String(value).slice(0, 3_000).split(/[,;\n]/).slice(0, 32);
+    for (const candidate of candidates) {
+      const word = boundedText(candidate, 80);
+      const key = word.toLowerCase();
+      if (word && !seenVocabulary.has(key)) {
+        seenVocabulary.add(key);
+        vocabulary.push(word);
+      }
+      if (seenVocabulary.size >= 32) break;
     }
   };
-  addVocab(plan.vocabulary);
-  addVocab(plan.vocab);
-  addVocab(plan.keywords);
-  subjectPeriods.forEach((p) => {
-    addVocab(p.vocabulary);
-    addVocab(p.vocab);
-    addVocab(p.keywords);
+  addVocabulary(plan.vocabulary);
+  addVocabulary(plan.vocab);
+  addVocabulary(plan.keywords);
+  subjectPeriods.forEach((period) => {
+    addVocabulary(period.vocabulary);
+    addVocabulary(period.vocab);
+    addVocabulary(period.keywords);
   });
 
-  const activitiesList: string[] = [];
-  subjectPeriods.forEach((p, idx) => {
-    const periodNumber = p.period_number ?? (idx + 1);
-    const parts: string[] = [];
-    const topic = strip(String(p.topic || ''));
-    if (topic) parts.push(`Topic: ${topic}`);
-    const obj = strip(String(p.objective || ''));
-    if (obj) parts.push(`Objective: ${obj}`);
+  // Delivery activities/details are deliberately omitted. They describe how a
+  // teacher runs the lesson and previously crowded out the student-learning
+  // facts that questions should assess.
+  const sections: string[] = [
+    className && `Class: ${className}`,
+    grade && `Grade: ${grade}`,
+    subject && `Subject: ${subject}`,
+    lessonTitle && `Lesson title: ${lessonTitle}`,
+    topics.length > 0 && `Student topics:\n${topics.map((topic) => `- ${topic}`).join('\n')}`,
+    objectives.length > 0 && `Student learning objectives:\n${objectives.map((objective) => `- ${objective}`).join('\n')}`,
+    vocabulary.length > 0 && `Student vocabulary: ${vocabulary.join(', ')}`,
+  ].filter((section): section is string => Boolean(section));
 
-    let actStr = strip(String(p.activities || ''));
-    if (actStr) {
-      if (actStr.length > 200) actStr = actStr.slice(0, 200) + '...';
-      parts.push(`Activity: ${actStr}`);
-    }
-    if (Array.isArray(p.details) && p.details.length > 0) {
-      const detailActs = p.details
-        .map((d: any) => strip(String(d?.activity || '')))
-        .filter(Boolean)
-        .slice(0, 4);
-      if (detailActs.length > 0) {
-        parts.push(`Key actions: ${detailActs.join('; ')}`);
-      }
-    }
-    if (parts.length > 0) {
-      activitiesList.push(`[Period ${periodNumber}] ${parts.join(' | ')}`);
-    }
-  });
-
-  const lines: string[] = [];
-  if (className) lines.push(`Class: ${className}`);
-  if (grade) lines.push(`Grade: ${grade}`);
-  if (subject) lines.push(`Subject: ${subject}`);
-  lines.push('');
-
-  if (lessonTitle) {
-    lines.push('Lesson:');
-    lines.push(lessonTitle);
-    lines.push('');
-  }
-  if (topics.length > 0) {
-    lines.push('Topics:');
-    topics.forEach((t) => lines.push(`- ${t}`));
-    lines.push('');
-  }
-  if (objectives.length > 0) {
-    lines.push('Objectives:');
-    objectives.forEach((o) => lines.push(`- ${o}`));
-    lines.push('');
-  }
-  if (vocabItems.size > 0) {
-    lines.push('Vocabulary:');
-    vocabItems.forEach((v) => lines.push(`- ${v}`));
-    lines.push('');
-  }
-  if (activitiesList.length > 0) {
-    lines.push('Activities:');
-    activitiesList.forEach((a) => lines.push(a));
-    lines.push('');
-  }
-
-  let text = lines.join('\n').trim();
-  if (text.length > 3500) {
-    text = text.slice(0, 3500) + '\n... [truncated for token budget]';
-  }
-  return text;
+  return truncateDeterministically(sections.join('\n\n'), Math.max(0, maxChars));
 }
 
-/**
- * Requirement 1: Build a minimal prompt (< 6000 chars target, hard limit 8000).
- * Requirement 3: Request only fields actually consumed (explanation for MCQ, rubric for direct answer).
- */
+/** Build a strict prompt whose normal path is below 6,000 chars and can never exceed 8,000. */
 export function buildCompactPrompt(payload: GeneratePayload): string {
-  const quizCount = payload.quiz_count ?? 3;
-  const questionsPerQuiz = payload.questions_per_quiz ?? 4;
-  const directAnswerMin = payload.direct_answer_min ?? 1;
+  // Quiz generation is intentionally fixed to the existing client contract.
+  const quizCount = 3;
+  const questionsPerQuiz = 4;
+  const instructions = `Generate rigorous, age-appropriate quizzes from the lesson context.
 
-  const prompt = `Generate lesson-plan quizzes as strict JSON only.
+OUTPUT CONTRACT — every rule is mandatory:
+- Return ONLY one valid JSON object. No markdown, prose, commentary, or code fences.
+- Return exactly ${quizCount} quizzes. Do not return 2, 4, or any other number. Do not omit a quiz.
+- Each quiz must contain exactly ${questionsPerQuiz} questions. Do not return 3, 5, or any other number.
+- In EACH quiz, questions 1–3 must be multiple_choice and question 4 must be direct_answer.
+- Use no fields except those shown in the exact object shapes below.
 
-Required schema:
-{
-  "quizzes": [
-    {
-      "title": "string",
-      "questions": [
-        {
-          "type": "multiple_choice",
-          "question": "string",
-          "options": ["A option", "B option", "C option", "D option"],
-          "correctIndex": 0,
-          "explanation": "brief explanation"
-        },
-        {
-          "type": "direct_answer",
-          "question": "string",
-          "rubric": "brief scoring rubric"
-        }
-      ]
-    }
-  ]
-}
+Exact root and object shapes:
+{"quizzes":[{"title":"concise title","questions":[{"type":"multiple_choice","question":"concise question","options":["concise option 1","concise option 2","concise option 3","concise option 4"],"correctIndex":0},{"type":"multiple_choice","question":"concise question","options":["concise option 1","concise option 2","concise option 3","concise option 4"],"correctIndex":1},{"type":"multiple_choice","question":"concise question","options":["concise option 1","concise option 2","concise option 3","concise option 4"],"correctIndex":2},{"type":"direct_answer","question":"concise question","rubric":"one short scoring sentence"}]}]}
+The example shows one quiz object only to define its fields. The actual "quizzes" array MUST repeat that quiz object shape exactly ${quizCount} times.
 
-Rules:
-- Return exactly ${quizCount} quizzes.
-- Each quiz has exactly ${questionsPerQuiz} questions.
-- Each quiz must include at least ${directAnswerMin} direct_answer question(s).
-- multiple_choice: exactly 4 options, correctIndex 0-3, and an explanation. Do NOT include a rubric field.
-- CRITICAL: All 4 multiple_choice options must be pairwise distinct after trimming whitespace and ignoring case (e.g. "24 + 18" and "24+18" or "Berlin" and " berlin " count as duplicates and will be rejected). Each distractor must represent a DIFFERENT plausible misconception.
-- direct_answer: provide a non-empty rubric. Do NOT include options, correctIndex, or explanation fields.
-- Questions must be specific to the lesson objective/topic/activity and age-appropriate for the grade.
-- No repeated question stems inside a quiz.
-- Keep every explanation/rubric to one short sentence. Output ONLY the fields shown in the schema above — no extra fields.
-- Output only valid JSON, no markdown fences.
+Student-assessment rules:
+- Assess only what STUDENTS know, understand, apply, or reason about from the supplied student topics and learning objectives.
+- NEVER ask about the teacher, lesson administration, planning decisions, activities, teaching methods, resources, worksheets, workbooks, textbook pages, slides, charts/diagrams not supplied here, metadata, IDs, prompts, or quiz construction. A normally forbidden item is allowed only when the student learning objective explicitly asks students to learn that item.
+- Match the class/grade. Use concrete, simple recall or application for KG and early primary; do not force abstract higher-order reasoning. Use suitably deeper application or reasoning only for older grades.
+- Vary the angle across all 12 questions (knowledge, understanding, application, or reasoning as age-appropriate). Do not repeat or lightly reword a stem or answer set across quizzes.
+- Every multiple_choice has exactly 4 meaningful, pairwise-distinct options and correctIndex 0–3.
+- Each wrong option must be a plausible same-type answer based on a different likely student mistake or misconception; never use nonsense, malformed values, or differences only in spacing/punctuation.
+- For every mathematical question, solve it independently before writing options. Include exactly one correct value, make correctIndex point to it, and re-check the operation. Numeric distractors must be valid, distinct, same-type values caused by plausible errors. For direct arithmetic, state the solved answer in the rubric.
+- Every direct_answer has a non-empty rubric and no options, correctIndex, or explanation. It must assess student learning, not lesson delivery.
+- Do not include explanations or rationales. Keep all questions, options, titles, and rubrics complete and concise; never use placeholders or truncated text.
+- Use only the supplied class/grade, subject, lesson title, student topics, student learning objectives, and vocabulary.
 
-One-shot example — CORRECT (4 pairwise-distinct options):
-{
-  "type": "multiple_choice",
-  "question": "Muna has 24 pencils and gets 18 more. Which sum should she solve?",
-  "options": ["24 + 18", "24 - 18", "18 × 2", "24 + 8"],
-  "correctIndex": 0,
-  "explanation": "We add 24 and 18 to find the total pencils."
-}
+Lesson context:
+`;
 
-One-shot example — INCORRECT (REJECTED: "24 + 18", "24+18", and "24 + 18 " are the same option after trim + lowercase):
-{
-  "type": "multiple_choice",
-  "question": "Muna has 24 pencils and gets 18 more. Which sum should she solve?",
-  "options": ["24 + 18", "24+18", "24 + 18 ", "24 - 18"],
-  "correctIndex": 0
-}
+  const targetContextLimit = Math.max(0, TARGET_PROMPT_CHARS - instructions.length - 1);
+  const hardContextLimit = Math.max(0, MAX_PROMPT_CHARS - instructions.length);
+  const context = buildCompactLessonContext(payload, Math.min(MAX_CONTEXT_CHARS, targetContextLimit, hardContextLimit));
+  const prompt = `${instructions}${context}`;
 
-Lesson Context:
-${buildCompactLessonContext(payload)}`;
-
-  console.log('[generate-lesson-quizzes] prompt built', { promptChars: prompt.length });
-  if (prompt.length > 6000) {
-    console.warn('[generate-lesson-quizzes] prompt exceeds 6000-char target', { promptChars: prompt.length });
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    // Defensive invariant: context is already bounded, so reaching this means a
+    // future instruction change bypassed the budget and must not hit a provider.
+    throw new Error(`Prompt exceeds hard maximum of ${MAX_PROMPT_CHARS} characters`);
   }
-  // Enforce hard maximum of 8000 characters
-  if (prompt.length > 8000) {
-    return prompt.slice(0, 8000);
+  if (prompt.length >= TARGET_PROMPT_CHARS) {
+    console.warn('[generate-lesson-quizzes] prompt reached target ceiling', { promptChars: prompt.length });
   }
   return prompt;
 }
 
-function buildRepairPrompt(original: unknown, offending: Array<{ quizIndex: number; questionIndex: number }>): string {
-  const offendersDesc = offending.map(({ quizIndex, questionIndex }) => `quiz ${quizIndex + 1} question ${questionIndex + 1}`).join(', ');
-  const origStr = typeof original === 'string' ? original : JSON.stringify(original);
-  const truncatedOrig = origStr.length > 3000 ? origStr.slice(0, 3000) + '... [truncated]' : origStr;
-  return `You previously generated quizzes but the following questions failed validation because their 4 answer options were not distinct (duplicates after trimming whitespace and ignoring case): ${offendersDesc}.
-
-Fix ONLY those questions. For each offending multiple_choice question, regenerate its "options" array so all 4 strings are pairwise distinct after trimming and lowercasing, and each distractor represents a different plausible misconception. Keep the same question stem, correct answer position (correctIndex), and all other quizzes/questions exactly as they were.
-
-Return the FULL JSON again with the same schema:
-{ "quizzes": [...] }
-
-Offending indices: ${JSON.stringify(offending)}
-
-Original JSON you produced:
-${truncatedOrig}
-
-Rules for the fix:
-- Each fixed question must have exactly 4 distinct options (case-insensitive, whitespace-insensitive).
-- Do not create near-duplicates like "24 + 18" vs "24+18".
-- Keep correctIndex pointing to the correct answer.
-- Output only valid JSON, no markdown fences.`;
+/** Parse exact JSON or a harmless markdown/prose wrapper around one balanced object. */
+export function parseQuizJson(content: string): unknown {
+  const cleaned = content.replace(/^\uFEFF/, '').trim();
+  try {
+    return JSON.parse(cleaned);
+  } catch {
+    // Providers occasionally wrap an otherwise valid object. Scan balanced
+    // object boundaries while respecting quoted braces and escapes; never
+    // synthesize, duplicate, truncate, or otherwise repair generated content.
+    let firstCandidate: unknown;
+    let hasCandidate = false;
+    for (let start = 0; start < cleaned.length; start += 1) {
+      if (cleaned[start] !== '{') continue;
+      let depth = 0;
+      let inString = false;
+      let escaped = false;
+      for (let index = start; index < cleaned.length; index += 1) {
+        const char = cleaned[index];
+        if (inString) {
+          if (escaped) escaped = false;
+          else if (char === '\\') escaped = true;
+          else if (char === '"') inString = false;
+          continue;
+        }
+        if (char === '"') {
+          inString = true;
+        } else if (char === '{') {
+          depth += 1;
+        } else if (char === '}') {
+          depth -= 1;
+          if (depth === 0) {
+            try {
+              const parsed = JSON.parse(cleaned.slice(start, index + 1));
+              if (parsed && typeof parsed === 'object' && Object.prototype.hasOwnProperty.call(parsed, 'quizzes')) {
+                return parsed;
+              }
+              if (!hasCandidate) {
+                firstCandidate = parsed;
+                hasCandidate = true;
+              }
+            } catch {
+              // This balanced span was not JSON; continue at the next opening brace.
+            }
+            break;
+          }
+        }
+      }
+    }
+    if (hasCandidate) return firstCandidate;
+  }
+  throw new SyntaxError('No complete valid JSON object found in provider response');
 }
 
-function parseJson(content: string) {
-  const cleaned = content.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-  return JSON.parse(cleaned);
+/** Extract text output only from Gemini Interactions model-output steps. */
+export function parseGeminiResponse(body: unknown): Pick<ProviderOutput, 'raw' | 'finishReason'> {
+  const interaction = body as any;
+  let raw = '';
+  if (Array.isArray(interaction?.steps)) {
+    for (const step of interaction.steps) {
+      if (step?.type !== 'model_output' || !Array.isArray(step.content)) continue;
+      for (const block of step.content) {
+        if (block?.type === 'text' && typeof block.text === 'string') raw += block.text;
+      }
+    }
+  }
+  return {
+    raw: raw.trim(),
+    finishReason: typeof interaction?.status === 'string' ? interaction.status : null,
+  };
 }
 
-function isRetriableStatus(status: number): boolean {
-  return status === 429 || status === 529 || status === 502 || status === 503 || status === 504;
+function providerForUrl(url: string): ProviderName {
+  if (url === GEMINI_API_URL) return 'gemini';
+  throw new Error('Unsupported quiz provider URL');
 }
 
-/**
- * Requirement 2: Reduced token budget (1800 max_tokens).
- * Requirement 6: Measure memory hotspots (promptChars before call, responseChars after response).
- */
+// Both Gemini models receive the same exact 3×4 JSON Schema. Application
+// validation still checks semantic constraints such as non-empty/distinct
+// options before returning.
+const MULTIPLE_CHOICE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    type: { type: 'string', enum: ['multiple_choice'] },
+    question: { type: 'string' },
+    options: {
+      type: 'array',
+      minItems: 4,
+      maxItems: 4,
+      items: { type: 'string' },
+    },
+    correctIndex: { type: 'integer', enum: [0, 1, 2, 3] },
+  },
+  required: ['type', 'question', 'options', 'correctIndex'],
+};
+
+const DIRECT_ANSWER_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    type: { type: 'string', enum: ['direct_answer'] },
+    question: { type: 'string' },
+    rubric: { type: 'string' },
+  },
+  required: ['type', 'question', 'rubric'],
+};
+
+const QUIZ_RESPONSE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    quizzes: {
+      type: 'array',
+      minItems: 3,
+      maxItems: 3,
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          title: { type: 'string' },
+          questions: {
+            type: 'array',
+            minItems: 4,
+            maxItems: 4,
+            prefixItems: [
+              MULTIPLE_CHOICE_SCHEMA,
+              MULTIPLE_CHOICE_SCHEMA,
+              MULTIPLE_CHOICE_SCHEMA,
+              DIRECT_ANSWER_SCHEMA,
+            ],
+          },
+        },
+        required: ['title', 'questions'],
+      },
+    },
+  },
+  required: ['quizzes'],
+};
+
+async function sendProviderRequest(
+  prompt: string,
+  apiKey: string,
+  signal: AbortSignal,
+  url: string,
+  model: string,
+): Promise<Response> {
+  // The provider body is serialized exactly once in this short-lived scope.
+  const serializedRequest = JSON.stringify({
+    model,
+    input: prompt,
+    system_instruction: 'Generate rigorous school quizzes and output only the schema-conforming JSON result.',
+    response_format: {
+      type: 'text',
+      mime_type: 'application/json',
+      schema: QUIZ_RESPONSE_SCHEMA,
+    },
+    generation_config: {
+      max_output_tokens: PROVIDER_MAX_TOKENS,
+      thinking_level: 'minimal',
+    },
+  });
+  return fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': apiKey },
+    body: serializedRequest,
+    signal,
+  });
+}
+
+/** Make one provider HTTP call and retain only its completion text. */
 async function callProvider(
   prompt: string,
   apiKey: string,
   signal: AbortSignal,
-  url = ZEN_API_URL,
-  model = ZEN_MODEL,
-): Promise<{ parsed: unknown; raw: string }> {
-  // Requirement 6: Before provider call
-  console.log({ promptChars: prompt.length });
-  console.log('[generate-lesson-quizzes] provider request', { provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen', model, promptChars: prompt.length });
+  diagnostics: RequestDiagnostics,
+  url: string,
+  model: string,
+  strategy: GenerationStrategy = 'initial',
+): Promise<ProviderOutput> {
+  if (prompt.length > MAX_PROMPT_CHARS) {
+    throw new Error(`Prompt exceeds hard maximum of ${MAX_PROMPT_CHARS} characters`);
+  }
+  if (diagnostics.providerAttempts >= MAX_PROVIDER_ATTEMPTS_PER_REQUEST) {
+    const guardError: any = new Error('Provider attempt guard reached');
+    guardError.code = 'PROVIDER_ATTEMPT_GUARD';
+    throw guardError;
+  }
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({
-      model,
-      messages: [
-        { role: 'system', content: 'You generate rigorous school quiz questions from lesson plans. Output only valid JSON.' },
-        { role: 'user', content: prompt },
-      ],
-      temperature: 0.7,
-      top_p: 0.9,
-      max_tokens: 4096,
-      stream: false,
-    }),
-    signal,
+  diagnostics.providerAttempts += 1;
+  const attempt = diagnostics.providerAttempts;
+  const provider = providerForUrl(url);
+  const startedAt = Date.now();
+  console.log('[generate-lesson-quizzes] provider request', {
+    provider,
+    model,
+    strategy,
+    attempt,
+    promptChars: prompt.length,
+    maxTokens: PROVIDER_MAX_TOKENS,
+    totalProviderAttempts: diagnostics.providerAttempts,
   });
 
+  const response = await sendProviderRequest(prompt, apiKey, signal, url, model);
+  let responseText = await response.text();
+  const responseChars = responseText.length;
+  const responseBytes = new TextEncoder().encode(responseText).byteLength;
+  const latencyMs = Date.now() - startedAt;
   if (!response.ok) {
-    const body = await response.text();
-    console.error('[generate-lesson-quizzes] provider error', { provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen', model, status: response.status, body: body.slice(0, 1000) });
-    const err: any = new Error(`${model} API error: ${response.status} ${body.slice(0, 500)}`);
+    // Provider text is measured but never logged or returned.
+    const err: any = new Error(`${model} API error: HTTP ${response.status}`);
     err.status = response.status;
-    err.body = body;
+    err.code = 'PROVIDER_HTTP_ERROR';
+    err.attempt = attempt;
+    err.responseChars = responseChars;
+    err.responseBytes = responseBytes;
+    err.latencyMs = latencyMs;
     throw err;
   }
 
-  const body = await response.json();
-  const choice = body?.choices?.[0];
-  const msg = choice?.message ?? choice?.delta ?? {};
-  const raw = (
-    typeof msg.content === 'string'
-      ? msg.content
-      : typeof choice?.text === 'string'
-        ? choice.text
-        : typeof msg.reasoning_content === 'string'
-          ? msg.reasoning_content
-          : ''
-  ).trim();
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(responseText);
+    responseText = '';
+  } catch {
+    const err: any = new Error('Provider returned an invalid JSON envelope');
+    err.status = response.status;
+    err.code = 'INVALID_PROVIDER_ENVELOPE';
+    err.attempt = attempt;
+    err.validJson = false;
+    err.responseChars = responseChars;
+    err.responseBytes = responseBytes;
+    err.latencyMs = latencyMs;
+    throw err;
+  }
 
-  if (!raw) {
-    // Some gateways return HTTP 200 with an empty body or an error object instead
-    // of a completion (seen in production as "Empty LLM response" from zen). Log
-    // the real shape so we can diagnose instead of guessing. finish_reason of
-    // "length" would indicate the max_tokens budget was exhausted by reasoning.
-    console.error('[generate-lesson-quizzes] provider returned empty content', {
-      provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-      model,
-      status: response.status,
-      finishReason: choice?.finish_reason ?? null,
-      bodyKeys: body && typeof body === 'object' ? Object.keys(body) : [],
-      body: JSON.stringify(body).slice(0, 2000),
-    });
+  const output = parseGeminiResponse(envelope);
+  if (!output.raw) {
     const err: any = new Error('Empty LLM response');
     err.status = response.status;
-    err.retriable = true;
+    err.code = 'EMPTY_PROVIDER_RESPONSE';
+    err.attempt = attempt;
+    err.validJson = true;
+    err.responseChars = responseChars;
+    err.responseBytes = responseBytes;
+    err.latencyMs = latencyMs;
     throw err;
   }
 
-  // Requirement 6: After provider response
-  console.log({ responseChars: raw.length });
-
-  // A model output we cannot parse as JSON is a generation-quality problem, not a
-  // transport error. Return it with parsed:null so the validation retry loop runs
-  // (full re-prompt + repair attempts) and the final error carries the raw text
-  // for the client raw_excerpt, instead of treating it as a provider fallback.
-  let parsed: unknown = null;
-  try {
-    parsed = parseJson(raw);
-  } catch (parseErr) {
-    console.error('[generate-lesson-quizzes] provider returned invalid JSON', {
-      provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-      model,
-      finishReason: choice?.finish_reason ?? null,
-      rawExcerpt: raw.slice(0, 1500),
-    });
-  }
-  return { parsed, raw };
+  return { ...output, attempt, latencyMs };
 }
 
-async function callProviderWithRetry(
+async function callProviderWithTimeout(
   prompt: string,
   apiKey: string,
   url: string,
   model: string,
   timeoutMs: number,
   deadline: number,
-): Promise<{ parsed: unknown; raw: string }> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= PROVIDER_MAX_RETRIES; attempt++) {
-    const remaining = remainingMs(deadline);
-    if (remaining <= 0) {
-      const budgetErr: any = new Error('Quiz generation wall-clock budget exceeded');
-      budgetErr.code = 'WALL_CLOCK_BUDGET_EXCEEDED';
-      throw budgetErr;
-    }
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
-    try {
-      const result = await callProvider(prompt, apiKey, controller.signal, url, model);
-      clearTimeout(timeout);
-      if (attempt > 0) console.log('[generate-lesson-quizzes] provider retry succeeded', { provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen', attempt: attempt + 1 });
-      return result;
-    } catch (err: any) {
-      clearTimeout(timeout);
-      lastError = err;
-      const status: number | undefined = err?.status;
-      const isAbort = err?.name === 'AbortError';
-      const retriable = !isAbort && (err?.retriable === true || (status !== undefined && isRetriableStatus(status)));
-      console.error('[generate-lesson-quizzes] provider attempt failed', {
-        provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-        attempt: attempt + 1,
-        status,
-        retriable,
-        error: errorMessage(err).slice(0, 1000),
-      });
-      if (!retriable || attempt === PROVIDER_MAX_RETRIES) break;
-      const backoff = BASE_BACKOFF_MS * Math.pow(2, attempt) + Math.random() * 400;
-      console.log('[generate-lesson-quizzes] backing off before retry', { ms: Math.round(backoff), nextAttempt: attempt + 2 });
-      await sleep(backoff);
-    }
+  diagnostics: RequestDiagnostics,
+  strategy: GenerationStrategy,
+): Promise<ProviderOutput> {
+  const remaining = remainingMs(deadline);
+  if (remaining <= 0) {
+    const budgetError: any = new Error('Quiz generation wall-clock budget exceeded');
+    budgetError.code = 'WALL_CLOCK_BUDGET_EXCEEDED';
+    throw budgetError;
   }
-  throw lastError;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), Math.min(timeoutMs, remaining));
+  const attemptStartedAt = Date.now();
+  try {
+    return await callProvider(prompt, apiKey, controller.signal, diagnostics, url, model, strategy);
+  } catch (err: any) {
+    const status: number | undefined = err?.status;
+    console.error('[generate-lesson-quizzes] provider attempt failed', {
+      provider: providerForUrl(url),
+      model,
+      strategy,
+      attempt: typeof err?.attempt === 'number' ? err.attempt : diagnostics.providerAttempts,
+      httpStatus: status ?? null,
+      validJson: typeof err?.validJson === 'boolean' ? err.validJson : null,
+      validationResult: 'not_run',
+      quizCount: null,
+      questionCounts: [],
+      responseChars: typeof err?.responseChars === 'number' ? err.responseChars : null,
+      responseBytes: typeof err?.responseBytes === 'number' ? err.responseBytes : null,
+      latencyMs: typeof err?.latencyMs === 'number' ? err.latencyMs : Date.now() - attemptStartedAt,
+      promptChars: prompt.length,
+      executionMs: Date.now() - diagnostics.startedAt,
+      rateLimited: status === 429,
+      errorCode: typeof err?.code === 'string' ? err.code : diagnosticErrorCode(err),
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
+    throw err;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
+/** Call the provider, parse its completion, and release the raw string on return. */
+async function requestParsedCandidate(
+  prompt: string,
+  apiKey: string,
+  url: string,
+  model: string,
+  timeoutMs: number,
+  deadline: number,
+  diagnostics: RequestDiagnostics,
+  strategy: GenerationStrategy,
+): Promise<ParsedCandidate> {
+  const provider = providerForUrl(url);
+  const output = await callProviderWithTimeout(prompt, apiKey, url, model, timeoutMs, deadline, diagnostics, strategy);
+  const responseChars = output.raw.length;
+  const responseBytes = new TextEncoder().encode(output.raw).byteLength;
+  try {
+    const value = parseQuizJson(output.raw);
+    return {
+      value,
+      responseChars,
+      responseBytes,
+      attempt: output.attempt,
+      latencyMs: output.latencyMs,
+    };
+  } catch {
+    console.error('[generate-lesson-quizzes] provider output metadata', {
+      provider,
+      model,
+      strategy,
+      attempt: output.attempt,
+      httpStatus: 200,
+      validJson: false,
+      validationResult: 'not_run',
+      quizCount: null,
+      questionCounts: [],
+      responseChars,
+      responseBytes,
+      latencyMs: output.latencyMs,
+      promptChars: prompt.length,
+      executionMs: Date.now() - diagnostics.startedAt,
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
+    const err: any = new Error('Provider returned invalid JSON');
+    err.code = 'INVALID_PROVIDER_JSON';
+    throw err;
+  }
+}
+
+function validateCandidateWithTelemetry(
+  candidate: ParsedCandidate,
+  provider: ProviderName,
+  model: string,
+  strategy: GenerationStrategy,
+  promptChars: number,
+  diagnostics: RequestDiagnostics,
+  qualityContext: QuizQualityContext,
+): GeneratedQuizResponse {
+  try {
+    // Structural/schema checks run first; deterministic quality checks then run
+    // inside validateQuizResponse before this candidate can be accepted.
+    validateQuizResponse(candidate.value, 3, 4, 1, qualityContext);
+    console.log('[generate-lesson-quizzes] validation metadata', {
+      provider,
+      model,
+      strategy,
+      attempt: candidate.attempt,
+      httpStatus: 200,
+      validJson: true,
+      validationResult: 'passed',
+      ...summarizeQuizShape(candidate.value),
+      responseChars: candidate.responseChars,
+      responseBytes: candidate.responseBytes,
+      latencyMs: candidate.latencyMs,
+      promptChars,
+      executionMs: Date.now() - diagnostics.startedAt,
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
+    return normalizeQuizResponse(candidate.value);
+  } catch (validationError) {
+    console.error('[generate-lesson-quizzes] validation metadata', {
+      provider,
+      model,
+      strategy,
+      attempt: candidate.attempt,
+      httpStatus: 200,
+      validJson: true,
+      validationResult: 'failed',
+      validationRule: validationRuleFromError(validationError),
+      ...summarizeQuizShape(candidate.value),
+      responseChars: candidate.responseChars,
+      responseBytes: candidate.responseBytes,
+      latencyMs: candidate.latencyMs,
+      promptChars,
+      executionMs: Date.now() - diagnostics.startedAt,
+      totalProviderAttempts: diagnostics.providerAttempts,
+    });
+    throw validationError;
+  }
+}
+
+/** Make one provider call and validate its complete structured result. */
 async function attemptGenerationWithValidation(
   prompt: string,
   apiKey: string,
   url: string,
   model: string,
   deadline: number,
-): Promise<{ parsed: unknown; raw: string }> {
-  let lastParsed: unknown = null;
-  let lastRaw: string | null = null;
-  let lastValidationError: unknown = null;
-
-  for (let attempt = 0; attempt <= VALIDATION_MAX_RETRIES; attempt++) {
-    const remaining = remainingMs(deadline);
-    if (remaining <= 0) {
-      const budgetErr: any = new Error('Quiz generation wall-clock budget exceeded');
-      budgetErr.raw = lastRaw;
-      budgetErr.parsed = lastParsed;
-      budgetErr.code = 'WALL_CLOCK_BUDGET_EXCEEDED';
-      throw budgetErr;
-    }
-    let result: { parsed: unknown; raw: string };
-    try {
-      result = await callProviderWithRetry(prompt, apiKey, url, model, attempt === 0 ? AI_ATTEMPT_TIMEOUT_MS : REPAIR_TIMEOUT_MS, deadline);
-    } catch (err) {
-      throw err; // provider error bubbles to fallback logic
-    }
-    lastParsed = result.parsed;
-    lastRaw = result.raw;
-
-    try {
-      validate(result.parsed);
-      console.log('[generate-lesson-quizzes] validation passed', { provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen', attempt: attempt + 1 });
-      return result;
-    } catch (validationErr) {
-      lastValidationError = validationErr;
-      const offending = findOffendingQuestions(result.parsed);
-      console.error('[generate-lesson-quizzes] validation failed', {
-        provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-        attempt: attempt + 1,
-        error: errorMessage(validationErr),
-        offending,
-        rawExcerpt: result.raw.slice(0, 1500),
-      });
-
-      const isDistinctError = /options are not distinct/i.test(errorMessage(validationErr));
-      const canRepair = isDistinctError && offending.length > 0 && offending.length <= 2 && attempt < VALIDATION_MAX_RETRIES;
-
-      if (canRepair) {
-        console.log('[generate-lesson-quizzes] attempting targeted repair', { offending });
-        const repairPrompt = buildRepairPrompt(result.parsed, offending);
-        try {
-          const repaired = await callProviderWithRetry(repairPrompt, apiKey, url, model, REPAIR_TIMEOUT_MS, deadline);
-          try {
-            validate(repaired.parsed);
-            console.log('[generate-lesson-quizzes] repair validation passed', { provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen' });
-            return repaired;
-          } catch (repairValidationErr) {
-            console.error('[generate-lesson-quizzes] repair still invalid', {
-              provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-              error: errorMessage(repairValidationErr),
-              rawExcerpt: repaired.raw.slice(0, 1500),
-            });
-            lastParsed = repaired.parsed;
-            lastRaw = repaired.raw;
-            lastValidationError = repairValidationErr;
-          }
-        } catch (repairErr) {
-          console.error('[generate-lesson-quizzes] repair call failed', { error: errorMessage(repairErr) });
-        }
-      }
-
-      if (attempt === VALIDATION_MAX_RETRIES) {
-        console.error('[generate-lesson-quizzes] validation failed final', {
-          provider: url === NVIDIA_API_URL ? 'nvidia' : 'zen',
-          error: errorMessage(validationErr),
-          rawFull: lastRaw ?? null,
-          rawExcerpt: lastRaw?.slice(0, 2000),
-        });
-        const err: any = new Error(`Quiz generation returned invalid structured output: ${errorMessage(validationErr)}`);
-        err.raw = lastRaw;
-        err.parsed = lastParsed;
-        err.validationError = validationErr;
-        throw err;
-      }
-
-      const backoff = 500 * (attempt + 1);
-      console.log('[generate-lesson-quizzes] full retry after validation failure', { nextAttempt: attempt + 2, backoff });
-      await sleep(backoff);
-    }
-  }
-
-  const err: any = new Error(`Quiz generation returned invalid structured output: ${errorMessage(lastValidationError)}`);
-  err.raw = lastRaw;
-  err.parsed = lastParsed;
-  throw err;
-}
-
-serve(async (req: Request) => {
-  const startedAt = Date.now();
-  // Overall request budget: every provider attempt and repair call is capped to
-  // the remaining time so a single request can't run past the client watchdog.
-  const deadline = startedAt + WALL_CLOCK_BUDGET_MS;
-  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
-  if (req.method !== 'POST') return returnResponse({ error: 'Method not allowed' }, 405);
+  diagnostics: RequestDiagnostics,
+  qualityContext: QuizQualityContext,
+): Promise<GeneratedQuizResponse> {
+  const provider = providerForUrl(url);
+  const candidate = await requestParsedCandidate(
+    prompt,
+    apiKey,
+    url,
+    model,
+    AI_ATTEMPT_TIMEOUT_MS,
+    deadline,
+    diagnostics,
+    'initial',
+  );
 
   try {
-    const payload: GeneratePayload = await req.json();
-    if (!payload.plan || !payload.subject || !Array.isArray(payload.periods)) {
-      console.error('[generate-lesson-quizzes] invalid payload', { hasPlan: !!payload.plan, subject: payload.subject, periodsIsArray: Array.isArray(payload.periods) });
-      return returnResponse({ error: 'Invalid payload', code: 'INVALID_PAYLOAD' }, 400);
+    return validateCandidateWithTelemetry(
+      candidate,
+      provider,
+      model,
+      'initial',
+      prompt.length,
+      diagnostics,
+      qualityContext,
+    );
+  } catch (validationError) {
+    const err: any = new Error('Quiz generation returned invalid structured output');
+    err.code = 'INVALID_QUIZ_RESPONSE';
+    err.validationRule = validationRuleFromError(validationError);
+    throw err;
+  }
+}
+
+export async function handleRequest(req: Request): Promise<Response> {
+  const diagnostics: RequestDiagnostics = {
+    startedAt: Date.now(),
+    providerAttempts: 0,
+  };
+  const deadline = diagnostics.startedAt + WALL_CLOCK_BUDGET_MS;
+
+  if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: CORS_HEADERS });
+  if (req.method !== 'POST') {
+    return returnResponse({ error: 'Method not allowed' }, 405, undefined, diagnostics);
+  }
+
+  try {
+    // Avoid parsing a stale or non-browser caller's legacy multi-megabyte payload.
+    const declaredLength = Number(req.headers.get('content-length') || 0);
+    if (declaredLength > MAX_REQUEST_BYTES) {
+      console.warn('[generate-lesson-quizzes] request rejected by size guard', {
+        requestBytes: declaredLength,
+      });
+      return returnResponse(
+        {
+          error: 'Quiz generation request is too large',
+          code: 'REQUEST_TOO_LARGE',
+        },
+        413,
+        undefined,
+        diagnostics,
+      );
     }
 
-    // Requirement 1: Build minimal prompt (< 6000 chars target, hard limit 8000)
-    const prompt = buildCompactPrompt(payload);
+    let requestText: string;
+    try {
+      requestText = await req.text();
+    } catch (err) {
+      console.error('[generate-lesson-quizzes] request body read failed', {
+        errorCode: diagnosticErrorCode(err),
+      });
+      return returnResponse({ error: 'Invalid payload', code: 'INVALID_PAYLOAD' }, 400, undefined, diagnostics);
+    }
+    const requestBytes = new TextEncoder().encode(requestText).byteLength;
+    if (requestBytes > MAX_REQUEST_BYTES) {
+      console.warn('[generate-lesson-quizzes] request rejected by size guard', { requestBytes });
+      return returnResponse(
+        { error: 'Quiz generation request is too large', code: 'REQUEST_TOO_LARGE' },
+        413,
+        undefined,
+        diagnostics,
+      );
+    }
 
-    // Provider order: Zen primary (fastest path under 3-min watchdog, ~21s), NVIDIA Nemotron fallback.
-    const zenKey = Deno.env.get('ZEN_API_KEY');
-    const nvidiaKey = Deno.env.get('NVIDIA_API_KEY');
+    let payload: GeneratePayload;
+    try {
+      payload = JSON.parse(requestText);
+      requestText = '';
+    } catch (err) {
+      console.error('[generate-lesson-quizzes] invalid request JSON', {
+        errorCode: diagnosticErrorCode(err),
+      });
+      return returnResponse({ error: 'Invalid payload', code: 'INVALID_PAYLOAD' }, 400, undefined, diagnostics);
+    }
+    const hasPlan = Boolean(payload?.plan && typeof payload.plan === 'object' && !Array.isArray(payload.plan));
+    const hasSubject = typeof payload?.subject === 'string' && Boolean(payload.subject.trim());
+    const periodsIsArray = Array.isArray(payload?.periods);
+    if (!payload || typeof payload !== 'object' || !hasPlan || !hasSubject || !periodsIsArray) {
+      console.error('[generate-lesson-quizzes] invalid payload', {
+        hasPlan,
+        hasSubject,
+        periodsIsArray,
+      });
+      return returnResponse({ error: 'Invalid payload', code: 'INVALID_PAYLOAD' }, 400, undefined, diagnostics);
+    }
+
+    const edgeEnv = (globalThis as any).Deno.env;
+    const geminiKey = edgeEnv.get('GEMINI_API_KEY');
+    const gemini36Deadline = deadline - FINAL_GOOGLE_ATTEMPT_RESERVED_BUDGET_MS;
+    const reportedMissingSecrets = new Set<string>();
     let lastError: unknown;
-    let lastRaw: string | null = null;
 
-    if (zenKey) {
+    const prompt = buildCompactPrompt(payload);
+    const qualityContext = qualityContextFromPayload(payload);
+    const routes: Array<{
+      provider: ProviderName;
+      model: string;
+      url: string;
+      apiKey: string | undefined;
+      secretName: string;
+      attemptDeadline: number;
+    }> = [
+      {
+        provider: 'gemini',
+        model: GEMINI_36_MODEL,
+        url: GEMINI_API_URL,
+        apiKey: geminiKey,
+        secretName: 'GEMINI_API_KEY',
+        attemptDeadline: gemini36Deadline,
+      },
+      {
+        provider: 'gemini',
+        model: GEMINI_35_LITE_MODEL,
+        url: GEMINI_API_URL,
+        apiKey: geminiKey,
+        secretName: 'GEMINI_API_KEY',
+        attemptDeadline: deadline,
+      },
+    ];
+
+    for (const route of routes) {
+      if (!route.apiKey) {
+        if (!reportedMissingSecrets.has(route.secretName)) {
+          console.error(`[generate-lesson-quizzes] ${route.secretName} missing`);
+          reportedMissingSecrets.add(route.secretName);
+        }
+        continue;
+      }
+      if (remainingMs(route.attemptDeadline) <= 0) {
+        console.warn('[generate-lesson-quizzes] provider skipped to preserve fallback budget', {
+          provider: route.provider,
+          model: route.model,
+          executionMs: Date.now() - diagnostics.startedAt,
+          totalProviderAttempts: diagnostics.providerAttempts,
+        });
+        continue;
+      }
+
       try {
-        const result = await attemptGenerationWithValidation(prompt, zenKey, ZEN_API_URL, ZEN_MODEL, deadline);
-        console.log('[generate-lesson-quizzes] success', { provider: 'zen', ms: Date.now() - startedAt });
-        return returnResponse(result.parsed);
+        const result = await attemptGenerationWithValidation(
+          prompt,
+          route.apiKey,
+          route.url,
+          route.model,
+          route.attemptDeadline,
+          diagnostics,
+          qualityContext,
+        );
+        console.log('[generate-lesson-quizzes] success', {
+          provider: route.provider,
+          model: route.model,
+          executionMs: Date.now() - diagnostics.startedAt,
+          totalProviderAttempts: diagnostics.providerAttempts,
+        });
+        return returnResponse(result, 200, undefined, diagnostics);
       } catch (err: any) {
         lastError = err;
-        lastRaw = err?.raw ?? null;
-        console.error('[generate-lesson-quizzes] zen failed final', { error: errorMessage(err), rawExcerpt: lastRaw?.slice(0, 2000) ?? null, ms: Date.now() - startedAt });
+        console.error('[generate-lesson-quizzes] provider failed final', {
+          provider: route.provider,
+          model: route.model,
+          errorCode: diagnosticErrorCode(err),
+          validationRule: typeof err?.validationRule === 'string' ? err.validationRule : validationRuleFromError(err),
+          totalProviderAttempts: diagnostics.providerAttempts,
+          executionMs: Date.now() - diagnostics.startedAt,
+        });
       }
-    } else {
-      console.error('[generate-lesson-quizzes] ZEN_API_KEY missing');
     }
 
-    if (nvidiaKey) {
-      try {
-        const result = await attemptGenerationWithValidation(prompt, nvidiaKey, NVIDIA_API_URL, NVIDIA_MODEL, deadline);
-        console.log('[generate-lesson-quizzes] success', { provider: 'nvidia', ms: Date.now() - startedAt });
-        return returnResponse(result.parsed);
-      } catch (err: any) {
-        lastError = err;
-        lastRaw = err?.raw ?? lastRaw;
-        console.error('[generate-lesson-quizzes] nvidia failed final', { error: errorMessage(err), rawExcerpt: lastRaw?.slice(0, 2000) ?? null, ms: Date.now() - startedAt });
-      }
-    } else {
-      console.error('[generate-lesson-quizzes] NVIDIA_API_KEY missing');
-    }
-
-    const detail = lastError instanceof Error ? lastError.message : 'No quiz generation provider configured';
+    const detail =
+      lastError instanceof Error ? lastError.message.slice(0, 500) : 'No quiz generation provider configured';
+    const validationRule = typeof (lastError as { validationRule?: unknown })?.validationRule === 'string'
+      ? (lastError as { validationRule: string }).validationRule
+      : validationRuleFromError(lastError);
     console.error('[generate-lesson-quizzes] failed all providers', {
-      error: detail,
-      ms: Date.now() - startedAt,
-      rawFull: lastRaw ?? null,
-      rawExcerpt: lastRaw?.slice(0, 2000) ?? null,
+      provider: 'all',
+      errorCode: diagnosticErrorCode(lastError),
+      validationRule,
+      totalProviderAttempts: diagnostics.providerAttempts,
+      executionMs: Date.now() - diagnostics.startedAt,
     });
     return returnResponse(
       {
         error: detail,
         code: 'QUIZ_GENERATION_FAILED',
         provider: 'all',
-        raw_excerpt: lastRaw?.slice(0, 1500) ?? undefined,
+        validationRule,
       },
       502,
+      undefined,
+      diagnostics,
     );
   } catch (err) {
-    console.error('[generate-lesson-quizzes] internal error', { error: errorMessage(err), ms: Date.now() - startedAt });
-    return returnResponse({ error: err instanceof Error ? err.message : 'Internal error', code: 'INTERNAL_ERROR' }, 500);
+    console.error('[generate-lesson-quizzes] internal error', {
+      errorCode: diagnosticErrorCode(err),
+      totalProviderAttempts: diagnostics.providerAttempts,
+      executionMs: Date.now() - diagnostics.startedAt,
+    });
+    return returnResponse(
+      {
+        error: err instanceof Error ? err.message.slice(0, 500) : 'Internal error',
+        code: 'INTERNAL_ERROR',
+      },
+      500,
+      undefined,
+      diagnostics,
+    );
   }
-});
+}
+
+serve(handleRequest);

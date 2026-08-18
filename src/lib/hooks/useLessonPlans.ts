@@ -9,7 +9,6 @@ import {
   savePeriods,
   submitForReview,
   fetchReviewByPlanId,
-  updateReviewStatus,
   approvePlan,
   rejectPlan,
   retryAIReview,
@@ -22,7 +21,7 @@ import {
 import { fetchPeriodAiReviews, regeneratePeriodAiReviews } from '../db/lessonPeriodAiReviews';
 import { addGeneratedQuizToBank, fetchLessonPlanQuizPreviews, generateLessonPlanQuizzes } from '../db/lessonPlanQuizzes';
 import { supabase } from '../supabase';
-import type { LessonPlan, LessonPlanPeriod, PeriodActivity, AIReview, DayOfWeek, ReviewResponse, SavePeriodsPayload } from '../../types';
+import type { LessonPlan, LessonPlanPeriod, AIReview, SavePeriodsPayload } from '../../types';
 
 const DAY_ORDER: Record<string, number> = {
   Monday: 1,
@@ -147,7 +146,6 @@ export function useAiReviewTimeout(plan: LessonPlan | null | undefined) {
   const planId = plan?.id;
   const status = plan?.status;
   const startedAt = plan?.ai_started_at || plan?.updated_at;
-  const teacherId = plan?.teacher_id;
 
   useEffect(() => {
     if (!planId || status !== 'submitted') return;
@@ -158,7 +156,13 @@ export function useAiReviewTimeout(plan: LessonPlan | null | undefined) {
       if (!Number.isFinite(started)) return;
       if (Date.now() - started < AI_REVIEW_TIMEOUT_MINUTES * 60_000) return;
 
-      const expired = await expireStuckAiReviews([{ id: planId, status, ai_started_at: startedAt, updated_at: startedAt, teacher_id: teacherId } as LessonPlan]);
+      let expired: string[];
+      try {
+        expired = await expireStuckAiReviews();
+      } catch {
+        console.error('[lesson-plan-review] timeout sweep failed');
+        return;
+      }
       if (!cancelled && expired.includes(planId)) {
         const reason = `AI review timed out after ${AI_REVIEW_TIMEOUT_MINUTES} minutes with no response.`;
         qc.setQueryData<{ plan: LessonPlan; periods: LessonPlanPeriod[] } | null>(['lessonPlan', planId], (current) => (
@@ -180,7 +184,7 @@ export function useAiReviewTimeout(plan: LessonPlan | null | undefined) {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [planId, qc, startedAt, status, teacherId]);
+  }, [planId, qc, startedAt, status]);
 }
 
 /** Look up the plan belonging to one exact week + class (never another week's). */
@@ -215,7 +219,7 @@ export function useRequestRevision() {
 }
 
 // ─── Review for a plan ────────────────────────────────────────────
-export function useReview(planId: string | undefined) {
+export function useReview(planId: string | undefined, pollWhilePending = false) {
   const qc = useQueryClient();
 
   useEffect(() => {
@@ -245,15 +249,18 @@ export function useReview(planId: string | undefined) {
     queryKey: ['aiReview', planId],
     queryFn: () => fetchReviewByPlanId(planId!),
     enabled: !!planId,
-    // Fetch once per planId. AI review inserts/updates are delivered via the
-    // realtime channel above; mutations can still invalidate explicitly.
-    staleTime: Infinity,
+    // Realtime is the primary path. Polling while a submitted attempt is
+    // pending is a fallback for deployments where a table is not in the
+    // realtime publication or a browser briefly loses its subscription. Stop
+    // as soon as the persisted aggregate row arrives.
+    refetchInterval: (query) => pollWhilePending && !query.state.data ? 5_000 : false,
+    staleTime: pollWhilePending ? 0 : Infinity,
     gcTime: 1000 * 60 * 10,
   });
 }
 
 // ─── Per-period AI reviews ────────────────────────────────────────
-export function usePeriodAiReviews(planId: string | undefined) {
+export function usePeriodAiReviews(planId: string | undefined, pollWhilePending = false) {
   const qc = useQueryClient();
 
   useEffect(() => {
@@ -275,7 +282,10 @@ export function usePeriodAiReviews(planId: string | undefined) {
     queryKey: ['lessonPeriodAiReviews', planId],
     queryFn: () => fetchPeriodAiReviews(planId!),
     enabled: !!planId,
-    staleTime: Infinity,
+    refetchInterval: (query) => (
+      pollWhilePending && (!query.state.data || query.state.data.length === 0) ? 5_000 : false
+    ),
+    staleTime: pollWhilePending ? 0 : Infinity,
     gcTime: 1000 * 60 * 10,
   });
 }
@@ -357,15 +367,7 @@ export function useSavePeriods() {
 export function useSubmitForReview() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: ({
-      planId,
-      periods,
-      unitContext,
-    }: {
-      planId: string;
-      periods: { day: DayOfWeek; period_number: number; topic: string; activities: string }[];
-      unitContext?: { name: string; objectives: string };
-    }) => submitForReview(planId, periods, unitContext),
+    mutationFn: ({ planId }: { planId: string }) => submitForReview(planId),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['aiReview', data.plan_id] });
@@ -381,16 +383,15 @@ export function useApprovePlan() {
   return useMutation({
     mutationFn: async ({
       planId,
-      reviewId,
       comment,
     }: {
       planId: string;
-      // May be absent when the AI review failed — the supervisor decides manually.
+      // Retained in the mutation input for existing callers; the database finds
+      // the current review by plan_id inside the atomic decision transaction.
       reviewId?: string;
       comment: string;
     }) => {
-      if (reviewId) await updateReviewStatus(reviewId, 'reviewed', comment);
-      await approvePlan(planId, reviewId ? undefined : comment);
+      await approvePlan(planId, comment);
     },
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', variables.planId] });
@@ -405,16 +406,15 @@ export function useRejectPlan() {
   return useMutation({
     mutationFn: async ({
       planId,
-      reviewId,
       comment,
     }: {
       planId: string;
-      // May be absent when the AI review failed — the supervisor decides manually.
+      // Retained in the mutation input for existing callers; the database finds
+      // the current review by plan_id inside the atomic decision transaction.
       reviewId?: string;
       comment: string;
     }) => {
-      if (reviewId) await updateReviewStatus(reviewId, 'reviewed', comment);
-      await rejectPlan(planId, reviewId ? undefined : comment);
+      await rejectPlan(planId, comment);
     },
     onSuccess: (_data, variables) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', variables.planId] });
@@ -427,17 +427,7 @@ export function useRejectPlan() {
 export function useRetryAIReview() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: async ({
-      planId,
-      periods,
-      unitContext,
-    }: {
-      planId: string;
-      periods: { day: DayOfWeek; period_number: number; topic: string; activities: string }[];
-      unitContext?: { name: string; objectives: string };
-    }) => {
-      return retryAIReview(planId, periods, unitContext);
-    },
+    mutationFn: async ({ planId }: { planId: string }) => retryAIReview(planId),
     onSuccess: (data) => {
       qc.invalidateQueries({ queryKey: ['lessonPlan', data.plan_id] });
       qc.invalidateQueries({ queryKey: ['aiReview', data.plan_id] });

@@ -2,7 +2,7 @@ import { supabase } from '../supabase';
 import { getQuizWithQuestions } from './quizzes';
 import type { LessonPlan, LessonPlanPeriod, Quiz, QuizQuestion } from '../../types';
 
-import { QUIZ_GENERATION_DEFAULTS, validateGeneratedResponse, findOffendingQuestions, type GeneratedQuestion, type GeneratedQuiz } from '../quizGenerationValidation';
+import { QUIZ_GENERATION_DEFAULTS, validateGeneratedResponse, type GeneratedQuestion, type GeneratedQuiz } from '../quizGenerationValidation';
 
 function id(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -16,21 +16,79 @@ function optionLabel(index: number): string {
   return String.fromCharCode(65 + index);
 }
 
-async function fetchContext(planId: string) {
-  const { data, error } = await supabase.from('lesson_plans').select('*').eq('id', planId).single();
-  if (error || !data) throw error || new Error('Plan not found');
-  const plan = data as LessonPlan;
+type QuizGenerationPlan = Pick<LessonPlan, 'id' | 'teacher_id' | 'class_name' | 'week_label' | 'title'>;
+type QuizGenerationPeriod = Pick<LessonPlanPeriod, 'day' | 'period_number' | 'subject' | 'is_free' | 'topic' | 'objective'>;
 
-  const [{ data: periodsData, error: periodsError }, { data: unitsData, error: unitsError }] = await Promise.all([
-    supabase.from('lesson_plan_periods').select('*').eq('plan_id', planId),
-    supabase.from('unit_plans').select('*').eq('class_name', plan.class_name),
-  ]);
+interface CompactQuizPeriod {
+  subject: string;
+  topic: string;
+  objective: string | null;
+}
+
+interface CompactQuizGenerationRequest {
+  plan: Pick<QuizGenerationPlan, 'class_name' | 'title'>;
+  subject: string;
+  periods: CompactQuizPeriod[];
+  quiz_count: number;
+  questions_per_quiz: number;
+  direct_answer_min: number;
+}
+
+/**
+ * Keep the browser-to-Edge request independent of database row shape. IDs,
+ * timestamps, teacher metadata, and detail fields not used in the prompt never
+ * cross the worker boundary.
+ */
+export function buildQuizGenerationRequest(
+  plan: QuizGenerationPlan,
+  subject: string,
+  subjectPeriods: QuizGenerationPeriod[],
+): CompactQuizGenerationRequest {
+  const bounded = (value: string | null | undefined, maxChars: number): string => {
+    const raw = value || '';
+    return raw.slice(0, maxChars * 4).replace(/\s+/g, ' ').trim().slice(0, maxChars);
+  };
+  const compactSubject = bounded(subject, 160);
+
+  return {
+    plan: {
+      class_name: bounded(plan.class_name, 120),
+      title: bounded(plan.title, 320),
+    },
+    subject: compactSubject,
+    periods: subjectPeriods
+      .slice(0, 24)
+      .map((period) => ({
+        // The stored value is commonly a database subject ID. The caller has
+        // already selected these periods, so send only the educational label.
+        subject: compactSubject,
+        topic: bounded(period.topic, 180),
+        objective: period.objective ? bounded(period.objective, 260) : null,
+      })),
+    quiz_count: QUIZ_GENERATION_DEFAULTS.quizCount,
+    questions_per_quiz: QUIZ_GENERATION_DEFAULTS.questionsPerQuiz,
+    direct_answer_min: QUIZ_GENERATION_DEFAULTS.directAnswerMinPerQuiz,
+  };
+}
+
+async function fetchContext(planId: string): Promise<{ plan: QuizGenerationPlan; periods: QuizGenerationPeriod[] }> {
+  const { data, error } = await supabase
+    .from('lesson_plans')
+    .select('id, teacher_id, class_name, week_label, title')
+    .eq('id', planId)
+    .single();
+  if (error || !data) throw error || new Error('Plan not found');
+  const plan = data as QuizGenerationPlan;
+
+  const { data: periodsData, error: periodsError } = await supabase
+    .from('lesson_plan_periods')
+    .select('day, period_number, subject, is_free, topic, objective')
+    .eq('plan_id', planId);
   if (periodsError) throw periodsError;
-  if (unitsError) throw unitsError;
 
   const dayOrder: Record<string, number> = { Saturday: 1, Sunday: 2, Monday: 3, Tuesday: 4, Wednesday: 5, Thursday: 6, Friday: 7 };
-  const periods = ((periodsData || []) as LessonPlanPeriod[]).sort((a, b) => ((dayOrder[a.day] ?? 99) * 10 + a.period_number) - ((dayOrder[b.day] ?? 99) * 10 + b.period_number));
-  return { plan, periods, unitPlans: unitsData || [] };
+  const periods = ((periodsData || []) as QuizGenerationPeriod[]).sort((a, b) => ((dayOrder[a.day] ?? 99) * 10 + a.period_number) - ((dayOrder[b.day] ?? 99) * 10 + b.period_number));
+  return { plan, periods };
 }
 
 async function edgeFunctionErrorMessage(error: unknown): Promise<string> {
@@ -42,8 +100,7 @@ async function edgeFunctionErrorMessage(error: unknown): Promise<string> {
     try {
       const body = await context.clone().json();
       const detail = [body?.error, body?.code, body?.provider, body?.model].filter(Boolean).join(' · ');
-      const excerpt = body?.raw_excerpt ? `\nRaw excerpt: ${String(body.raw_excerpt).slice(0, 800)}` : '';
-      return detail ? `${base}: ${detail}${excerpt}` : base + excerpt;
+      return detail ? `${base}: ${detail}` : base;
     } catch {
       try {
         const text = await context.clone().text();
@@ -84,81 +141,57 @@ function buildSubjectIdResolver(rows: Array<{ id: string; name?: string | null }
   };
 }
 
-const VALIDATION_RETRY_LIMIT = 2;
+function buildSubjectLabelResolver(rows: Array<{ id: string; name?: string | null }>): (value: string) => string {
+  const byId = new Map(rows.map((row) => [row.id, row.name?.trim() || 'Lesson subject'] as const));
+  const uuidPattern = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
 
-async function generateWithLLM(plan: LessonPlan, subject: string, subjectPeriods: LessonPlanPeriod[], unitPlans: unknown[]): Promise<GeneratedQuiz[]> {
-  let lastRawData: unknown = null;
-  let lastError: unknown = null;
-
-  for (let attempt = 0; attempt <= VALIDATION_RETRY_LIMIT; attempt++) {
-    const { data, error } = await supabase.functions.invoke('generate-lesson-quizzes', {
-      body: {
-        plan,
-        subject,
-        periods: subjectPeriods,
-        unit_plans: unitPlans,
-        quiz_count: QUIZ_GENERATION_DEFAULTS.quizCount,
-        questions_per_quiz: QUIZ_GENERATION_DEFAULTS.questionsPerQuiz,
-        direct_answer_min: QUIZ_GENERATION_DEFAULTS.directAnswerMinPerQuiz,
-      },
-    });
-    if (error) {
-      // Provider/transport failure — don't retry validation loop here; let caller decide.
-      // But log raw for diagnostics if available.
-      const msg = await edgeFunctionErrorMessage(error);
-      console.error('[lessonPlanQuizzes] edge function invoke failed', { subject, attempt: attempt + 1, error: msg, raw: (error as any)?.context });
-      throw new Error(msg);
-    }
-
-    lastRawData = data;
-
-    try {
-      const validated = validateGeneratedResponse(data);
-      if (attempt > 0) console.log('[lessonPlanQuizzes] validation passed after retry', { subject, attempt: attempt + 1 });
-      return validated;
-    } catch (err) {
-      lastError = err;
-      const msg = err instanceof Error ? err.message : String(err);
-      const offending = findOffendingQuestions(data);
-      const isDistinctError = /options are not distinct/i.test(msg);
-      console.error('[lessonPlanQuizzes] validation failed', {
-        subject,
-        attempt: attempt + 1,
-        error: msg,
-        offending,
-        rawExcerpt: JSON.stringify(data)?.slice(0, 3000),
-      });
-
-      // The edge function already runs a targeted repair internally: it re-prompts
-      // the provider to regenerate ONLY the offending questions' options and
-      // re-validates, before falling back to a full re-generation. If it still
-      // fails, we retry the whole generation here a bounded number of times; each
-      // re-invoke runs the edge's internal repair again.
-
-      if (attempt === VALIDATION_RETRY_LIMIT) {
-        console.error('[lessonPlanQuizzes] validation failed final — logging full raw response', {
-          subject,
-          error: msg,
-          offending,
-          rawFull: JSON.stringify(data)?.slice(0, 8000),
-        });
-        const friendly = `Quiz generation produced duplicate answer options (${msg}). The model was retried ${VALIDATION_RETRY_LIMIT} times and still returned duplicate options for question(s): ${offending.map(o => `quiz ${o.quizIndex + 1} Q${o.questionIndex + 1}`).join(', ') || 'unknown'}. Please try again — the next generation often succeeds, or contact support if it persists. Raw preview: ${JSON.stringify(data)?.slice(0, 600)}`;
-        throw new Error(isDistinctError ? friendly : `Quiz generation returned invalid structured output: ${msg}. Raw preview: ${JSON.stringify(data)?.slice(0, 800)}`);
-      }
-
-      // Bounded retry: wait briefly then re-invoke whole generation.
-      // Edge will again attempt its own repair internally.
-      const backoff = 500 * (attempt + 1);
-      console.log('[lessonPlanQuizzes] retrying whole generation', { subject, nextAttempt: attempt + 2, backoff });
-      await new Promise((r) => setTimeout(r, backoff));
-    }
-  }
-
-  // Unreachable but type-safe
-  throw new Error(`Quiz generation returned invalid structured output: ${lastError instanceof Error ? lastError.message : String(lastError)}. Raw: ${JSON.stringify(lastRawData)?.slice(0, 1000)}`);
+  return (value) => {
+    const storedValue = (value || '').trim();
+    return byId.get(storedValue) || (uuidPattern.test(storedValue) ? 'Lesson subject' : storedValue) || 'Lesson subject';
+  };
 }
 
-function buildQuestionRow(plan: LessonPlan, quizId: string, subject: string, q: GeneratedQuestion, resolveSubjectId: (value: string) => string | null) {
+async function generateWithLLM(
+  plan: QuizGenerationPlan,
+  subject: string,
+  subjectPeriods: QuizGenerationPeriod[],
+): Promise<GeneratedQuiz[]> {
+  const { data, error } = await supabase.functions.invoke('generate-lesson-quizzes', {
+    body: buildQuizGenerationRequest(plan, subject, subjectPeriods),
+  });
+  if (error) {
+    const message = await edgeFunctionErrorMessage(error);
+    console.error('[lessonPlanQuizzes] edge function invoke failed', { subject, error: message.slice(0, 1000) });
+    throw new Error(message);
+  }
+
+  try {
+    return validateGeneratedResponse(data, {
+      learningObjectives: subjectPeriods.map((period) => period.objective),
+    });
+  } catch (err) {
+    // The Edge Function validates the same response contract before returning.
+    // Reinvoking the full generation here multiplies provider work without
+    // recovering from schema drift, so retain client validation as a guard only.
+    const message = err instanceof Error ? err.message : String(err);
+    const quizzes = (data as { quizzes?: unknown })?.quizzes;
+    const quizCount = Array.isArray(quizzes) ? quizzes.length : null;
+    const questionCounts = Array.isArray(quizzes)
+      ? quizzes.slice(0, 10).map((quiz) => {
+          const questions = (quiz as { questions?: unknown })?.questions;
+          return Array.isArray(questions) ? questions.length : null;
+        })
+      : [];
+    console.error('[lessonPlanQuizzes] Edge/client validation mismatch', {
+      validationResult: 'failed',
+      quizCount,
+      questionCounts,
+    });
+    throw new Error(`Quiz generation returned invalid structured output: ${message}`);
+  }
+}
+
+function buildQuestionRow(plan: QuizGenerationPlan, quizId: string, subject: string, q: GeneratedQuestion, resolveSubjectId: (value: string) => string | null) {
   const isMcq = q.type === 'multiple_choice';
   return {
     id: id('q'),
@@ -177,7 +210,7 @@ function buildQuestionRow(plan: LessonPlan, quizId: string, subject: string, q: 
   };
 }
 
-function buildQuizRow(plan: LessonPlan, subject: string, generated: GeneratedQuiz): Quiz {
+function buildQuizRow(plan: QuizGenerationPlan, subject: string, generated: GeneratedQuiz): Quiz {
   const openDate = new Date().toISOString().slice(0, 10);
   const dueDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   return {
@@ -198,19 +231,14 @@ function buildQuizRow(plan: LessonPlan, subject: string, generated: GeneratedQui
   };
 }
 
-async function cleanupGeneratedQuizzes(planId: string) {
-  await supabase.from('quizzes').delete().eq('lesson_plan_id', planId).eq('auto_generated', true);
-  await supabase.from('questions').delete().eq('source_lesson_plan_id', planId).eq('source_auto_generated', true);
-}
-
 export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]> {
-  const { plan, periods, unitPlans } = await fetchContext(planId);
-  await cleanupGeneratedQuizzes(planId);
+  const { plan, periods } = await fetchContext(planId);
 
   try {
     const { data: subjectRows, error: subjectsError } = await supabase.from('subjects').select('id, name');
     if (subjectsError) throw subjectsError;
     const resolveSubjectId = buildSubjectIdResolver(subjectRows || []);
+    const resolveSubjectLabel = buildSubjectLabelResolver(subjectRows || []);
 
     const subjects = unique(periods.filter((p) => !p.is_free && p.subject && p.subject !== '__FREE__').map((p) => p.subject!));
     const quizRows: Quiz[] = [];
@@ -220,7 +248,7 @@ export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]>
     for (const subject of subjects) {
       const subjectPeriods = periods.filter((p) => p.subject === subject && !p.is_free);
       if (!subjectPeriods.length) continue;
-      const generatedQuizzes = await generateWithLLM(plan, subject, subjectPeriods, unitPlans);
+      const generatedQuizzes = await generateWithLLM(plan, resolveSubjectLabel(subject), subjectPeriods);
       for (const generated of generatedQuizzes) {
         const quiz = buildQuizRow(plan, subject, generated);
         quizRows.push(quiz);
@@ -229,19 +257,9 @@ export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]>
       }
     }
 
-    if (quizRows.length === 0) return [];
-
-    // Bulk writes are deliberately used here. The previous implementation posted
-    // each question individually, which caused browser REST calls to /questions to
-    // reset mid-run and left a partial single quiz saved for some plans.
-    const { error: quizErr } = await supabase.from('quizzes').insert(quizRows);
-    if (quizErr) throw quizErr;
-
-    const { data: insertedQuestions, error: questionErr } = await supabase
-      .from('questions')
-      .insert(questionRows)
-      .select('*');
-    if (questionErr) throw questionErr;
+    if (quizRows.length === 0) {
+      throw new Error('No teachable subject periods were available for quiz generation');
+    }
 
     const questionOrder = new Map<string, number>();
     for (const [quizId, generated] of generatedByQuiz.entries()) {
@@ -250,7 +268,7 @@ export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]>
       });
     }
 
-    const junctionRows = (insertedQuestions || []).map((src: any) => ({
+    const junctionRows = questionRows.map((src) => ({
       id: id('qq'),
       quizId: src.source_quiz_id,
       questionId: src.id,
@@ -262,14 +280,25 @@ export async function generateLessonPlanQuizzes(planId: string): Promise<Quiz[]>
       typeSnapshot: src.type,
     }));
 
-    const { error: junctionErr } = await supabase.from('quiz_questions').insert(junctionRows);
-    if (junctionErr) throw junctionErr;
+    // Redo remains generate-before-replace: every subject's complete 3×4 set
+    // passes Edge and client validation before this authoritative RPC starts.
+    // PostgreSQL executes deletion and every replacement insert in one
+    // transaction, so any persistence failure leaves the current set intact.
+    const { error: replacementError } = await supabase.rpc(
+      'replace_generated_lesson_plan_quizzes',
+      {
+        p_plan_id: planId,
+        p_quizzes: quizRows,
+        p_questions: questionRows,
+        p_quiz_questions: junctionRows,
+      },
+    );
+    if (replacementError) throw replacementError;
 
     return quizRows;
   } catch (err) {
-    await cleanupGeneratedQuizzes(planId);
-    // Log full error with raw for diagnostics (requirement 6). PostgrestError is
-    // not an Error instance, so String(err) alone yields "[object Object]".
+    // PostgrestError is not an Error instance, so String(err) alone yields
+    // "[object Object]".
     const msg = dbErrorMessage(err);
     console.error('[generateLessonPlanQuizzes] final failure', { planId, error: msg, raw: err });
     throw new Error(msg);
