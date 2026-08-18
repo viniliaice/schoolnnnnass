@@ -95,6 +95,14 @@ function diagnosticErrorCode(err: unknown): string {
   return err instanceof Error ? err.name.slice(0, 80) : 'UNKNOWN_ERROR';
 }
 
+/** Rule name only. Never include stems, options, or generated text. */
+export function validationRuleFromError(err: unknown): string | null {
+  if (!(err instanceof Error) || !err.message) return null;
+  const message = err.message.replace(/\s+/g, ' ').trim().slice(0, 160);
+  if (!message) return null;
+  return message;
+}
+
 /** Milliseconds left before the overall request budget expires (never negative). */
 function remainingMs(deadline: number): number {
   return Math.max(0, deadline - Date.now());
@@ -945,6 +953,7 @@ function validateCandidateWithTelemetry(
       httpStatus: 200,
       validJson: true,
       validationResult: 'failed',
+      validationRule: validationRuleFromError(validationError),
       ...summarizeQuizShape(candidate.value),
       responseChars: candidate.responseChars,
       responseBytes: candidate.responseBytes,
@@ -989,9 +998,10 @@ async function attemptGenerationWithValidation(
       diagnostics,
       qualityContext,
     );
-  } catch {
+  } catch (validationError) {
     const err: any = new Error('Quiz generation returned invalid structured output');
     err.code = 'INVALID_QUIZ_RESPONSE';
+    err.validationRule = validationRuleFromError(validationError);
     throw err;
   }
 }
@@ -1143,6 +1153,7 @@ export async function handleRequest(req: Request): Promise<Response> {
           provider: route.provider,
           model: route.model,
           errorCode: diagnosticErrorCode(err),
+          validationRule: typeof err?.validationRule === 'string' ? err.validationRule : validationRuleFromError(err),
           totalProviderAttempts: diagnostics.providerAttempts,
           executionMs: Date.now() - diagnostics.startedAt,
         });
@@ -1151,9 +1162,13 @@ export async function handleRequest(req: Request): Promise<Response> {
 
     const detail =
       lastError instanceof Error ? lastError.message.slice(0, 500) : 'No quiz generation provider configured';
+    const validationRule = typeof (lastError as { validationRule?: unknown })?.validationRule === 'string'
+      ? (lastError as { validationRule: string }).validationRule
+      : validationRuleFromError(lastError);
     console.error('[generate-lesson-quizzes] failed all providers', {
       provider: 'all',
       errorCode: diagnosticErrorCode(lastError),
+      validationRule,
       totalProviderAttempts: diagnostics.providerAttempts,
       executionMs: Date.now() - diagnostics.startedAt,
     });
@@ -1162,6 +1177,7 @@ export async function handleRequest(req: Request): Promise<Response> {
         error: detail,
         code: 'QUIZ_GENERATION_FAILED',
         provider: 'all',
+        validationRule,
       },
       502,
       undefined,

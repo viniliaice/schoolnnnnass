@@ -49,7 +49,7 @@ describe('lesson-plan decision and dispatch invariants', () => {
     expect(mockGenerateLessonPlanQuizzes).not.toHaveBeenCalled();
   });
 
-  it('starts review and quiz dispatch independently only after confirmed submission', async () => {
+  it('starts review dispatch after confirmed submission and never starts quizzes', async () => {
     const events: string[] = [];
     mockRpc.mockImplementation(async (name: string) => {
       if (name === 'submit_lesson_plan_for_review') {
@@ -78,14 +78,14 @@ describe('lesson-plan decision and dispatch invariants', () => {
     await vi.waitFor(() => expect(events).toContain('review-dispatched'));
 
     expect(events[0]).toBe('submitted');
-    expect(events).toEqual(expect.arrayContaining(['quiz-dispatched', 'review-dispatched']));
-    expect(mockGenerateLessonPlanQuizzes).toHaveBeenCalledWith('plan-1');
+    expect(events).toEqual(['submitted', 'review-dispatched']);
+    expect(mockGenerateLessonPlanQuizzes).not.toHaveBeenCalled();
     expect(mockInvoke).toHaveBeenCalledWith('generate-lesson-review', {
       body: { plan_id: 'plan-1' },
     });
   });
 
-  it('dispatches quiz even when review invocation fails and marks only that review attempt failed', async () => {
+  it('does not dispatch quizzes when review invocation fails and marks only that review attempt failed', async () => {
     mockRpc
       .mockResolvedValueOnce({
         data: [{ id: 'plan-1', status: 'submitted', ai_started_at: 'attempt-a' }],
@@ -103,7 +103,7 @@ describe('lesson-plan decision and dispatch invariants', () => {
     }));
     await vi.waitFor(() => expect(mockRpc).toHaveBeenCalledTimes(2));
 
-    expect(mockGenerateLessonPlanQuizzes).toHaveBeenCalledWith('plan-1');
+    expect(mockGenerateLessonPlanQuizzes).not.toHaveBeenCalled();
     expect(mockRpc).toHaveBeenNthCalledWith(2, 'mark_lesson_plan_review_dispatch_failed', {
       p_plan_id: 'plan-1',
       p_ai_started_at: 'attempt-a',

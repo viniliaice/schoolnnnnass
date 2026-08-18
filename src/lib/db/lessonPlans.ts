@@ -1,5 +1,4 @@
 import { supabase } from '../supabase';
-import { generateLessonPlanQuizzes } from './lessonPlanQuizzes';
 import type { LessonPlan, LessonPlanPeriod, AIReview, AiReviewLog, AiReviewOutcome, PlanStatus, ReviewDispatchResponse, SavePeriodsPayload } from '../../types';
 import { isPlanEditable } from '../../types';
 
@@ -263,16 +262,11 @@ export async function submitForReview(planId: string): Promise<ReviewDispatchRes
 
   // Fire-and-forget only after the confirmed status transition above. The Edge
   // Function acknowledges quickly and owns the durable background task.
+  // Quizzes are supervisor-only: they are not started on teacher submit.
   void dispatchLessonPlanReview(planId, submittedPlan.ai_started_at).catch((dispatchError) => {
     // dispatchLessonPlanReview handles expected invocation failures itself;
     // this guard prevents an unexpected exception becoming unhandled.
     console.error('[lesson-plan-review] background dispatch failed', dispatchError);
-  });
-
-  // Quiz generation has its own detached path. It starts regardless of review
-  // dispatch/provider success and never gates review persistence or submission.
-  void generateLessonPlanQuizzes(planId).catch((quizError) => {
-    console.error('[lesson-plan-quizzes] background generation failed', quizError);
   });
 
   return {

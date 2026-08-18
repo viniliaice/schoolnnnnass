@@ -429,6 +429,7 @@ describe('generate-lesson-quizzes resource optimization', () => {
         model: 'gemini-3.6-flash',
         validationResult: 'failed',
         validJson: true,
+        validationRule: expect.stringMatching(/teacher delivery, resources, or lesson planning/i),
       }),
     );
     expect(JSON.stringify(errorSpy.mock.calls)).not.toContain('Which page should the teacher');
@@ -652,6 +653,7 @@ describe('generate-lesson-quizzes resource optimization', () => {
       error: 'Quiz generation returned invalid structured output',
       code: 'QUIZ_GENERATION_FAILED',
       provider: 'all',
+      validationRule: expect.stringMatching(/exactly 3 quizzes/i),
     }));
     expect(body).not.toHaveProperty('raw_excerpt');
     const diagnostics = JSON.stringify([...logSpy.mock.calls, ...errorSpy.mock.calls]);

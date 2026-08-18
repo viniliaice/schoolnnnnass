@@ -185,19 +185,17 @@ describe('background lesson-plan AI review contracts', () => {
     expect(decideBody).toContain('SET status = p_status');
   });
 
-  it('dispatches only after submit confirmation and keeps quiz/review work independent', () => {
+  it('dispatches review after submit confirmation and never starts quizzes from the teacher path', () => {
     const submitBody = functionBodyFromSource(
       clientSource,
       'export async function submitForReview(',
       'export async function fetchReviewByPlanId(',
     );
     const statusCheck = submitBody.indexOf("submittedPlan.status !== 'submitted'");
-    const quizDispatch = submitBody.indexOf('void generateLessonPlanQuizzes(planId).catch');
     const reviewDispatch = submitBody.indexOf('void dispatchLessonPlanReview(planId, submittedPlan.ai_started_at).catch');
     expect(statusCheck).toBeGreaterThanOrEqual(0);
-    expect(quizDispatch).toBeGreaterThan(statusCheck);
     expect(reviewDispatch).toBeGreaterThan(statusCheck);
-    expect(submitBody).not.toContain('await generateLessonPlanQuizzes');
+    expect(submitBody).not.toContain('generateLessonPlanQuizzes');
     expect(submitBody).not.toContain('await dispatchLessonPlanReview');
 
     const retryBody = functionBodyFromSource(
