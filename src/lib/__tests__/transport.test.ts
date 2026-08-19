@@ -67,7 +67,10 @@ describe('display helpers', () => {
   it('labels transport values', () => {
     expect(transportLabel('9')).toBe('Bus 9');
     expect(transportLabel('WALKER')).toBe('WALKER');
-    expect(transportLabel(null)).toBe('—');
+    // Business rule: an unset transport IS a walker, so the label is never a
+    // dash. (Was '—' before empty-means-WALKER was made system-wide.)
+    expect(transportLabel(null)).toBe('WALKER');
+    expect(transportLabel('')).toBe('WALKER');
   });
 });
 

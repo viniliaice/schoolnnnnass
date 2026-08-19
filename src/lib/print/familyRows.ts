@@ -4,7 +4,7 @@
 // search/filter predicates the table uses. Kept pure (no React, no Supabase)
 // so the matching rules are unit-testable and identical everywhere.
 
-import { displayFamilyId, normalizeName, transportLabel } from '../transport';
+import { displayFamilyId, normalizeName, normalizeTransport, transportLabel } from '../transport';
 import type { Student } from '../../types';
 
 export interface FamilyRow {
@@ -52,8 +52,9 @@ export function buildFamilyRows(
     const transports: string[] = [];
     const classNames: string[] = [];
     for (const s of sorted) {
-      const label = s.transport ? transportLabel(s.transport) : '';
-      if (label && label !== '—' && !transports.includes(label)) transports.push(label);
+      // Empty transport is WALKER, never a blank cell.
+      const label = transportLabel(s.transport);
+      if (label && !transports.includes(label)) transports.push(label);
       if (s.className && !classNames.includes(s.className)) classNames.push(s.className);
     }
     const parentId = sorted.map(s => s.parentId).find(Boolean) ?? null;
@@ -107,7 +108,8 @@ export type TransportFilter = 'all' | 'bus' | 'walker' | 'car';
 export function familyRowMatchesTransport(row: FamilyRow, filter: TransportFilter): boolean {
   if (filter === 'all') return true;
   return row.students.some(s => {
-    const t = s.transport ?? '';
+    // Normalized: a student with no transport counts as a WALKER here too.
+    const t = normalizeTransport(s.transport);
     if (filter === 'bus') return /^\d+$/.test(t);
     if (filter === 'walker') return t === 'WALKER';
     if (filter === 'car') return t === 'CAR';

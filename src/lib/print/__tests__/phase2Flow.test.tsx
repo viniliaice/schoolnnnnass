@@ -48,6 +48,30 @@ describe('Phase 2 — families table renders', () => {
     const empty = renderToStaticMarkup(<FamiliesTable students={[]} loading={false} />);
     expect(empty).toContain('No families yet');
   });
+
+  it('shows rows even when parent names are unavailable (office/supervisor)', () => {
+    // profiles is admin-readable only; a blank parent column must never stop
+    // the table from listing families.
+    const noNames = renderToStaticMarkup(<FamiliesTable students={ROSTER} loading={false} />);
+    expect(noNames).toContain('MBK-0042');
+    expect(noNames).toContain('Ahmed Xasan');
+  });
+
+  it('distinguishes a LOAD FAILURE from an empty school', () => {
+    const failed = renderToStaticMarkup(
+      <FamiliesTable students={[]} loading={false} error="permission denied" />
+    );
+    expect(failed).toContain('Could not load families');
+    expect(failed).toContain('permission denied');
+    expect(failed).not.toContain('No families yet');
+  });
+
+  it('only shows the loading state while actually loading', () => {
+    const busy = renderToStaticMarkup(<FamiliesTable students={[]} loading />);
+    expect(busy).toContain('Loading families');
+    const done = renderToStaticMarkup(<FamiliesTable students={ROSTER} loading={false} />);
+    expect(done).not.toContain('Loading families');
+  });
 });
 
 describe('Phase 2 — the four print paths all resolve to unique families', () => {

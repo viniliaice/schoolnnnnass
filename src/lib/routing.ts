@@ -45,3 +45,17 @@ export function canAccessRoute(role: Role, path: string): boolean {
 export function canGenerateFamilyIds(role: Role): boolean {
   return role === 'admin';
 }
+
+/**
+ * Who may change a student's transport.
+ *
+ * Admin only — this mirrors set_student_transport(), which raises
+ * insufficient_privilege for every other role. Office and supervisor can
+ * browse, search and PRINT families, and that read/print access must not
+ * silently become student-write access; the UI therefore hides the control
+ * for them rather than letting them discover it and hit a server error.
+ * The client check is convenience only: SQL remains the enforcement point.
+ */
+export function canEditTransport(role: Role): boolean {
+  return role === 'admin';
+}

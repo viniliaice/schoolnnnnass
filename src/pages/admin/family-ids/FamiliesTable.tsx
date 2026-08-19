@@ -6,13 +6,14 @@
 // PrintCardsDialog; none of them can generate a Family ID.
 
 import { useMemo, useState } from 'react';
-import { Printer, Search, Users } from 'lucide-react';
+import { Pencil, Printer, Search, Users } from 'lucide-react';
 import { displayFamilyId, formatGradeLabel, transportLabel } from '../../../lib/transport';
 import {
   buildFamilyRows, classOptions, filterFamilyRows,
   type FamilyRow, type TransportFilter,
 } from '../../../lib/print/familyRows';
 import { PrintCardsDialog, type DialogSource } from './PrintCardsDialog';
+import { EditTransportDialog } from './EditTransportDialog';
 import { cn } from '../../../utils/cn';
 import type { Student } from '../../../types';
 
@@ -27,16 +28,27 @@ export function FamiliesTable({
   students,
   parentNames,
   loading,
+  error,
+  onRetry,
+  canEditTransport = false,
+  onEditTransport,
 }: {
   students: Student[];
   parentNames?: Map<string, string>;
   loading?: boolean;
+  /** Set when the roster could not be loaded — shown instead of an empty table. */
+  error?: string | null;
+  onRetry?: () => void;
+  /** Admin-only: show the per-student transport edit control (SQL also enforces). */
+  canEditTransport?: boolean;
+  onEditTransport?: (studentId: string, transport: string) => Promise<void>;
 }) {
   const [query, setQuery] = useState('');
   const [transport, setTransport] = useState<TransportFilter>('all');
   const [className, setClassName] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dialog, setDialog] = useState<DialogSource | null>(null);
+  const [editing, setEditing] = useState<Student | null>(null);
 
   const rows = useMemo(() => buildFamilyRows(students, parentNames), [students, parentNames]);
   const filtered = useMemo(
@@ -168,6 +180,21 @@ export function FamiliesTable({
 
       {loading ? (
         <p className="py-8 text-center text-sm text-slate-400">Loading families…</p>
+      ) : error ? (
+        // Distinguish "couldn't load" from "nothing to show" — otherwise a
+        // failed request looks like a school with no families.
+        <div className="rounded-xl border border-red-200 bg-red-50 p-8 text-center">
+          <p className="text-sm font-bold text-red-800">Could not load families</p>
+          <p className="mt-1 text-xs text-red-700">{error}</p>
+          {onRetry && (
+            <button
+              onClick={onRetry}
+              className="mt-3 rounded-xl bg-red-700 px-4 py-2 text-xs font-bold text-white hover:bg-red-800"
+            >
+              Try again
+            </button>
+          )}
+        </div>
       ) : rows.length === 0 ? (
         <div className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
           <p className="text-sm font-semibold text-slate-700">No families yet</p>
@@ -221,12 +248,23 @@ export function FamiliesTable({
                       label: `${displayFamilyId(row.familyId)} — ${row.studentCount} student(s)`,
                     })
                   }
+                  canEdit={canEditTransport}
+                  onEdit={setEditing}
                 />
               ))}
             </tbody>
           </table>
         </div>
       )}
+
+      <EditTransportDialog
+        student={editing}
+        open={editing !== null}
+        onClose={() => setEditing(null)}
+        onSave={async (studentId, transport) => {
+          await onEditTransport?.(studentId, transport);
+        }}
+      />
 
       <PrintCardsDialog
         open={dialog !== null}
@@ -239,9 +277,10 @@ export function FamiliesTable({
 }
 
 function FamilyTableRow({
-  row, selected, onToggle, onPrint,
+  row, selected, onToggle, onPrint, canEdit, onEdit,
 }: {
   row: FamilyRow; selected: boolean; onToggle: () => void; onPrint: () => void;
+  canEdit?: boolean; onEdit?: (student: Student) => void;
 }) {
   return (
     <tr className={cn('border-t border-slate-100 align-top', selected && 'bg-emerald-50/60')}>
@@ -270,10 +309,26 @@ function FamilyTableRow({
         ))}
       </td>
       <td className="px-3 py-2 font-bold tabular-nums text-slate-700">{row.studentCount}</td>
+      {/* Transport is PER STUDENT, aligned row-for-row with the names above,
+          so a mixed family reads correctly instead of collapsing to one mode.
+          The family-level summary ('Bus 9 · WALKER') stays in the header cell
+          only when every child shares a single mode. */}
       <td className="px-3 py-2 text-slate-600">
-        {row.transports.length > 0
-          ? row.transports.join(' · ')
-          : transportLabel(null)}
+        {row.students.map(s => (
+          <div key={s.id} className="flex items-center gap-1.5">
+            <span>{transportLabel(s.transport)}</span>
+            {canEdit && onEdit && (
+              <button
+                onClick={() => onEdit(s)}
+                aria-label={`Edit transport for ${s.name}`}
+                title={`Edit transport for ${s.name}`}
+                className="rounded p-0.5 text-slate-400 opacity-70 transition hover:bg-slate-100 hover:text-emerald-700 hover:opacity-100"
+              >
+                <Pencil className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+        ))}
       </td>
       <td className="px-3 py-2 text-right">
         <button

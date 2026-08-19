@@ -156,12 +156,23 @@ describe('familyTransportLabel — mixed-transport families', () => {
     ])).toBe('Bus 9');
   });
 
-  it('ignores students who left and falls back when nothing is set', () => {
+  it('ignores students who left', () => {
     expect(familyTransportLabel([
       student({ id: '1', name: 'A', transport: 'CAR' }),
       student({ id: '2', name: 'B', transport: 'LEFT' }),
     ])).toBe('CAR');
-    expect(familyTransportLabel([student({ id: '1', name: 'A', transport: null })])).toBe('GAAR / CAR');
+  });
+
+  it('prints WALKER for a child with no transport set', () => {
+    // Business rule: empty/NULL means WALKER everywhere, the printed card
+    // included. This used to fall through to the 'GAAR / CAR' placeholder.
+    expect(familyTransportLabel([student({ id: '1', name: 'A', transport: null })])).toBe('WALKER');
+    expect(familyTransportLabel([student({ id: '1', name: 'A', transport: '' })])).toBe('WALKER');
+  });
+
+  it('still falls back when EVERY child has left', () => {
+    // The only remaining path to the placeholder.
+    expect(familyTransportLabel([student({ id: '1', name: 'A', transport: 'LEFT' })])).toBe('GAAR / CAR');
   });
 });
 

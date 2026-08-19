@@ -234,7 +234,8 @@ function initialOf(name: string): string {
 export function familyTransportLabel(students: Student[]): string {
   const seen: string[] = [];
   for (const s of students) {
-    if (!s.transport || s.transport === 'LEFT') continue;
+    // Empty transport is WALKER (business rule), so only LEFT is skipped.
+    if (s.transport === 'LEFT') continue;
     const label = transportLabel(s.transport);
     if (!seen.includes(label)) seen.push(label);
   }

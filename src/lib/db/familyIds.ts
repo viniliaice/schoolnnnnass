@@ -75,13 +75,40 @@ export async function lookupFamily(familyId: string): Promise<FamilyLookupRow[]>
   return (data ?? []) as FamilyLookupRow[];
 }
 
-/** parentId → profile name, for printing the parent name on family cards. */
+/**
+ * parentId → profile name, used to decorate the families table.
+ *
+ * Chunked: `.in()` serializes every id into the query string, so a whole
+ * school (hundreds of parents) builds a URL long enough to be rejected or
+ * stalled by proxies. Chunks are fetched in parallel and merged; a failing
+ * chunk degrades to "no name" rather than rejecting the whole lookup, because
+ * `profiles` is admin-readable only and non-admin callers legitimately get
+ * nothing back. The PRINTED card never depends on this — it takes the parent
+ * name from get_family_cards().
+ */
+const PARENT_NAME_CHUNK = 100;
+
 export async function getParentNames(parentIds: string[]): Promise<Map<string, string>> {
   const ids = [...new Set(parentIds.filter(Boolean))];
   if (ids.length === 0) return new Map();
-  const { data, error } = await supabase.from('profiles').select('id,name').in('id', ids);
-  if (error) throw error;
-  return new Map((data ?? []).map(p => [p.id, p.name]));
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += PARENT_NAME_CHUNK) {
+    chunks.push(ids.slice(i, i + PARENT_NAME_CHUNK));
+  }
+
+  const results = await Promise.all(
+    chunks.map(async chunk => {
+      const { data, error } = await supabase.from('profiles').select('id,name').in('id', chunk);
+      if (error) {
+        console.warn(`${LOG} getParentNames chunk failed`, errInfo(error));
+        return [] as Array<{ id: string; name: string }>;
+      }
+      return (data ?? []) as Array<{ id: string; name: string }>;
+    }),
+  );
+
+  return new Map(results.flat().map(p => [p.id, p.name]));
 }
 
 /** Admin quick-edit of a student's transport (WALKER / CAR / bus number). */

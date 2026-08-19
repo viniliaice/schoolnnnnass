@@ -70,12 +70,71 @@ export function normalizeName(name: unknown): string {
   return (name == null ? '' : String(name)).toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-/** Display label for a stored transport value ('9' → 'Bus 9'). */
+/**
+ * The three choices staff pick from. There is deliberately no 'BUS' stored
+ * value: the DB CHECK constraint is
+ *   transport IS NULL OR transport IN ('WALKER','CAR','LEFT') OR transport ~ '^\d+$'
+ * so a bus rider IS the bus number ('9'). 'BUS' exists only in the UI, where
+ * it is paired with a route number and stored as those digits.
+ */
+export type TransportChoice = 'WALKER' | 'CAR' | 'BUS';
+
+/**
+ * Canonical stored transport for a student.
+ *
+ * BUSINESS RULE: an unset transport means WALKER. The column is nullable and
+ * the transport sheet leaves cells blank for children who walk, so NULL / ''
+ * is not "unknown" — it is the school's default. Normalizing here, at the
+ * single read boundary, keeps cards, table, filters, gate, lookup and badges
+ * from each inventing their own answer, WITHOUT a risky bulk UPDATE of live
+ * rows (the stored NULL stays NULL; only its interpretation is fixed).
+ *
+ * 'LEFT' is preserved as-is: it is a status, not a transport mode, and five
+ * call sites depend on being able to see it.
+ */
+export function normalizeTransport(transport: string | null | undefined): string {
+  const value = (transport ?? '').trim();
+  if (value === '') return 'WALKER';
+  if (value === 'LEFT') return 'LEFT';
+  const upper = value.toUpperCase();
+  if (upper === 'WALKER' || upper === 'CAR') return upper;
+  if (/^\d+$/.test(value)) return value;
+  return value;
+}
+
+/** Which radio button a stored value corresponds to (bus number → 'BUS'). */
+export function transportChoiceOf(transport: string | null | undefined): TransportChoice {
+  const value = normalizeTransport(transport);
+  if (value === 'CAR') return 'CAR';
+  if (/^\d+$/.test(value)) return 'BUS';
+  return 'WALKER';
+}
+
+/** The bus route for a stored value, or '' when the student is not on a bus. */
+export function busNumberOf(transport: string | null | undefined): string {
+  const value = normalizeTransport(transport);
+  return /^\d+$/.test(value) ? value : '';
+}
+
+/**
+ * Turn a UI choice back into the value the DB accepts.
+ * Returns null when BUS is chosen without a route number (caller must block).
+ */
+export function toStoredTransport(choice: TransportChoice, busNumber: string): string | null {
+  if (choice === 'WALKER' || choice === 'CAR') return choice;
+  const digits = (busNumber ?? '').replace(/\D/g, '');
+  return digits === '' ? null : String(Number(digits));
+}
+
+/**
+ * Display label for a stored transport value ('9' → 'Bus 9').
+ * Empty/NULL renders as WALKER, per the business rule above.
+ */
 export function transportLabel(transport: string | null | undefined): string {
-  if (!transport) return '—';
-  if (transport === 'WALKER' || transport === 'CAR') return transport;
-  if (/^\d+$/.test(transport)) return `Bus ${transport}`;
-  return transport;
+  const value = normalizeTransport(transport);
+  if (value === 'WALKER' || value === 'CAR' || value === 'LEFT') return value;
+  if (/^\d+$/.test(value)) return `Bus ${value}`;
+  return value;
 }
 
 /**

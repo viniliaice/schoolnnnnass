@@ -10,7 +10,7 @@ import { pdf } from '@react-pdf/renderer';
 import { HelpCircle, ChevronDown, Download, Upload } from 'lucide-react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { canGenerateFamilyIds } from '../../lib/routing';
+import { canEditTransport, canGenerateFamilyIds } from '../../lib/routing';
 import { getStudents } from '../../lib/db/students';
 import {
   applyTransportImport, assignFamilyOverride, findLeftStudents, findUnattached,
@@ -18,7 +18,7 @@ import {
   type GenerateSummary,
 } from '../../lib/db/familyIds';
 import {
-  parseTransportImport, matchImportRows, summarizeImport, bucketOf,
+  parseTransportImport, matchImportRows, summarizeImport, transportOverwrites, bucketOf,
   type ImportBucket,
   type TransportImportResult, type TransportImportRow,
 } from '../../lib/import/transportImport';
@@ -84,9 +84,11 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
   const { addToast } = useToast();
   const { session } = useRole();
   const canWrite = !!session && canGenerateFamilyIds(session.role);
+  const canEditTransportHere = !!session && canEditTransport(session.role);
   const [students, setStudents] = useState<Student[]>([]);
   const [parentNames, setParentNames] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [importText, setImportText] = useState('');
   const [importedRows, setImportedRows] = useState<TransportImportRow[]>([]);
   const [applyBuckets, setApplyBuckets] = useState<Set<ImportBucket>>(new Set(ALL_BUCKETS));
@@ -104,26 +106,39 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
 
   const reload = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const loaded = await getStudents();
       setStudents(loaded);
-      // Parent names decorate the browse table only. profiles is admin-readable,
-      // so this is best-effort: office/supervisor simply see a blank column,
-      // while the PRINTED card always gets the name from get_family_cards().
-      try {
-        const ids = loaded.map(s2 => s2.parentId).filter((id): id is string => !!id);
-        setParentNames(await getParentNames(ids));
-      } catch {
-        setParentNames(new Map());
-      }
     } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Could not load students.');
       addToast({ type: 'error', title: 'Failed to load students', description: err instanceof Error ? err.message : undefined });
     } finally {
+      // The table only needs students. Anything else must NOT gate this —
+      // see INVESTIGATION-FamilyIds-Performance.md finding 1, which this
+      // page regressed once before by awaiting parent names here.
       setLoading(false);
     }
   }, [addToast]);
 
   useEffect(() => { void reload(); }, [reload]);
+
+  /**
+   * Parent names are a decoration on the browse table (the printed card gets
+   * its own name from get_family_cards). Load them AFTER students, without
+   * blocking the table, and never surface a failure: `profiles` is
+   * admin-readable only, so office/supervisor simply see a blank column.
+   */
+  useEffect(() => {
+    if (students.length === 0) return;
+    let cancelled = false;
+    const ids = students.map(s => s.parentId).filter((id): id is string => !!id);
+    if (ids.length === 0) return;
+    getParentNames(ids)
+      .then(names => { if (!cancelled) setParentNames(names); })
+      .catch(() => { if (!cancelled) setParentNames(new Map()); });
+    return () => { cancelled = true; };
+  }, [students]);
 
   const groups = useMemo(() => groupStudentsByFamily(students), [students]);
   const unattached = useMemo(() => findUnattached(students), [students]);
@@ -146,6 +161,8 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
     return families.filter(([, students]) => match(students[0]?.transport));
   }, [families, printFilter]);
   const importSummary = useMemo(() => (importedRows.length ? summarizeImport(importedRows) : null), [importedRows]);
+  /** Rows where the sheet would overwrite a transport already stored (e.g. a manual correction). */
+  const overwrites = useMemo(() => transportOverwrites(importedRows), [importedRows]);
   /** Matched-row count per bucket, for the Apply-only chips. */
   const bucketCounts = useMemo(() => {
     const counts: Record<ImportBucket, number> = { nb: 0, empty: 0, bus: 0, other: 0 };
@@ -281,12 +298,19 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
     }
   };
 
+  /**
+   * Transport-only write. set_student_transport() updates exactly one row and
+   * touches no family column, so this can never generate, change, split or
+   * merge a Family ID. Rethrows so the dialog can show the error inline.
+   */
   const handleTransport = async (studentId: string, transport: string) => {
     try {
       await setStudentTransport(studentId, transport);
+      addToast({ type: 'success', title: `Transport updated to ${transportLabel(transport)}` });
       await reload();
     } catch (err) {
       addToast({ type: 'error', title: 'Update failed', description: err instanceof Error ? err.message : undefined });
+      throw err;
     }
   };
 
@@ -595,6 +619,27 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
           )}
         </div>
 
+        {overwrites.length > 0 && (
+          <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs">
+            <p className="font-bold text-amber-900">
+              {overwrites.length} row(s) would change a transport already saved
+            </p>
+            <p className="mt-0.5 text-amber-800">
+              The sheet wins when it has a value, so applying these will replace manual
+              corrections made in the app. Review them, or uncheck that bucket above.
+            </p>
+            <ul className="mt-2 space-y-0.5 text-amber-900">
+              {overwrites.slice(0, 8).map((row, i) => (
+                <li key={i}>
+                  <span className="font-semibold">{row.name}</span>:{' '}
+                  {transportLabel(row.currentTransport)} → {transportLabel(row.transport.value)}
+                </li>
+              ))}
+              {overwrites.length > 8 && <li>…and {overwrites.length - 8} more</li>}
+            </ul>
+          </div>
+        )}
+
         {importSummary && (
           <div className="mt-4">
             <div className="mb-2 flex flex-wrap gap-2 text-xs">
@@ -643,7 +688,15 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
       {/* Families — the browse/print surface */}
       {mode === 'browse' && (
         <div className="mb-6">
-          <FamiliesTable students={students} parentNames={parentNames} loading={loading} />
+          <FamiliesTable
+            students={students}
+            parentNames={parentNames}
+            loading={loading}
+            error={loadError}
+            onRetry={() => void reload()}
+            canEditTransport={canEditTransportHere}
+            onEditTransport={handleTransport}
+          />
         </div>
       )}
 
