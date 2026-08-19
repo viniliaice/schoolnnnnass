@@ -31,7 +31,6 @@ import { cn } from '../../utils/cn';
 import type { Student } from '../../types';
 
 const TRANSPORT_OPTIONS = ['WALKER', 'CAR'] as const;
-const FAMILY_ID_PROGRESS_TARGET = 200;
 
 const BUCKET_LABELS: Array<[ImportBucket, string]> = [
   ['nb', 'Walkers (NB / 0)'],
@@ -144,11 +143,26 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
   const unattached = useMemo(() => findUnattached(students), [students]);
   const leftStudents = useMemo(() => findLeftStudents(students), [students]);
   const families = useMemo(() => Array.from(groups.entries()), [groups]);
+  /**
+   * COVERAGE, not a made-up target.
+   *
+   * This used to compare the family count against a hardcoded 200, which
+   * produced nonsense like "443 of 200 — 100% complete" for any school bigger
+   * than the number someone guessed. The real question staff have is "does
+   * every active student have a Family ID yet?", so the denominator is the
+   * active roster and the numerator is the students actually covered.
+   *
+   * Students marked LEFT are excluded from both sides: they keep their
+   * familyId but are not part of the working roster.
+   */
   const familyProgress = useMemo(() => {
-    const current = families.length;
-    const percent = Math.min(100, Math.round((current / FAMILY_ID_PROGRESS_TARGET) * 100));
-    return { current, target: FAMILY_ID_PROGRESS_TARGET, percent };
-  }, [families.length]);
+    const active = students.filter(s => s.transport !== 'LEFT');
+    const withId = active.filter(s => !!s.familyId);
+    const total = active.length;
+    const covered = withId.length;
+    const percent = total === 0 ? 0 : Math.round((covered / total) * 100);
+    return { covered, total, percent, families: families.length, remaining: total - covered };
+  }, [students, families.length]);
   /** Print-batch filter: families whose (first) student matches the transport bucket. */
   const filteredFamilies = useMemo(() => {
     if (printFilter === 'all') return families;
@@ -461,7 +475,7 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
         <StatCard label="Unattached" value={unattached.length} tone={unattached.length ? 'warn' : 'ok'} />
         <StatCard label="Ambiguous" value={importSummary?.ambiguous ?? 0} tone={importSummary?.ambiguous ? 'warn' : 'ok'} />
       </div>
-      <FamilyProgressBar current={familyProgress.current} target={familyProgress.target} percent={familyProgress.percent} />
+      <FamilyProgressBar {...familyProgress} />
 
       {/* Generate — setup only */}
       {mode === 'setup' && (
@@ -842,20 +856,49 @@ function StatCard({ label, value, tone }: { label: string; value: number; tone?:
   );
 }
 
-function FamilyProgressBar({ current, target, percent }: { current: number; target: number; percent: number }) {
+/**
+ * Family ID coverage across the ACTIVE roster.
+ *
+ * Deliberately does NOT claim anything about printing: nothing in this app
+ * records that a card was printed or handed over, so a "printed and verified"
+ * figure would be invented. It reports only what the data can prove — how many
+ * active students have a Family ID.
+ */
+function FamilyProgressBar(
+  { covered, total, percent, families, remaining }:
+  { covered: number; total: number; percent: number; families: number; remaining: number },
+) {
+  const complete = total > 0 && remaining === 0;
   return (
-    <section className="mb-6 rounded-2xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-white p-4 shadow-sm" aria-label="Family ID progress">
+    <section className="mb-6 rounded-2xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-white p-4 shadow-sm" aria-label="Family ID coverage">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-sm font-bold text-emerald-950">Family ID progress</h2>
-          <p className="text-xs text-emerald-700">Target: print and verify {target} family IDs.</p>
+          <h2 className="text-sm font-bold text-emerald-950">Family ID coverage</h2>
+          <p className="text-xs text-emerald-700">
+            {total === 0
+              ? 'No active students loaded yet.'
+              : complete
+                ? `Every active student has a Family ID — ${families} famil${families === 1 ? 'y' : 'ies'} in total.`
+                : `${remaining} active student${remaining === 1 ? '' : 's'} still need a Family ID.`}
+          </p>
         </div>
         <div className="text-right">
-          <div className="text-lg font-black tabular-nums text-emerald-900">{current} of {target}</div>
-          <div className="text-xs font-semibold text-emerald-700">{percent}% complete</div>
+          <div className="text-lg font-black tabular-nums text-emerald-900">
+            {covered} of {total} students
+          </div>
+          <div className="text-xs font-semibold text-emerald-700">
+            {percent}% · {families} famil{families === 1 ? 'y' : 'ies'}
+          </div>
         </div>
       </div>
-      <div className="h-3 overflow-hidden rounded-full bg-emerald-100" role="progressbar" aria-valuenow={Math.min(current, target)} aria-valuemin={0} aria-valuemax={target} aria-label={`${current} of ${target} family IDs`}>
+      <div
+        className="h-3 overflow-hidden rounded-full bg-emerald-100"
+        role="progressbar"
+        aria-valuenow={covered}
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-label={`${covered} of ${total} active students have a Family ID`}
+      >
         <div className="h-full rounded-full bg-emerald-700 transition-all duration-500" style={{ width: `${percent}%` }} />
       </div>
     </section>
