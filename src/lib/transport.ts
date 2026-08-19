@@ -78,6 +78,38 @@ export function transportLabel(transport: string | null | undefined): string {
   return transport;
 }
 
+/**
+ * Compact grade chip for the printed family card ('Grade 7-A' → 'G7').
+ *
+ * `students.className` is the authoritative grade source — there is no
+ * separate grade/year column on students in any migration, and the app
+ * already labels this value "Grade" (StudentDirectory, transport import,
+ * gate strings). The card has ~123pt of row width, which is not enough for
+ * a full class name beside a real student name (measured: "Xalimo Xasan
+ * Maxamed" + "Grade 12-C" = 133.8pt), so the printed chip is compact.
+ *
+ * NOTE: deliberately NOT named getGrade() — `getGrade(score)` already exists
+ * in src/types and means "letter grade from an exam score".
+ */
+export function formatGradeLabel(className: string | null | undefined): string {
+  const value = (className ?? '').trim();
+  if (!value) return '';
+
+  const grade = value.match(/^Grade\s+(\d+)/i);
+  if (grade) return `G${grade[1]}`;
+
+  const year = value.match(/^Year\s+(\d+)/i);
+  if (year) return `Y${year[1]}`;
+
+  const foundation = value.match(/^Foundation\s+([A-Za-z])/i);
+  if (foundation) return `F-${foundation[1].toUpperCase()}`;
+
+  if (/^KG/i.test(value)) return 'KG';
+
+  // Unknown/legacy class naming: never throw, never render blank.
+  return value.slice(0, 3).toUpperCase();
+}
+
 /** '0421' → 'MBK-0421' (prefix is print/display only, per design decision 8). */
 export function displayFamilyId(familyId: string | null | undefined): string {
   if (!familyId) return '—';

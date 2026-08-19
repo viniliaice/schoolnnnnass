@@ -14,7 +14,7 @@ import { canGenerateFamilyIds } from '../../lib/routing';
 import { getStudents } from '../../lib/db/students';
 import {
   applyTransportImport, assignFamilyOverride, findLeftStudents, findUnattached,
-  generateFamilyIds, getParentNames, groupStudentsByFamily, markStudentLeft, setStudentTransport,
+  generateFamilyIds, groupStudentsByFamily, markStudentLeft, setStudentTransport,
   type GenerateSummary,
 } from '../../lib/db/familyIds';
 import {
@@ -24,7 +24,8 @@ import {
 } from '../../lib/import/transportImport';
 import { TRANSPORT_EXAMPLE_CSV, downloadExampleWorkbook } from '../../lib/import/transportTemplate';
 import { displayFamilyId, transportLabel } from '../../lib/transport';
-import { buildFamilyCardData, FamilyCardsDocument, type CardLayout, type FamilyCardData } from '../../lib/print/familyCards';
+import { FamilyCardsDocument, type CardLayout, type FamilyCardData } from '../../lib/print/familyCards';
+import { getFamilyCards } from '../../lib/db/familyCards';
 import { cn } from '../../utils/cn';
 import type { Student } from '../../types';
 
@@ -245,7 +246,13 @@ export function FamilyIds() {
       addToast({
         type: 'success',
         title: `Generated ${result.familiesCreated} family ID(s)`,
-        description: `${result.studentsAssigned} students assigned · ${result.totalFamilies} total families`,
+        description: [
+          `${result.studentsAssigned} students assigned`,
+          // Siblings enrolling later join the family's existing MBK number
+          // instead of being issued a second one.
+          result.studentsJoined ? `${result.studentsJoined} joined an existing family` : null,
+          `${result.totalFamilies} total families`,
+        ].filter(Boolean).join(' · '),
       });
       await reload();
     } catch (err) {
@@ -282,7 +289,9 @@ export function FamilyIds() {
       addToast({
         type: 'success',
         title: left ? `Marked ${student.name} as left` : `Restored ${student.name}`,
-        description: left ? 'Removed from families and gate cards.' : 'They can be assigned a family ID again.',
+        description: left
+          ? 'Removed from families and gate cards. Their family ID is kept for when they return.'
+          : 'Restored to their original family ID.',
       });
       await reload();
     } catch (err) {
@@ -416,7 +425,9 @@ export function FamilyIds() {
         )}
         {generateResult && (
           <p className="mt-3 text-sm text-slate-600">
-            Last run: {generateResult.familiesCreated} families created · {generateResult.studentsAssigned} students assigned ·{' '}
+            Last run: {generateResult.familiesCreated} families created ·{' '}
+            {generateResult.studentsAssigned} students assigned ·{' '}
+            {generateResult.studentsJoined ? <>{generateResult.studentsJoined} joined an existing family · </> : null}
             {generateResult.unattached.length} unattached · {generateResult.totalFamilies} total families
           </p>
         )}
@@ -656,7 +667,7 @@ export function FamilyIds() {
           )} />
           <div className="min-w-0 flex-1">
             <h2 className="text-base font-bold text-slate-900">Marked as left</h2>
-            <p className="mt-0.5 text-sm text-slate-500">No family ID, no gate card. Restore if they come back.</p>
+            <p className="mt-0.5 text-sm text-slate-500">No gate card while away. Restoring returns them to the same family ID.</p>
           </div>
           <span className="shrink-0 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700">
             {leftStudents.length}
@@ -765,7 +776,7 @@ function FamilyProgressBar({ current, target, percent }: { current: number; targ
 
 /** Lazily builds the family-card PDF only when staff preview/download. */
 function AsyncPrintLink({ families, layout, withLookup }: { families: [string, Student[]][]; layout: CardLayout; withLookup: boolean }) {
-  const [data, setData] = useState<Awaited<ReturnType<typeof buildFamilyCardData>> | null>(null);
+  const [data, setData] = useState<FamilyCardData[] | null>(null);
   const [error, setError] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -792,11 +803,12 @@ function AsyncPrintLink({ families, layout, withLookup }: { families: [string, S
 
   const getCardData = async () => {
     if (data) return data;
-    const parentIds = families
-      .flatMap(([, kids]) => kids.map(k => k.parentId))
-      .filter((id): id is string => !!id);
-    const names = await getParentNames(parentIds);
-    const built = await buildFamilyCardData(new Map(families), names);
+    // Card content comes from get_family_cards(), NOT from the RLS-scoped
+    // student list the table is rendered from. A supervisor only sees their
+    // assigned classes, and only admins can read profiles, so building cards
+    // client-side printed rosters missing siblings and a blank parent name.
+    // The RPC returns the complete family for every gate role.
+    const built = await getFamilyCards(families.map(([familyId]) => familyId));
     if (!cancelledRef.current) setData(built);
     return built;
   };

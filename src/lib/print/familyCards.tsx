@@ -25,7 +25,7 @@ import {
   Defs, LinearGradient, Rect, Circle, Stop,
 } from '@react-pdf/renderer';
 import type { Student } from '../../types';
-import { displayFamilyId, transportLabel } from '../transport';
+import { displayFamilyId, formatGradeLabel, transportLabel } from '../transport';
 import { buildQrPath } from './qrPath';
 import mbkLogo from '../../../assets/MBK Internatinal Logo.png';
 
@@ -129,6 +129,23 @@ const styles = StyleSheet.create({
   rowNameLarge: { fontSize: 12.5, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', color: INK },
   rowMeta: { fontSize: 6.3, color: MUTED, fontWeight: 'bold' },
   rowMetaLarge: { fontSize: 9.5, color: MUTED, fontWeight: 'bold' },
+
+  // Name + grade share one baseline row. The name flexes (and wraps if a name
+  // is genuinely enormous); the grade chip is fixed-width, right-aligned and
+  // never shrinks, so it stays anchored to ITS student and can never be
+  // mistaken for a sibling's grade. Measured: rowBody is ~123pt on a 60mm
+  // card, which is why the chip is compact (formatGradeLabel) rather than a
+  // full class name.
+  nameLine: { flexDirection: 'row', alignItems: 'baseline' },
+  rowNameFlex: { flex: 1, flexShrink: 1 },
+  gradeChip: {
+    width: 26, flexShrink: 0, textAlign: 'right', paddingLeft: 1.2 * MM,
+    fontSize: 6.8, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', color: MBK_BLUE_DARK,
+  },
+  gradeChipLarge: {
+    width: 38, flexShrink: 0, textAlign: 'right', paddingLeft: 2 * MM,
+    fontSize: 9.5, fontWeight: 'bold', fontFamily: 'Helvetica-Bold', color: MBK_BLUE_DARK,
+  },
   divider: { height: 0.5, backgroundColor: HAIR, marginVertical: 1.5 * MM },
 
   // circular icon badge (initial/glyph in a colored disc)
@@ -207,14 +224,43 @@ function initialOf(name: string): string {
 }
 
 /** One kid row: circular initial badge + name + class · transport. */
+/**
+ * Footer transport badge for the WHOLE family.
+ *
+ * Previously this read `students[0].transport`, so a family with a walker and
+ * a bus rider was labelled by whichever child sorted first. Show every
+ * distinct mode instead ('Bus 9 · WALKER'), in roster order.
+ */
+export function familyTransportLabel(students: Student[]): string {
+  const seen: string[] = [];
+  for (const s of students) {
+    if (!s.transport || s.transport === 'LEFT') continue;
+    const label = transportLabel(s.transport);
+    if (!seen.includes(label)) seen.push(label);
+  }
+  if (seen.length === 0) return 'GAAR / CAR';
+  return seen.join(' · ');
+}
+
 function KidRow({ student, large }: { student: Student; large: boolean }) {
+  const grade = formatGradeLabel(student.className);
   return (
     <View style={large ? styles.rowLarge : styles.row} key={student.id} wrap={false}>
       <Badge char={initialOf(student.name)} color={MBK_BLUE} large={large} />
       <View style={styles.rowBody}>
-        <Text style={large ? styles.rowNameLarge : styles.rowName}>{student.name}</Text>
+        {/* Grade sits on the name's baseline, inside THIS student's row, so it
+            can never drift onto a sibling. The transport moves to the meta
+            line alone (the class used to live there). */}
+        <View style={styles.nameLine}>
+          <Text style={[large ? styles.rowNameLarge : styles.rowName, styles.rowNameFlex]}>
+            {student.name}
+          </Text>
+          {grade !== '' && (
+            <Text style={large ? styles.gradeChipLarge : styles.gradeChip}>{grade}</Text>
+          )}
+        </View>
         <Text style={large ? styles.rowMetaLarge : styles.rowMeta}>
-          {student.className} · {transportLabel(student.transport)}
+          {transportLabel(student.transport)}
         </Text>
       </View>
     </View>
@@ -274,7 +320,7 @@ function CardFront({ layout, data }: { layout: CardLayout; data: FamilyCardData 
       {/* Foot */}
       <View style={footStyle}>
         <Text style={footText}>2026–27</Text>
-        <Text style={badge}>{data.students[0]?.transport ? transportLabel(data.students[0].transport) : 'GAAR / CAR'}</Text>
+        <Text style={badge}>{familyTransportLabel(data.students)}</Text>
       </View>
     </View>
   );
@@ -398,12 +444,16 @@ export function FamilyCardsDocument({ families, layout, includeLookupList }: Fam
 export async function buildFamilyCardData(groups: Map<string, Student[]>, parentNames?: Map<string, string>): Promise<FamilyCardData[]> {
   const out: FamilyCardData[] = [];
   for (const [familyId, students] of groups) {
+    // A student who left the school keeps their familyId (so restoring them
+    // rejoins the same family) but must never appear on a printed card.
+    const active = students.filter(s => s.transport !== 'LEFT');
+    if (active.length === 0) continue;
     const parentPhone =
-      students.map(s => s.parentPhone ?? '').find(p => p.trim() !== '') ?? '';
-    const parentId = students.map(s => s.parentId).find(Boolean) ?? null;
+      active.map(s => s.parentPhone ?? '').find(p => p.trim() !== '') ?? '';
+    const parentId = active.map(s => s.parentId).find(Boolean) ?? null;
     out.push({
       familyId,
-      students: [...students].sort((a, b) => a.name.localeCompare(b.name)),
+      students: [...active].sort((a, b) => a.name.localeCompare(b.name)),
       parentPhone,
       parentName: (parentId && parentNames?.get(parentId)) || '',
     });

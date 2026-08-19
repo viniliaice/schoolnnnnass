@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  displayFamilyId, mapSheetClassCode, normalizeName, normalizePhone,
+  displayFamilyId, formatGradeLabel, mapSheetClassCode, normalizeName, normalizePhone,
   parseTransportCell, transportLabel,
 } from '../transport';
 
@@ -68,5 +68,39 @@ describe('display helpers', () => {
     expect(transportLabel('9')).toBe('Bus 9');
     expect(transportLabel('WALKER')).toBe('WALKER');
     expect(transportLabel(null)).toBe('—');
+  });
+});
+
+describe('formatGradeLabel — printed grade chip (source: students.className)', () => {
+  it('maps every shape in the CLASSES constant', () => {
+    expect(formatGradeLabel('Grade 1-A')).toBe('G1');
+    expect(formatGradeLabel('Grade 7-A')).toBe('G7');
+    expect(formatGradeLabel('Grade 12-C')).toBe('G12');
+    expect(formatGradeLabel('KG-A')).toBe('KG');
+    expect(formatGradeLabel('KG-E')).toBe('KG');
+    expect(formatGradeLabel('Foundation A')).toBe('F-A');
+    expect(formatGradeLabel('Foundation D')).toBe('F-D');
+    expect(formatGradeLabel('Year 12-B')).toBe('Y12');
+  });
+
+  it('never throws or renders blank for missing/odd values', () => {
+    expect(formatGradeLabel(null)).toBe('');
+    expect(formatGradeLabel(undefined)).toBe('');
+    expect(formatGradeLabel('')).toBe('');
+    expect(formatGradeLabel('   ')).toBe('');
+    // legacy/unmapped class naming falls back to a short token
+    expect(formatGradeLabel('Nursery Blue')).toBe('NUR');
+  });
+
+  it('is case-insensitive and tolerates extra whitespace', () => {
+    expect(formatGradeLabel('  grade 5-b  ')).toBe('G5');
+    expect(formatGradeLabel('foundation c')).toBe('F-C');
+    expect(formatGradeLabel('kg-b')).toBe('KG');
+  });
+
+  it('stays short enough for the card chip (<= 4 chars)', () => {
+    for (const c of ['Grade 12-C', 'Foundation A', 'Year 12-A', 'KG-D', 'Grade 1-A']) {
+      expect(formatGradeLabel(c).length).toBeLessThanOrEqual(4);
+    }
   });
 });

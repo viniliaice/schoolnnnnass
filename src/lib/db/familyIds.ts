@@ -17,6 +17,12 @@ function errInfo(error: unknown) {
 
 export interface GenerateSummary {
   familiesCreated: number;
+  /**
+   * Students who joined an ALREADY EXISTING family (a sibling enrolling
+   * later). Before the 20260819 migration these were wrongly given a brand
+   * new ID, splitting one physical family across two MBK numbers.
+   */
+  studentsJoined?: number;
   studentsAssigned: number;
   unattached: string[][];
   totalFamilies: number;
@@ -177,11 +183,17 @@ export async function applyTransportImport(rows: TransportImportRow[], buckets?:
   return { applied, skipped: skipped.length, errors };
 }
 
-/** Family roster for the admin page (students grouped by familyId). */
+/**
+ * Family roster for the admin page (students grouped by familyId).
+ *
+ * Students marked as left keep their familyId (so a restore rejoins the same
+ * family) but are excluded here — they get no family row and no gate card.
+ */
 export function groupStudentsByFamily(students: Student[]): Map<string, Student[]> {
   const map = new Map<string, Student[]>();
   for (const student of students) {
     if (!student.familyId) continue;
+    if (student.transport === 'LEFT') continue;
     const list = map.get(student.familyId) ?? [];
     list.push(student);
     map.set(student.familyId, list);
