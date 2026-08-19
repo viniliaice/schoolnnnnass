@@ -43,6 +43,28 @@ describe('generateFamilyIds', () => {
     expect(summary.studentsAssigned).toBe(1);
   });
 
+  it('surfaces phone-only joins for admin review (two households can share a number)', async () => {
+    rpc.mockResolvedValue({
+      data: {
+        familiesCreated: 0, studentsJoined: 1, studentsAssigned: 1, totalFamilies: 143,
+        unattached: [],
+        phoneJoins: [{ familyId: '0007', phone: '615552222', studentIds: ['f1'] }],
+      },
+      error: null,
+    });
+    const summary = await generateFamilyIds();
+    expect(summary.phoneJoins).toHaveLength(1);
+    expect(summary.phoneJoins![0]).toMatchObject({ familyId: '0007', phone: '615552222' });
+  });
+
+  it('reports no phone joins when siblings matched on parentId', async () => {
+    rpc.mockResolvedValue({
+      data: { familiesCreated: 0, studentsJoined: 1, studentsAssigned: 1, unattached: [], phoneJoins: [], totalFamilies: 10 },
+      error: null,
+    });
+    expect((await generateFamilyIds()).phoneJoins).toEqual([]);
+  });
+
   it('passes the transport filter and omits it for "all"', async () => {
     rpc.mockResolvedValue({
       data: { familiesCreated: 3, studentsAssigned: 5, unattached: [], totalFamilies: 10 },

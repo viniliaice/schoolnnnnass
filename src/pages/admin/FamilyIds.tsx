@@ -431,6 +431,30 @@ export function FamilyIds() {
             {generateResult.unattached.length} unattached · {generateResult.totalFamilies} total families
           </p>
         )}
+        {/* Phone-only joins are almost always real siblings, but two households
+            can share a number — surface them so an admin can split a wrong one. */}
+        {generateResult && (generateResult.phoneJoins?.length ?? 0) > 0 && (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm font-bold text-amber-900">
+              {generateResult.phoneJoins!.length} student group(s) joined a family by phone number — please check
+            </p>
+            <p className="mt-0.5 text-xs text-amber-700">
+              These students had no parent link, so they were matched to an existing family by shared phone.
+              If any belongs to a different household, assign them a new family ID below.
+            </p>
+            <ul className="mt-2 space-y-1 text-xs text-amber-900">
+              {generateResult.phoneJoins!.map(join => (
+                <li key={`${join.familyId}-${join.phone}`}>
+                  <span className="font-bold">{displayFamilyId(join.familyId)}</span>
+                  {' '}· phone {join.phone} ·{' '}
+                  {join.studentIds
+                    .map(id => students.find(s => s.id === id)?.name ?? id)
+                    .join(', ')}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
       {/* Import */}

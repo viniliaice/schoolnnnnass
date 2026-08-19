@@ -125,6 +125,21 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 | `lookup_family(text)` | yes | STABLE | Gate staff must see a family's children regardless of class-scoped RLS | `admin`/`supervisor`/`office` |
 | `get_family_cards(text[])` | yes | **STABLE** | The whole point: a card must be **complete** for every gate role, incl. parent name from `profiles` | `admin`/`supervisor`/`office` |
 
+### 3.1 Adversarial testing of `get_family_cards` (executed, not reasoned)
+
+| Attack | Result |
+|---|---|
+| `ARRAY[]::text[]` (empty) | 0 families |
+| `NULL` argument | 0 families |
+| `ARRAY['0001'' OR ''1''=''1']` (injection-shaped) | 0 families — parameterised, no dynamic SQL |
+| `ARRAY['%']` / `ARRAY['.*']` (wildcard/regex) | 0 families — exact match after digit normalization |
+| No profile / unknown profile id | 0 families |
+| teacher / parent | 0 families |
+
+**Bulk enumeration is possible for gate roles**: passing `ARRAY['0001'…'9999']` returns every family. This is **not a new exposure** — the already-shipped `lookup_family` has identical reach for the same three roles (verified side by side: both return 5/5 for supervisor+office, 0 for teacher/parent). Gate staff are trusted with exactly this data; it is what they read off the card at dismissal. Accepted, unchanged posture.
+
+> Harness note: an early run appeared to show a role-without-profile bypass. That was an artifact of the test stub (`RESET` left an empty string rather than NULL). Re-tested with production-faithful `current_profile_id()`/`current_profile_role()` that both derive from a single `profiles` row — boundary is correct.
+
 **Hardening — verified live, all four:**
 - `search_path = public` pinned on every function (blocks search-path privilege escalation)
 - `REVOKE ALL … FROM PUBLIC` + `GRANT EXECUTE … TO authenticated`; `public_can_execute = f` confirmed
@@ -140,6 +155,25 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 4. **Audit trail.** Generate and mark-left still write `audit_logs`. Note the pre-existing finding that `audit_logs` is world-readable/insertable (`00001_create_audit_logs.sql`) — **unchanged by this work**, tracked for Phase 3.
 
 ---
+
+### 3.2 Can the reuse rule merge two legitimate households? (reviewer item 4)
+
+Tested all four shapes against the migrated database:
+
+| Case | Shape | Result |
+|---|---|---|
+| **A** | Two households, **different `parentId`**, same phone | **2 IDs — not merged.** `parentId` wins over phone |
+| **B** | Two households, neither has `parentId`, same phone, same run | 1 ID — merged. **Pre-existing behaviour**, unchanged by this PR (verified against the old body) |
+| **C** | Existing `parentId` family + newcomer with **phone only**, same phone | 1 ID — newcomer joins. **This is the one behaviour the reuse rule widens** |
+| **D** | Same shape as C, but genuinely the same household (sibling imported from the sheet) | 1 ID — correct, and the main reason the fix exists |
+
+**Cases C and D are byte-identical in the data** (`parent=hA/phone=X` + `parent=NULL/phone=X`). No algorithm can separate them; only a person knows whether one phone means one household.
+
+What actually changed: phone-collision merging already existed (Case B) — the reuse rule extends it **across runs** rather than only within a single run. It is a widening in time, not a new class of merge.
+
+**Mitigation shipped in this review:** `generate_family_ids` now returns `phoneJoins[]` — every join made on a **phone key only** (`parentId` joins are unambiguous and are not flagged). The admin page renders an amber "please check" panel listing family ID, phone, and student names, with a pointer to reassign a wrong one. Verified: Case C is flagged, Case D-by-`parentId` produces `phoneJoins: []`.
+
+This is the right trade: refusing phone-keyed joins would reintroduce the family-splitting bug for the common case, and auto-merging silently is what we are guarding against. The join proceeds (consistent with existing behaviour) and is made visible.
 
 ## 4. GATE 3 — Historical split families *(blocking, human decision)*
 
@@ -213,6 +247,32 @@ psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 **Frontend/DB ordering.** The app now reads cards via `get_family_cards`. Apply the **migration first**, then deploy the frontend. If the frontend ships first, the Print action errors (visibly, with the RPC message) — it does not fail silently or print a wrong card.
 
 ---
+
+## 5.1 Review execution log (all items run against PostgreSQL 16)
+
+Full gated sequence executed on a clean database seeded with the **pre-migration production state** (both overloads) plus realistic damaged data.
+
+| # | Item | Result |
+|---|---|---|
+| 1 | Preflight, all three gates | ✅ Before: Gate 1 **2 candidates (ambiguous)**, Gate 2 **4 red flags**, Gate 3 **2 split families + 1 orphaned LEFT** |
+| 2 | Gate 1 zero-candidate rule | ✅ Not triggered (2 before, 1 after). Rule documented for production |
+| 3 | `get_family_cards` security | ✅ `search_path=public` pinned, PUBLIC revoked, role-gated, `STABLE`; 6 adversarial inputs all returned 0 families (see §3.1) |
+| 4 | Household merge safety | ✅ Analysed 4 cases; Case C widening identified and mitigated with `phoneJoins` review panel (see §3.2) |
+| 5 | Split families not auto-merged | ✅ Generate over split data: **byte-identical before/after**; preflight still reports 2 for human decision |
+| 6 | Migration before frontend | ✅ Applied first; rc=0; 8/8 RLS assertions pass |
+| 7 | Preflight after migration | ✅ Gate 1 **exactly 1** `generate_family_ids(text)` with reuse+lock+joined; Gate 2 **0 red flags** |
+| 8 | Suite / typecheck / build | ✅ **298/298**, `tsc` clean, `vite build` OK |
+| 9 | Functional smoke | ✅ See below |
+
+**Smoke results (item 9):**
+
+- **Generation:** new sibling → `{"studentsJoined": 1, "familiesCreated": 0}`, all three siblings on `0001`
+- **LEFT/restore:** `transport=LEFT id=0001` → restore → `id=0001` (preserved)
+- **Card retrieval:** admin / supervisor / office **all return the identical complete card** — parent name `Xasan Maxamed Cabdi`, 3 siblings, classes and transport intact; teacher and parent get 0
+- **LEFT exclusion:** card and gate both drop to 2 students while the ID is retained
+- **Phone consistency:** card `0612345678` == gate `0612345678`
+- **Grade display (real PDF):** `Ahmed Xasan|G3` · `Xalimo Xasan|G7` · `Yasmin Xasan|KG`
+- **Mixed transport:** footer badge `WALKER · Bus 9`
 
 ## 6. Reviewer checklist
 

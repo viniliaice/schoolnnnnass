@@ -15,6 +15,19 @@ function errInfo(error: unknown) {
   return { message: e?.message, code: e?.code, details: e?.details, hint: e?.hint };
 }
 
+/**
+ * A student who joined an existing family because they SHARE ITS PHONE
+ * (no parentId link). Almost always a real sibling imported from the sheet,
+ * but two households can legitimately share a number — so these joins are
+ * reported for review rather than silently trusted. Split a wrong one with
+ * assign_family_override().
+ */
+export interface PhoneJoin {
+  familyId: string;
+  phone: string;
+  studentIds: string[];
+}
+
 export interface GenerateSummary {
   familiesCreated: number;
   /**
@@ -23,6 +36,8 @@ export interface GenerateSummary {
    * new ID, splitting one physical family across two MBK numbers.
    */
   studentsJoined?: number;
+  /** Subset of studentsJoined that matched on phone only — review these. */
+  phoneJoins?: PhoneJoin[];
   studentsAssigned: number;
   unattached: string[][];
   totalFamilies: number;

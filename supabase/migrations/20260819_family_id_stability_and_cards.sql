@@ -57,6 +57,7 @@ DECLARE
   v_joined INTEGER := 0;
   v_assigned INTEGER := 0;
   v_unattached JSONB := '[]'::JSONB;
+  v_phone_joins JSONB := '[]'::JSONB;
   v_group RECORD;
   v_student_id TEXT;
   v_family_id TEXT;
@@ -119,6 +120,22 @@ BEGIN
     IF v_existing IS NOT NULL THEN
       v_family_id := v_existing;
       v_joined := v_joined + 1;
+
+      -- Observability for the one ambiguous case this reuse rule creates.
+      -- A PHONE-keyed join across runs is indistinguishable, from data alone,
+      -- between "a new sibling of an existing family" (the common, correct
+      -- case) and "a different household that happens to share the phone".
+      -- parentId-keyed joins are unambiguous and are not flagged.
+      -- We never guess: the join proceeds (matching the pre-existing
+      -- same-run phone grouping) and is recorded so staff can review and, if
+      -- wrong, split it with assign_family_override().
+      IF v_group.family_key LIKE 't:%' THEN
+        v_phone_joins := v_phone_joins || jsonb_build_object(
+          'familyId', v_existing,
+          'phone', substring(v_group.family_key from 3),
+          'studentIds', to_jsonb(v_group.student_ids)
+        );
+      END IF;
     ELSE
       v_next_id := v_next_id + 1;
       v_family_id := lpad(v_next_id::TEXT, 4, '0');
@@ -147,6 +164,7 @@ BEGIN
       'studentsJoined', v_joined,
       'studentsAssigned', v_assigned,
       'unattached', jsonb_array_length(v_unattached),
+      'phoneJoins', v_phone_joins,
       'totalFamilies', v_total_families,
       'filter', p_transport_filter
     ),
@@ -158,6 +176,7 @@ BEGIN
     'studentsJoined', v_joined,
     'studentsAssigned', v_assigned,
     'unattached', v_unattached,
+    'phoneJoins', v_phone_joins,
     'totalFamilies', v_total_families
   );
 END;

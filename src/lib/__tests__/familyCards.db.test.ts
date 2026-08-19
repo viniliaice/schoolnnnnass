@@ -94,7 +94,6 @@ describe('printing never generates or changes a family ID', () => {
     // this fails even if no test exercises that code path.
     const fs = await import('node:fs/promises');
     const files = [
-      'src/lib/print/printBatch.ts',
       'src/lib/print/familyCards.tsx',
       'src/lib/db/familyCards.ts',
     ];

@@ -53,6 +53,11 @@ BEGIN
   IF v_def NOT LIKE '%studentsJoined%' THEN
     RAISE EXCEPTION 'generate_family_ids must report studentsJoined so the UI can distinguish new families from late siblings';
   END IF;
+  -- Phone-keyed joins are the one ambiguous case (two households can share a
+  -- number). They must be reported for human review, not silently trusted.
+  IF v_def NOT LIKE '%phoneJoins%' THEN
+    RAISE EXCEPTION 'generate_family_ids must report phoneJoins so admins can review phone-matched joins';
+  END IF;
 END $$;
 
 -- ── 3. mark_student_left must NOT clear familyId ──────────────────────────
