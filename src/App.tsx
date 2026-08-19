@@ -17,6 +17,7 @@ import { ManageStudents } from './pages/admin/ManageStudents';
 import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
 import { FamilyIds } from './pages/admin/FamilyIds';
+import { canAccessRoute, DEFAULT_ROUTE } from './lib/routing';
 import { GateScreen } from './pages/admin/gate/GateScreen';
 import { OfficeDashboard } from './pages/office/OfficeDashboard';
 import { StudentDirectory } from './pages/office/StudentDirectory';
@@ -83,6 +84,13 @@ function AppContent() {
   return (
     <DashboardLayout fullscreenPaths={['/gate']}>
       {(currentPath, navigate) => {
+        // Single enforcement point for ROUTE_ACCESS. Previously canAccessRoute()
+        // was exported and unit-tested but never called, so the per-role
+        // switches below were the only guard. Anything the map denies is sent
+        // to the role's default route before any page renders.
+        if (!canAccessRoute(session.role, currentPath)) {
+          return <RouteRedirect to={DEFAULT_ROUTE[session.role]} navigate={navigate} />;
+        }
         // Admin routes
         if (session.role === 'admin') {
           switch (currentPath) {
@@ -93,7 +101,8 @@ function AppContent() {
             case '/admin/students': return <ManageStudents />;
             case '/admin/academic': return <ManageAcademic />;
             case '/admin/bulk': return <BulkUpload />;
-            case '/admin/family-ids': return <FamilyIds />;
+            case '/admin/family-ids': return <FamilyIds mode="browse" navigate={navigate} />;
+            case '/admin/family-ids/setup': return <FamilyIds mode="setup" navigate={navigate} />;
             case '/directory': return <StudentDirectory />;
             case '/admin/bulk-grades': return <BulkUploadGrades />;
             case '/admin/exams': return <ExamVerification />;
@@ -118,7 +127,7 @@ function AppContent() {
           if (session.role === 'supervisor') {
             switch (currentPath) {
               case '/gate': return <GateScreen navigate={navigate} />;
-              case '/admin/family-ids': return <FamilyIds />;
+              case '/admin/family-ids': return <FamilyIds mode="browse" navigate={navigate} />;
               case '/directory': return <StudentDirectory />;
               case '/dashboard': return <SupervisorDashboard />;
               case '/supervisor/students': return <TeacherStudents />;
@@ -162,7 +171,7 @@ function AppContent() {
         if (session.role === 'office') {
           switch (currentPath) {
             case '/gate': return <GateScreen navigate={navigate} />;
-            case '/admin/family-ids': return <FamilyIds />;
+            case '/admin/family-ids': return <FamilyIds mode="browse" navigate={navigate} />;
             case '/directory': return <StudentDirectory />;
             case '/messages': return <MessagesPage />;
             case '/streams': return <StreamsPage />;
@@ -190,6 +199,12 @@ function AppContent() {
       }}
     </DashboardLayout>
   );
+}
+
+/** Redirect helper for the central route guard (no router dependency). */
+function RouteRedirect({ to, navigate }: { to: string; navigate: (path: string) => void }) {
+  useEffect(() => { navigate(to); }, [to, navigate]);
+  return null;
 }
 
 export default function App() {

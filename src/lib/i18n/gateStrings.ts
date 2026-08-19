@@ -5,6 +5,8 @@
 // speaker pass was explicitly skipped in the eng review (TODOS.md records the
 // decision) — adjust here if any label reads oddly.
 
+import { normalizeTransport } from '../transport';
+
 export type GateLang = 'so' | 'en';
 
 export interface GateStrings {
@@ -120,9 +122,11 @@ export function gateT(lang: GateLang): GateStrings {
 
 /** Localized transport badge: 'WALKER' → 'Lug'/'Walker', '9' → 'Bas 9'/'Bus 9'. */
 export function gateTransportLabel(lang: GateLang, transport: string | null | undefined): string {
-  if (!transport) return '—';
-  if (transport === 'WALKER') return lang === 'so' ? 'Lug' : 'Walker';
-  if (transport === 'CAR') return lang === 'so' ? 'Gaari' : 'Car';
-  if (/^\d+$/.test(transport)) return lang === 'so' ? `Bas ${transport}` : `Bus ${transport}`;
-  return transport;
+  // Empty transport is WALKER at the gate too, so dismissal never shows '—'
+  // for a child who simply walks home.
+  const value = normalizeTransport(transport);
+  if (value === 'WALKER') return lang === 'so' ? 'Lug' : 'Walker';
+  if (value === 'CAR') return lang === 'so' ? 'Gaari' : 'Car';
+  if (/^\d+$/.test(value)) return lang === 'so' ? `Bas ${value}` : `Bus ${value}`;
+  return value;
 }

@@ -15,8 +15,29 @@ function errInfo(error: unknown) {
   return { message: e?.message, code: e?.code, details: e?.details, hint: e?.hint };
 }
 
+/**
+ * A student who joined an existing family because they SHARE ITS PHONE
+ * (no parentId link). Almost always a real sibling imported from the sheet,
+ * but two households can legitimately share a number — so these joins are
+ * reported for review rather than silently trusted. Split a wrong one with
+ * assign_family_override().
+ */
+export interface PhoneJoin {
+  familyId: string;
+  phone: string;
+  studentIds: string[];
+}
+
 export interface GenerateSummary {
   familiesCreated: number;
+  /**
+   * Students who joined an ALREADY EXISTING family (a sibling enrolling
+   * later). Before the 20260819 migration these were wrongly given a brand
+   * new ID, splitting one physical family across two MBK numbers.
+   */
+  studentsJoined?: number;
+  /** Subset of studentsJoined that matched on phone only — review these. */
+  phoneJoins?: PhoneJoin[];
   studentsAssigned: number;
   unattached: string[][];
   totalFamilies: number;
@@ -54,13 +75,40 @@ export async function lookupFamily(familyId: string): Promise<FamilyLookupRow[]>
   return (data ?? []) as FamilyLookupRow[];
 }
 
-/** parentId → profile name, for printing the parent name on family cards. */
+/**
+ * parentId → profile name, used to decorate the families table.
+ *
+ * Chunked: `.in()` serializes every id into the query string, so a whole
+ * school (hundreds of parents) builds a URL long enough to be rejected or
+ * stalled by proxies. Chunks are fetched in parallel and merged; a failing
+ * chunk degrades to "no name" rather than rejecting the whole lookup, because
+ * `profiles` is admin-readable only and non-admin callers legitimately get
+ * nothing back. The PRINTED card never depends on this — it takes the parent
+ * name from get_family_cards().
+ */
+const PARENT_NAME_CHUNK = 100;
+
 export async function getParentNames(parentIds: string[]): Promise<Map<string, string>> {
   const ids = [...new Set(parentIds.filter(Boolean))];
   if (ids.length === 0) return new Map();
-  const { data, error } = await supabase.from('profiles').select('id,name').in('id', ids);
-  if (error) throw error;
-  return new Map((data ?? []).map(p => [p.id, p.name]));
+
+  const chunks: string[][] = [];
+  for (let i = 0; i < ids.length; i += PARENT_NAME_CHUNK) {
+    chunks.push(ids.slice(i, i + PARENT_NAME_CHUNK));
+  }
+
+  const results = await Promise.all(
+    chunks.map(async chunk => {
+      const { data, error } = await supabase.from('profiles').select('id,name').in('id', chunk);
+      if (error) {
+        console.warn(`${LOG} getParentNames chunk failed`, errInfo(error));
+        return [] as Array<{ id: string; name: string }>;
+      }
+      return (data ?? []) as Array<{ id: string; name: string }>;
+    }),
+  );
+
+  return new Map(results.flat().map(p => [p.id, p.name]));
 }
 
 /** Admin quick-edit of a student's transport (WALKER / CAR / bus number). */
@@ -177,11 +225,17 @@ export async function applyTransportImport(rows: TransportImportRow[], buckets?:
   return { applied, skipped: skipped.length, errors };
 }
 
-/** Family roster for the admin page (students grouped by familyId). */
+/**
+ * Family roster for the admin page (students grouped by familyId).
+ *
+ * Students marked as left keep their familyId (so a restore rejoins the same
+ * family) but are excluded here — they get no family row and no gate card.
+ */
 export function groupStudentsByFamily(students: Student[]): Map<string, Student[]> {
   const map = new Map<string, Student[]>();
   for (const student of students) {
     if (!student.familyId) continue;
+    if (student.transport === 'LEFT') continue;
     const list = map.get(student.familyId) ?? [];
     list.push(student);
     map.set(student.familyId, list);

@@ -20,7 +20,7 @@
 
 import * as XLSX from 'xlsx';
 import type { Student } from '../../types';
-import { mapSheetClassCode, normalizeName, normalizePhone, parseTransportCell, type ParsedTransport } from '../transport';
+import { mapSheetClassCode, normalizeName, normalizePhone, normalizeTransport, parseTransportCell, type ParsedTransport } from '../transport';
 
 const LOG = '[family-ids]';
 
@@ -55,6 +55,12 @@ export interface TransportImportRow {
   /** Set by matchImportRows. */
   match: ImportMatchStatus;
   studentId: string | null;
+  /**
+   * The transport currently stored for the matched student, so the preview can
+   * warn before a re-import overwrites a manual correction. Normalized, so a
+   * blank stored value compares as WALKER rather than looking like a change.
+   */
+  currentTransport?: string | null;
   classMismatch: boolean;
 }
 
@@ -247,6 +253,7 @@ export function matchImportRows(rows: TransportImportRow[], students: Student[])
     if (candidates.length === 1) {
       row.match = 'matched';
       row.studentId = candidates[0].id;
+      row.currentTransport = candidates[0].transport ?? null;
       row.classMismatch = !!row.appClass && candidates[0].className !== row.appClass;
       console.log(`${LOG} match`, { row: row.rowNumber, name: row.name, match: 'matched', studentId: row.studentId, classMismatch: row.classMismatch });
       continue;
@@ -257,6 +264,7 @@ export function matchImportRows(rows: TransportImportRow[], students: Student[])
     if (byClass.length === 1) {
       row.match = 'matched';
       row.studentId = byClass[0].id;
+      row.currentTransport = byClass[0].transport ?? null;
       row.classMismatch = false;
       console.log(`${LOG} match`, { row: row.rowNumber, name: row.name, match: 'matched', studentId: row.studentId, via: 'class' });
       continue;
@@ -269,6 +277,26 @@ export function matchImportRows(rows: TransportImportRow[], students: Student[])
 }
 
 /** Summary counts for the import UI. */
+/**
+ * Rows where applying the sheet would CHANGE a value already stored.
+ *
+ * The import intentionally lets the sheet win (set_student_import_fields does
+ * `transport = COALESCE(v_transport, transport)`), which means re-importing an
+ * old sheet silently reverts a manual correction made in the app. Rather than
+ * add an imported-vs-override column to the table, we surface the collisions
+ * in the preview so staff can deselect the bucket before applying.
+ *
+ * Comparison is on NORMALIZED values, so blank-vs-WALKER is not a false alarm.
+ */
+export function transportOverwrites(rows: TransportImportRow[]): TransportImportRow[] {
+  return rows.filter(row => {
+    if (row.match !== 'matched') return false;
+    if (row.transport.kind === 'left' || row.transport.kind === 'unknown') return false;
+    if (row.currentTransport === undefined) return false;
+    return normalizeTransport(row.currentTransport) !== normalizeTransport(row.transport.value);
+  });
+}
+
 export function summarizeImport(rows: TransportImportRow[]) {
   const matched = rows.filter(r => r.match === 'matched');
   const ambiguous = rows.filter(r => r.match === 'ambiguous');

@@ -10,7 +10,7 @@ import { pdf } from '@react-pdf/renderer';
 import { HelpCircle, ChevronDown, Download, Upload } from 'lucide-react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { canGenerateFamilyIds } from '../../lib/routing';
+import { canEditTransport, canGenerateFamilyIds } from '../../lib/routing';
 import { getStudents } from '../../lib/db/students';
 import {
   applyTransportImport, assignFamilyOverride, findLeftStudents, findUnattached,
@@ -18,18 +18,19 @@ import {
   type GenerateSummary,
 } from '../../lib/db/familyIds';
 import {
-  parseTransportImport, matchImportRows, summarizeImport, bucketOf,
+  parseTransportImport, matchImportRows, summarizeImport, transportOverwrites, bucketOf,
   type ImportBucket,
   type TransportImportResult, type TransportImportRow,
 } from '../../lib/import/transportImport';
 import { TRANSPORT_EXAMPLE_CSV, downloadExampleWorkbook } from '../../lib/import/transportTemplate';
 import { displayFamilyId, transportLabel } from '../../lib/transport';
-import { buildFamilyCardData, FamilyCardsDocument, type CardLayout, type FamilyCardData } from '../../lib/print/familyCards';
+import { FamilyCardsDocument, type CardLayout, type FamilyCardData } from '../../lib/print/familyCards';
+import { getFamilyCards } from '../../lib/db/familyCards';
+import { FamiliesTable } from './family-ids/FamiliesTable';
 import { cn } from '../../utils/cn';
 import type { Student } from '../../types';
 
 const TRANSPORT_OPTIONS = ['WALKER', 'CAR'] as const;
-const FAMILY_ID_PROGRESS_TARGET = 200;
 
 const BUCKET_LABELS: Array<[ImportBucket, string]> = [
   ['nb', 'Walkers (NB / 0)'],
@@ -70,12 +71,23 @@ const SAMPLE_FAMILIES: FamilyCardData[] = [
   },
 ];
 
-export function FamilyIds() {
+export type FamilyIdsMode = 'browse' | 'setup';
+
+/**
+ * `/admin/family-ids`       → mode='browse' (admin/supervisor/office)
+ *     search, filter, select and print. No generation surface at all.
+ * `/admin/family-ids/setup` → mode='setup' (admin only)
+ *     import the transport sheet, generate IDs, resolve exceptions.
+ */
+export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode; navigate?: (path: string) => void } = {}) {
   const { addToast } = useToast();
   const { session } = useRole();
   const canWrite = !!session && canGenerateFamilyIds(session.role);
+  const canEditTransportHere = !!session && canEditTransport(session.role);
   const [students, setStudents] = useState<Student[]>([]);
+  const [parentNames, setParentNames] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [importText, setImportText] = useState('');
   const [importedRows, setImportedRows] = useState<TransportImportRow[]>([]);
   const [applyBuckets, setApplyBuckets] = useState<Set<ImportBucket>>(new Set(ALL_BUCKETS));
@@ -93,27 +105,64 @@ export function FamilyIds() {
 
   const reload = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const loaded = await getStudents();
       setStudents(loaded);
     } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Could not load students.');
       addToast({ type: 'error', title: 'Failed to load students', description: err instanceof Error ? err.message : undefined });
     } finally {
+      // The table only needs students. Anything else must NOT gate this —
+      // see INVESTIGATION-FamilyIds-Performance.md finding 1, which this
+      // page regressed once before by awaiting parent names here.
       setLoading(false);
     }
   }, [addToast]);
 
   useEffect(() => { void reload(); }, [reload]);
 
+  /**
+   * Parent names are a decoration on the browse table (the printed card gets
+   * its own name from get_family_cards). Load them AFTER students, without
+   * blocking the table, and never surface a failure: `profiles` is
+   * admin-readable only, so office/supervisor simply see a blank column.
+   */
+  useEffect(() => {
+    if (students.length === 0) return;
+    let cancelled = false;
+    const ids = students.map(s => s.parentId).filter((id): id is string => !!id);
+    if (ids.length === 0) return;
+    getParentNames(ids)
+      .then(names => { if (!cancelled) setParentNames(names); })
+      .catch(() => { if (!cancelled) setParentNames(new Map()); });
+    return () => { cancelled = true; };
+  }, [students]);
+
   const groups = useMemo(() => groupStudentsByFamily(students), [students]);
   const unattached = useMemo(() => findUnattached(students), [students]);
   const leftStudents = useMemo(() => findLeftStudents(students), [students]);
   const families = useMemo(() => Array.from(groups.entries()), [groups]);
+  /**
+   * COVERAGE, not a made-up target.
+   *
+   * This used to compare the family count against a hardcoded 200, which
+   * produced nonsense like "443 of 200 — 100% complete" for any school bigger
+   * than the number someone guessed. The real question staff have is "does
+   * every active student have a Family ID yet?", so the denominator is the
+   * active roster and the numerator is the students actually covered.
+   *
+   * Students marked LEFT are excluded from both sides: they keep their
+   * familyId but are not part of the working roster.
+   */
   const familyProgress = useMemo(() => {
-    const current = families.length;
-    const percent = Math.min(100, Math.round((current / FAMILY_ID_PROGRESS_TARGET) * 100));
-    return { current, target: FAMILY_ID_PROGRESS_TARGET, percent };
-  }, [families.length]);
+    const active = students.filter(s => s.transport !== 'LEFT');
+    const withId = active.filter(s => !!s.familyId);
+    const total = active.length;
+    const covered = withId.length;
+    const percent = total === 0 ? 0 : Math.round((covered / total) * 100);
+    return { covered, total, percent, families: families.length, remaining: total - covered };
+  }, [students, families.length]);
   /** Print-batch filter: families whose (first) student matches the transport bucket. */
   const filteredFamilies = useMemo(() => {
     if (printFilter === 'all') return families;
@@ -126,6 +175,8 @@ export function FamilyIds() {
     return families.filter(([, students]) => match(students[0]?.transport));
   }, [families, printFilter]);
   const importSummary = useMemo(() => (importedRows.length ? summarizeImport(importedRows) : null), [importedRows]);
+  /** Rows where the sheet would overwrite a transport already stored (e.g. a manual correction). */
+  const overwrites = useMemo(() => transportOverwrites(importedRows), [importedRows]);
   /** Matched-row count per bucket, for the Apply-only chips. */
   const bucketCounts = useMemo(() => {
     const counts: Record<ImportBucket, number> = { nb: 0, empty: 0, bus: 0, other: 0 };
@@ -245,7 +296,13 @@ export function FamilyIds() {
       addToast({
         type: 'success',
         title: `Generated ${result.familiesCreated} family ID(s)`,
-        description: `${result.studentsAssigned} students assigned · ${result.totalFamilies} total families`,
+        description: [
+          `${result.studentsAssigned} students assigned`,
+          // Siblings enrolling later join the family's existing MBK number
+          // instead of being issued a second one.
+          result.studentsJoined ? `${result.studentsJoined} joined an existing family` : null,
+          `${result.totalFamilies} total families`,
+        ].filter(Boolean).join(' · '),
       });
       await reload();
     } catch (err) {
@@ -255,12 +312,19 @@ export function FamilyIds() {
     }
   };
 
+  /**
+   * Transport-only write. set_student_transport() updates exactly one row and
+   * touches no family column, so this can never generate, change, split or
+   * merge a Family ID. Rethrows so the dialog can show the error inline.
+   */
   const handleTransport = async (studentId: string, transport: string) => {
     try {
       await setStudentTransport(studentId, transport);
+      addToast({ type: 'success', title: `Transport updated to ${transportLabel(transport)}` });
       await reload();
     } catch (err) {
       addToast({ type: 'error', title: 'Update failed', description: err instanceof Error ? err.message : undefined });
+      throw err;
     }
   };
 
@@ -282,7 +346,9 @@ export function FamilyIds() {
       addToast({
         type: 'success',
         title: left ? `Marked ${student.name} as left` : `Restored ${student.name}`,
-        description: left ? 'Removed from families and gate cards.' : 'They can be assigned a family ID again.',
+        description: left
+          ? 'Removed from families and gate cards. Their family ID is kept for when they return.'
+          : 'Restored to their original family ID.',
       });
       await reload();
     } catch (err) {
@@ -292,15 +358,40 @@ export function FamilyIds() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Family IDs</h1>
-          <p className="text-sm text-slate-500">Dismissal gate: import the transport sheet, generate MBK-#### per family, print cards.</p>
+          <h1 className="text-2xl font-bold text-slate-900">
+            {mode === 'setup' ? 'Family IDs — Setup' : 'Family IDs'}
+          </h1>
+          <p className="text-sm text-slate-500">
+            {mode === 'setup'
+              ? 'Admin only: import the transport sheet and generate MBK-#### per family.'
+              : 'Dismissal gate: find a family and print its card.'}
+          </p>
         </div>
-        <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Aqoonsiga qoyska</span>
+        <div className="flex items-center gap-2">
+          {mode === 'browse' && canWrite && navigate && (
+            <button
+              onClick={() => navigate('/admin/family-ids/setup')}
+              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+            >
+              Setup &amp; Generate →
+            </button>
+          )}
+          {mode === 'setup' && navigate && (
+            <button
+              onClick={() => navigate('/admin/family-ids')}
+              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+            >
+              ← Back to families
+            </button>
+          )}
+          <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Aqoonsiga qoyska</span>
+        </div>
       </div>
 
-      {/* How-to — clear directions for first-time admins (collapsible, open by default) */}
+      {/* How-to — setup only */}
+      {mode === 'setup' && (
       <section className="mb-6 rounded-2xl border border-indigo-200 bg-indigo-50/70 p-5">
         <button
           onClick={() => setHelpOpen(o => !o)}
@@ -375,6 +466,8 @@ export function FamilyIds() {
         )}
       </section>
 
+      )}
+
       {/* Stats row (IA: stats first) */}
       <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="Families" value={families.length} />
@@ -382,9 +475,10 @@ export function FamilyIds() {
         <StatCard label="Unattached" value={unattached.length} tone={unattached.length ? 'warn' : 'ok'} />
         <StatCard label="Ambiguous" value={importSummary?.ambiguous ?? 0} tone={importSummary?.ambiguous ? 'warn' : 'ok'} />
       </div>
-      <FamilyProgressBar current={familyProgress.current} target={familyProgress.target} percent={familyProgress.percent} />
+      <FamilyProgressBar {...familyProgress} />
 
-      {/* Generate */}
+      {/* Generate — setup only */}
+      {mode === 'setup' && (
       <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-base font-semibold text-slate-900">1 · Generate family IDs</h2>
         <p className="mb-3 text-sm text-slate-500">
@@ -416,13 +510,42 @@ export function FamilyIds() {
         )}
         {generateResult && (
           <p className="mt-3 text-sm text-slate-600">
-            Last run: {generateResult.familiesCreated} families created · {generateResult.studentsAssigned} students assigned ·{' '}
+            Last run: {generateResult.familiesCreated} families created ·{' '}
+            {generateResult.studentsAssigned} students assigned ·{' '}
+            {generateResult.studentsJoined ? <>{generateResult.studentsJoined} joined an existing family · </> : null}
             {generateResult.unattached.length} unattached · {generateResult.totalFamilies} total families
           </p>
         )}
+        {/* Phone-only joins are almost always real siblings, but two households
+            can share a number — surface them so an admin can split a wrong one. */}
+        {generateResult && (generateResult.phoneJoins?.length ?? 0) > 0 && (
+          <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm font-bold text-amber-900">
+              {generateResult.phoneJoins!.length} student group(s) joined a family by phone number — please check
+            </p>
+            <p className="mt-0.5 text-xs text-amber-700">
+              These students had no parent link, so they were matched to an existing family by shared phone.
+              If any belongs to a different household, assign them a new family ID below.
+            </p>
+            <ul className="mt-2 space-y-1 text-xs text-amber-900">
+              {generateResult.phoneJoins!.map(join => (
+                <li key={`${join.familyId}-${join.phone}`}>
+                  <span className="font-bold">{displayFamilyId(join.familyId)}</span>
+                  {' '}· phone {join.phone} ·{' '}
+                  {join.studentIds
+                    .map(id => students.find(s => s.id === id)?.name ?? id)
+                    .join(', ')}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </section>
 
-      {/* Import */}
+      )}
+
+      {/* Import — setup only */}
+      {mode === 'setup' && (
       <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-base font-semibold text-slate-900">2 · Import the transport sheet</h2>
         <p className="mb-3 text-sm text-slate-500">
@@ -510,6 +633,27 @@ export function FamilyIds() {
           )}
         </div>
 
+        {overwrites.length > 0 && (
+          <div className="mt-4 rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs">
+            <p className="font-bold text-amber-900">
+              {overwrites.length} row(s) would change a transport already saved
+            </p>
+            <p className="mt-0.5 text-amber-800">
+              The sheet wins when it has a value, so applying these will replace manual
+              corrections made in the app. Review them, or uncheck that bucket above.
+            </p>
+            <ul className="mt-2 space-y-0.5 text-amber-900">
+              {overwrites.slice(0, 8).map((row, i) => (
+                <li key={i}>
+                  <span className="font-semibold">{row.name}</span>:{' '}
+                  {transportLabel(row.currentTransport)} → {transportLabel(row.transport.value)}
+                </li>
+              ))}
+              {overwrites.length > 8 && <li>…and {overwrites.length - 8} more</li>}
+            </ul>
+          </div>
+        )}
+
         {importSummary && (
           <div className="mt-4">
             <div className="mb-2 flex flex-wrap gap-2 text-xs">
@@ -553,63 +697,25 @@ export function FamilyIds() {
         )}
       </section>
 
-      {/* Families */}
-      <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-3 text-base font-semibold text-slate-900">3 · Families</h2>
-        {loading ? (
-          <p className="text-sm text-slate-400">Loading…</p>
-        ) : families.length === 0 ? (
-          <p className="text-sm text-slate-500">No families yet — run Generate. Empty state: your first family ID will appear here.</p>
-        ) : (
-          <div className="max-h-96 overflow-auto rounded-xl border border-slate-200">
-            <table className="w-full text-left text-xs">
-              <thead className="sticky top-0 bg-slate-50 text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">Family ID</th>
-                  <th className="px-3 py-2">Students</th>
-                  <th className="px-3 py-2">Transport</th>
-                  <th className="px-3 py-2">Phone</th>
-                </tr>
-              </thead>
-              <tbody>
-                {families.map(([familyId, kids]) => (
-                  <tr key={familyId} className="border-t border-slate-100 align-top">
-                    <td className="px-3 py-2 font-bold text-emerald-900">{displayFamilyId(familyId)}</td>
-                    <td className="px-3 py-2">
-                      {kids.map(k => (
-                        <div key={k.id} className="flex items-center gap-2">
-                          <span className="font-medium">{k.name}</span>
-                          <span className="text-slate-400">{k.className}</span>
-                        </div>
-                      ))}
-                    </td>
-                    <td className="px-3 py-2">
-                      {kids.map(k => canWrite ? (
-                        <select
-                          key={k.id}
-                          value={k.transport ?? ''}
-                          onChange={e => handleTransport(k.id, e.target.value)}
-                          className="mb-1 block rounded-lg border border-slate-300 px-2 py-1 text-xs"
-                        >
-                          <option value="">—</option>
-                          {TRANSPORT_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-                        </select>
-                      ) : (
-                        <span key={k.id} className="mb-1 block text-xs font-medium text-slate-600">
-                          {transportLabel(k.transport)}
-                        </span>
-                      ))}
-                    </td>
-                    <td className="px-3 py-2 text-slate-500">{kids.find(k => k.parentPhone)?.parentPhone ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      )}
 
-      {/* Unattached bucket */}
+      {/* Families — the browse/print surface */}
+      {mode === 'browse' && (
+        <div className="mb-6">
+          <FamiliesTable
+            students={students}
+            parentNames={parentNames}
+            loading={loading}
+            error={loadError}
+            onRetry={() => void reload()}
+            canEditTransport={canEditTransportHere}
+            onEditTransport={handleTransport}
+          />
+        </div>
+      )}
+
+      {/* Unattached bucket — setup only */}
+      {mode === 'setup' && (
       <section className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-5">
         <h2 className="mb-1 text-base font-semibold text-amber-900">Unattached — no parent link, no phone</h2>
         <p className="mb-3 text-sm text-amber-700">These students can't be grouped automatically. Assign a family ID manually (existing or new), or mark as left if they've left the school.</p>
@@ -642,7 +748,10 @@ export function FamilyIds() {
         )}
       </section>
 
-      {/* Marked as left */}
+      )}
+
+      {/* Marked as left — setup only */}
+      {mode === 'setup' && (
       <section className="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-colors">
         <button
           type="button"
@@ -656,7 +765,7 @@ export function FamilyIds() {
           )} />
           <div className="min-w-0 flex-1">
             <h2 className="text-base font-bold text-slate-900">Marked as left</h2>
-            <p className="mt-0.5 text-sm text-slate-500">No family ID, no gate card. Restore if they come back.</p>
+            <p className="mt-0.5 text-sm text-slate-500">No gate card while away. Restoring returns them to the same family ID.</p>
           </div>
           <span className="shrink-0 rounded-full bg-rose-100 px-3 py-1 text-xs font-bold text-rose-700">
             {leftStudents.length}
@@ -688,7 +797,10 @@ export function FamilyIds() {
         )}
       </section>
 
-      {/* Print */}
+      )}
+
+      {/* Card design preview — setup only */}
+      {mode === 'setup' && (
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-base font-semibold text-slate-900">4 · Print cards</h2>
         <p className="mb-3 text-sm text-slate-500">Office prints: pocket &amp; lanyard (60×90 — fits the 65×95 pouch film), windshield placard for car line (A5 landscape). Pick a group to print only those, or "All". Each card prints FRONT + BACK for duplex lamination; back rows are mirrored for long-edge flip.</p>
@@ -730,6 +842,7 @@ export function FamilyIds() {
         )}
         <AsyncPrintLink families={filteredFamilies} layout={layout} withLookup={withLookup} />
       </section>
+      )}
     </div>
   );
 }
@@ -743,20 +856,49 @@ function StatCard({ label, value, tone }: { label: string; value: number; tone?:
   );
 }
 
-function FamilyProgressBar({ current, target, percent }: { current: number; target: number; percent: number }) {
+/**
+ * Family ID coverage across the ACTIVE roster.
+ *
+ * Deliberately does NOT claim anything about printing: nothing in this app
+ * records that a card was printed or handed over, so a "printed and verified"
+ * figure would be invented. It reports only what the data can prove — how many
+ * active students have a Family ID.
+ */
+function FamilyProgressBar(
+  { covered, total, percent, families, remaining }:
+  { covered: number; total: number; percent: number; families: number; remaining: number },
+) {
+  const complete = total > 0 && remaining === 0;
   return (
-    <section className="mb-6 rounded-2xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-white p-4 shadow-sm" aria-label="Family ID progress">
+    <section className="mb-6 rounded-2xl border border-emerald-200 bg-gradient-to-r from-emerald-50 to-white p-4 shadow-sm" aria-label="Family ID coverage">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="text-sm font-bold text-emerald-950">Family ID progress</h2>
-          <p className="text-xs text-emerald-700">Target: print and verify {target} family IDs.</p>
+          <h2 className="text-sm font-bold text-emerald-950">Family ID coverage</h2>
+          <p className="text-xs text-emerald-700">
+            {total === 0
+              ? 'No active students loaded yet.'
+              : complete
+                ? `Every active student has a Family ID — ${families} famil${families === 1 ? 'y' : 'ies'} in total.`
+                : `${remaining} active student${remaining === 1 ? '' : 's'} still need a Family ID.`}
+          </p>
         </div>
         <div className="text-right">
-          <div className="text-lg font-black tabular-nums text-emerald-900">{current} of {target}</div>
-          <div className="text-xs font-semibold text-emerald-700">{percent}% complete</div>
+          <div className="text-lg font-black tabular-nums text-emerald-900">
+            {covered} of {total} students
+          </div>
+          <div className="text-xs font-semibold text-emerald-700">
+            {percent}% · {families} famil{families === 1 ? 'y' : 'ies'}
+          </div>
         </div>
       </div>
-      <div className="h-3 overflow-hidden rounded-full bg-emerald-100" role="progressbar" aria-valuenow={Math.min(current, target)} aria-valuemin={0} aria-valuemax={target} aria-label={`${current} of ${target} family IDs`}>
+      <div
+        className="h-3 overflow-hidden rounded-full bg-emerald-100"
+        role="progressbar"
+        aria-valuenow={covered}
+        aria-valuemin={0}
+        aria-valuemax={total}
+        aria-label={`${covered} of ${total} active students have a Family ID`}
+      >
         <div className="h-full rounded-full bg-emerald-700 transition-all duration-500" style={{ width: `${percent}%` }} />
       </div>
     </section>
@@ -765,7 +907,7 @@ function FamilyProgressBar({ current, target, percent }: { current: number; targ
 
 /** Lazily builds the family-card PDF only when staff preview/download. */
 function AsyncPrintLink({ families, layout, withLookup }: { families: [string, Student[]][]; layout: CardLayout; withLookup: boolean }) {
-  const [data, setData] = useState<Awaited<ReturnType<typeof buildFamilyCardData>> | null>(null);
+  const [data, setData] = useState<FamilyCardData[] | null>(null);
   const [error, setError] = useState(false);
   const [preparing, setPreparing] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -792,11 +934,12 @@ function AsyncPrintLink({ families, layout, withLookup }: { families: [string, S
 
   const getCardData = async () => {
     if (data) return data;
-    const parentIds = families
-      .flatMap(([, kids]) => kids.map(k => k.parentId))
-      .filter((id): id is string => !!id);
-    const names = await getParentNames(parentIds);
-    const built = await buildFamilyCardData(new Map(families), names);
+    // Card content comes from get_family_cards(), NOT from the RLS-scoped
+    // student list the table is rendered from. A supervisor only sees their
+    // assigned classes, and only admins can read profiles, so building cards
+    // client-side printed rosters missing siblings and a blank parent name.
+    // The RPC returns the complete family for every gate role.
+    const built = await getFamilyCards(families.map(([familyId]) => familyId));
     if (!cancelledRef.current) setData(built);
     return built;
   };
