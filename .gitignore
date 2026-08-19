@@ -8,4 +8,9 @@ dist
 github_pat_*
 .gstack/
 *.png
+# ...but assets the app and the deployed HTML shell actually need must ship.
+# public/logo.png is the favicon fallback; a blanket *.png silently kept it out
+# of the repo, which is how the live site ended up with no logo.
+!assets/*.png
+!public/*.png
 /*.js
