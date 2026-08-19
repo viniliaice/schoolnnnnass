@@ -93,9 +93,12 @@ export async function getQuizzesByTeacher(teacherId: string): Promise<Quiz[]> {
     .from('quizzes')
     .select('*')
     .eq('teacherId', teacherId)
+    .eq('auto_generated', false)
     .order('createdAt', { ascending: false });
   if (error) throw error;
-  return data || [];
+  // Keep a client-side guard as well so stale caches or mocked adapters cannot
+  // expose supervisor-only lesson-plan previews in the teacher's quiz manager.
+  return (data || []).filter((quiz: Quiz) => quiz.auto_generated !== true);
 }
 
 export async function getQuizzesByClass(className: string): Promise<Quiz[]> {

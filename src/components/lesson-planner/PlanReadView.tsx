@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { DayOfWeek, DAYS_OF_WEEK, PeriodActivity, Subject, UnitPlan, LessonPeriodAIReview } from '../../types';
 import { cn } from '../../utils/cn';
-import { ChevronDown, Plus } from 'lucide-react';
+import { ChevronDown, Loader2, Plus } from 'lucide-react';
 import { summarizeDay } from '../../lib/lessonPlanReview';
 
 export interface ReadPeriod {
@@ -25,6 +25,8 @@ interface PlanReadViewProps {
   unitPlans?: UnitPlan[];
   periodAiReviews?: LessonPeriodAIReview[];
   showAiReview?: boolean;
+  /** Show a truthful placeholder while the submitted attempt is still running. */
+  aiReviewPending?: boolean;
   onAddCommentLine?: (line: string) => void;
   /** When true, each day section is an accordion panel — collapsed by default. */
   collapsible?: boolean;
@@ -85,9 +87,22 @@ function AddLineButton({ line, onAdd }: { line: string; onAdd?: (line: string) =
   );
 }
 
-function AiReviewBox({ review, onAddCommentLine }: { review?: LessonPeriodAIReview; onAddCommentLine?: (line: string) => void }) {
+function AiReviewBox({
+  review,
+  pending = false,
+  onAddCommentLine,
+}: {
+  review?: LessonPeriodAIReview;
+  pending?: boolean;
+  onAddCommentLine?: (line: string) => void;
+}) {
   if (!review) {
-    return (
+    return pending ? (
+      <div className="mt-3 flex items-center gap-2 rounded-xl border border-blue-200 bg-blue-50 p-3 text-sm font-medium text-blue-700" role="status">
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+        AI review pending
+      </div>
+    ) : (
       <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50 p-3 text-sm text-slate-500">
         No saved period AI review yet. Supervisors can use Regenerate AI Review to create it.
       </div>
@@ -148,7 +163,7 @@ function AiReviewBox({ review, onAddCommentLine }: { review?: LessonPeriodAIRevi
  * than the compact editing grid) and it flows well onto a PDF page.
  */
 export function PlanReadView({
-  periods, periodCount, subjects, planClassName, weekDates, unitPlans = [], periodAiReviews = [], showAiReview = false, onAddCommentLine,
+  periods, periodCount, subjects, planClassName, weekDates, unitPlans = [], periodAiReviews = [], showAiReview = false, aiReviewPending = false, onAddCommentLine,
   collapsible = false, defaultCollapsed = true,
 }: PlanReadViewProps) {
   const [expandedDays, setExpandedDays] = useState<Record<string, boolean>>({});
@@ -287,6 +302,7 @@ export function PlanReadView({
                           {showAiReview && (
                             <AiReviewBox
                               review={periodAiReviews.find((review) => review.period_order === reviewOrder(cell!))}
+                              pending={aiReviewPending}
                               onAddCommentLine={onAddCommentLine}
                             />
                           )}

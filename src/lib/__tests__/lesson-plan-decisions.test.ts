@@ -1,133 +1,192 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const { mockRpc, mockInvoke, mockGenerateLessonPlanQuizzes } = vi.hoisted(() => ({
+  mockRpc: vi.fn(),
+  mockInvoke: vi.fn(),
+  mockGenerateLessonPlanQuizzes: vi.fn(),
+}));
 
 vi.mock('../supabase', () => ({
   supabase: {
-    from: vi.fn(),
-    functions: { invoke: vi.fn() },
+    rpc: mockRpc,
+    functions: { invoke: mockInvoke },
   },
 }));
 
-import { supabase } from '../supabase';
-import { approvePlan, rejectPlan, submitForReview, SubmissionAiError } from '../db/lessonPlans';
+vi.mock('../db/lessonPlanQuizzes', () => ({
+  generateLessonPlanQuizzes: mockGenerateLessonPlanQuizzes,
+}));
 
-const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
-const mockInvoke = supabase.functions.invoke as unknown as ReturnType<typeof vi.fn>;
+import {
+  approvePlan,
+  rejectPlan,
+  retryAIReview,
+  submitForReview,
+} from '../db/lessonPlans';
 
-beforeEach(() => {
-  mockFrom.mockReset();
-  mockInvoke.mockReset();
-});
+describe('lesson-plan decision and dispatch invariants', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGenerateLessonPlanQuizzes.mockResolvedValue([]);
+  });
 
-/** Build a chainable stub for `.update().eq()` and `.upsert()`. */
-function planTableStub(record: { updates: any[]; upserts: any[] }) {
-  return {
-    update: (values: any) => ({
-      eq: (_col: string, _val: string) => {
-        record.updates.push(values);
-        return Promise.resolve({ error: null });
-      },
-    }),
-    upsert: (values: any, _opts: any) => {
-      record.upserts.push(values);
-      return Promise.resolve({ error: null });
-    },
-  };
-}
+  it('does not dispatch review or quiz generation when submit RPC fails', async () => {
+    mockRpc.mockResolvedValueOnce({ data: null, error: new Error('not owner') });
 
-describe('supervisor decisions without an AI review', () => {
-  it('approvePlan sets status to approved', async () => {
-    const rec = { updates: [] as any[], upserts: [] as any[] };
-    mockFrom.mockImplementation(() => planTableStub(rec));
+    await expect(submitForReview('plan-1')).rejects.toThrow('not owner');
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockGenerateLessonPlanQuizzes).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch review or quiz generation when submit is not confirmed', async () => {
+    mockRpc.mockResolvedValueOnce({
+      data: [{ id: 'plan-1', status: 'draft', ai_started_at: null }],
+      error: null,
+    });
+
+    await expect(submitForReview('plan-1')).rejects.toThrow('Submission was not confirmed');
+    expect(mockInvoke).not.toHaveBeenCalled();
+    expect(mockGenerateLessonPlanQuizzes).not.toHaveBeenCalled();
+  });
+
+  it('starts review and quiz dispatch independently only after confirmed submission', async () => {
+    const events: string[] = [];
+    mockRpc.mockImplementation(async (name: string) => {
+      if (name === 'submit_lesson_plan_for_review') {
+        events.push('submitted');
+        return {
+          data: [{ id: 'plan-1', status: 'submitted', ai_started_at: '2026-08-12T10:00:00Z' }],
+          error: null,
+        };
+      }
+      return { data: null, error: null };
+    });
+    mockGenerateLessonPlanQuizzes.mockImplementation(async () => {
+      events.push('quiz-dispatched');
+      return [];
+    });
+    mockInvoke.mockImplementation(async () => {
+      events.push('review-dispatched');
+      return { data: { status: 'accepted' }, error: null };
+    });
+
+    await expect(submitForReview('plan-1')).resolves.toEqual({
+      plan_id: 'plan-1',
+      status: 'submitted',
+      ai_started_at: '2026-08-12T10:00:00Z',
+    });
+    await vi.waitFor(() => expect(events).toContain('review-dispatched'));
+
+    expect(events[0]).toBe('submitted');
+    expect(events).toEqual(expect.arrayContaining(['quiz-dispatched', 'review-dispatched']));
+    expect(mockGenerateLessonPlanQuizzes).toHaveBeenCalledWith('plan-1');
+    expect(mockInvoke).toHaveBeenCalledWith('generate-lesson-review', {
+      body: { plan_id: 'plan-1' },
+    });
+  });
+
+  it('dispatches quiz even when review invocation fails and marks only that review attempt failed', async () => {
+    mockRpc
+      .mockResolvedValueOnce({
+        data: [{ id: 'plan-1', status: 'submitted', ai_started_at: 'attempt-a' }],
+        error: null,
+      })
+      .mockResolvedValueOnce({ data: true, error: null });
+    mockInvoke.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'network down', context: { message: 'dispatch unavailable' } },
+    });
+
+    await expect(submitForReview('plan-1')).resolves.toEqual(expect.objectContaining({
+      status: 'submitted',
+      ai_started_at: 'attempt-a',
+    }));
+    await vi.waitFor(() => expect(mockRpc).toHaveBeenCalledTimes(2));
+
+    expect(mockGenerateLessonPlanQuizzes).toHaveBeenCalledWith('plan-1');
+    expect(mockRpc).toHaveBeenNthCalledWith(2, 'mark_lesson_plan_review_dispatch_failed', {
+      p_plan_id: 'plan-1',
+      p_ai_started_at: 'attempt-a',
+      p_reason: 'dispatch unavailable',
+    });
+  });
+
+  it('returns confirmed retry dispatch details and does not regenerate quizzes', async () => {
+    mockRpc.mockResolvedValueOnce({
+      data: [{ id: 'plan-1', status: 'submitted', ai_started_at: 'attempt-b' }],
+      error: null,
+    });
+    mockInvoke.mockResolvedValueOnce({ data: { status: 'accepted' }, error: null });
+
+    await expect(retryAIReview('plan-1')).resolves.toEqual({
+      plan_id: 'plan-1',
+      status: 'submitted',
+      ai_started_at: 'attempt-b',
+    });
+    expect(mockGenerateLessonPlanQuizzes).not.toHaveBeenCalled();
+    expect(mockInvoke).toHaveBeenCalledWith('generate-lesson-review', {
+      body: { plan_id: 'plan-1' },
+    });
+  });
+
+  it('marks an immediate retry dispatch failure against only the fresh attempt', async () => {
+    mockRpc
+      .mockResolvedValueOnce({
+        data: [{ id: 'plan-1', status: 'submitted', ai_started_at: 'attempt-b' }],
+        error: null,
+      })
+      .mockResolvedValueOnce({ data: true, error: null });
+    mockInvoke.mockResolvedValueOnce({
+      data: null,
+      error: { message: 'network down', context: { message: 'dispatch unavailable' } },
+    });
+
+    await expect(retryAIReview('plan-1')).rejects.toThrow('Review retry could not be dispatched');
+    expect(mockRpc).toHaveBeenNthCalledWith(2, 'mark_lesson_plan_review_dispatch_failed', {
+      p_plan_id: 'plan-1',
+      p_ai_started_at: 'attempt-b',
+      p_reason: 'dispatch unavailable',
+    });
+    expect(mockGenerateLessonPlanQuizzes).not.toHaveBeenCalled();
+  });
+
+  it('approves through one atomic supervisor-decision RPC', async () => {
+    mockRpc.mockResolvedValueOnce({
+      data: { id: 'plan-1', status: 'approved' },
+      error: null,
+    });
 
     await approvePlan('plan-1');
 
-    expect(rec.updates).toEqual([{ status: 'approved' }]);
-    expect(rec.upserts).toHaveLength(0);
+    expect(mockRpc).toHaveBeenCalledOnce();
+    expect(mockRpc).toHaveBeenCalledWith('decide_lesson_plan_review', {
+      p_plan_id: 'plan-1',
+      p_status: 'approved',
+      p_supervisor_comment: null,
+    });
   });
 
-  it('rejectPlan sets status to rejected', async () => {
-    const rec = { updates: [] as any[], upserts: [] as any[] };
-    mockFrom.mockImplementation(() => planTableStub(rec));
+  it('rejects with feedback through the same atomic supervisor-decision RPC', async () => {
+    mockRpc.mockResolvedValueOnce({
+      data: [{ id: 'plan-1', status: 'rejected' }],
+      error: null,
+    });
 
-    await rejectPlan('plan-1');
+    await rejectPlan('plan-1', 'Please improve differentiation.');
 
-    expect(rec.updates).toEqual([{ status: 'rejected' }]);
+    expect(mockRpc).toHaveBeenCalledOnce();
+    expect(mockRpc).toHaveBeenCalledWith('decide_lesson_plan_review', {
+      p_plan_id: 'plan-1',
+      p_status: 'rejected',
+      p_supervisor_comment: 'Please improve differentiation.',
+    });
   });
 
-  it('stores a manual review row when the supervisor decides without an AI score', async () => {
-    const rec = { updates: [] as any[], upserts: [] as any[] };
-    mockFrom.mockImplementation(() => planTableStub(rec));
+  it('propagates decision RPC errors without a second client-side write path', async () => {
+    mockRpc.mockResolvedValueOnce({ data: null, error: new Error('not authorized') });
 
-    await approvePlan('plan-1', 'Looks good, approving manually.');
-
-    expect(rec.upserts).toHaveLength(1);
-    const saved = rec.upserts[0];
-    expect(saved.plan_id).toBe('plan-1');
-    expect(saved.status).toBe('reviewed');
-    expect(saved.supervisor_comment).toBe('Looks good, approving manually.');
-    expect(saved.performance_level).toBe('Manual review');
-    expect(rec.updates).toEqual([{ status: 'approved' }]);
+    await expect(approvePlan('plan-1', 'Looks good')).rejects.toThrow('not authorized');
+    expect(mockRpc).toHaveBeenCalledOnce();
   });
 
-  it('ignores an empty manual comment', async () => {
-    const rec = { updates: [] as any[], upserts: [] as any[] };
-    mockFrom.mockImplementation(() => planTableStub(rec));
-
-    await rejectPlan('plan-1', '   ');
-
-    expect(rec.upserts).toHaveLength(0);
-    expect(rec.updates).toEqual([{ status: 'rejected' }]);
-  });
-});
-
-describe('submitForReview failure signalling', () => {
-  function statusSequence(statuses: string[]) {
-    let call = 0;
-    const updates: any[] = [];
-    mockFrom.mockImplementation(() => ({
-      select: () => ({
-        eq: () => ({
-          single: () => Promise.resolve({ data: { id: 'p1', teacher_id: 't1', status: statuses[Math.min(call++, statuses.length - 1)] }, error: null }),
-        }),
-      }),
-      update: (values: any) => ({
-        eq: () => {
-          updates.push(values);
-          return Promise.resolve({ error: null });
-        },
-      }),
-      // submitForReview now also writes an ai_review_logs row.
-      insert: () => Promise.resolve({ error: null }),
-    }));
-    return updates;
-  }
-
-  it('throws SubmissionAiError when the plan reached the supervisor but the AI failed', async () => {
-    // 1st read: pre-submit status 'draft'. 2nd read (after error): 'ai_failed'.
-    const updates = statusSequence(['draft', 'ai_failed']);
-    mockInvoke.mockResolvedValue({ data: null, error: { message: 'AI review generation failed' } });
-
-    await expect(submitForReview('p1', [])).rejects.toBeInstanceOf(SubmissionAiError);
-    // Plan must NOT be rolled back to draft — the supervisor can still see it.
-    expect(updates.some((u) => u.status === 'draft')).toBe(false);
-  });
-
-  it('rolls the plan back to draft when the submission itself never landed', async () => {
-    const updates = statusSequence(['draft', 'draft']);
-    mockInvoke.mockResolvedValue({ data: null, error: { message: 'network down' } });
-
-    const err = await submitForReview('p1', []).catch((e) => e);
-    expect(err).toBeInstanceOf(Error);
-    expect(err).not.toBeInstanceOf(SubmissionAiError);
-    expect(updates.some((u) => u.status === 'draft')).toBe(true);
-  });
-
-  it('does not downgrade in_review back to submitted on success', async () => {
-    const updates = statusSequence(['draft', 'in_review']);
-    mockInvoke.mockResolvedValue({ data: { plan_id: 'p1' }, error: null });
-
-    await submitForReview('p1', []);
-
-    expect(updates.some((u) => u.status === 'submitted')).toBe(false);
-  });
 });
