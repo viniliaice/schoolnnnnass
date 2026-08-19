@@ -10,14 +10,27 @@ import { pdf } from '@react-pdf/renderer';
 import { FamilyCardsDocument, type CardLayout, type FamilyCardData } from '../../../lib/print/familyCards';
 import { getFamilyCards } from '../../../lib/db/familyCards';
 
+/**
+ * Student ids to keep, per family id — the STUDENT/TRANSPORT print mode.
+ *
+ * get_family_cards() always returns the COMPLETE family (correctly: a card
+ * must never under-list a family when the whole family is being printed).
+ * So when the user selected specific students, the restriction has to be
+ * re-applied to the server's answer here, or the selection silently expands
+ * back to every sibling at PDF time.
+ *
+ * Undefined = family mode = print everyone.
+ */
+export type RestrictTo = Map<string, Set<string>>;
+
 export interface UseCardPdfResult {
   busy: boolean;
   error: string | null;
   previewUrl: string | null;
   /** Card data actually returned by the server for the last build. */
   lastCards: FamilyCardData[] | null;
-  buildPreview: (familyIds: string[]) => Promise<void>;
-  download: (familyIds: string[]) => Promise<void>;
+  buildPreview: (familyIds: string[], restrictTo?: RestrictTo) => Promise<void>;
+  download: (familyIds: string[], restrictTo?: RestrictTo) => Promise<void>;
   closePreview: () => void;
   reset: () => void;
 }
@@ -46,11 +59,26 @@ export function useCardPdf({ layout, includeLookupList, cards }: Options): UseCa
   // Release the object URL when the component unmounts.
   useEffect(() => revoke, [revoke]);
 
-  const build = useCallback(async (familyIds: string[]): Promise<{ blob: Blob; data: FamilyCardData[] }> => {
+  const build = useCallback(async (
+    familyIds: string[],
+    restrictTo?: RestrictTo,
+  ): Promise<{ blob: Blob; data: FamilyCardData[] }> => {
     // Card content ALWAYS comes from get_family_cards (or pre-resolved data):
     // never from the RLS-scoped student list, which can omit siblings for
     // supervisors and has no parent name for office staff.
-    const data = cards ?? await getFamilyCards(familyIds);
+    const full = cards ?? await getFamilyCards(familyIds);
+
+    // Re-apply a student-level selection to the server's complete roster.
+    // Parent name/phone stay from the server; only the student LIST narrows.
+    const data = restrictTo
+      ? full
+          .map(fam => ({
+            ...fam,
+            students: fam.students.filter(s => restrictTo.get(fam.familyId)?.has(s.id)),
+          }))
+          .filter(fam => fam.students.length > 0)
+      : full;
+
     if (data.length === 0) throw new Error('No printable families in this selection.');
     const blob = await pdf(
       <FamilyCardsDocument families={data} layout={layout} includeLookupList={includeLookupList} />
@@ -58,11 +86,11 @@ export function useCardPdf({ layout, includeLookupList, cards }: Options): UseCa
     return { blob, data };
   }, [cards, layout, includeLookupList]);
 
-  const buildPreview = useCallback(async (familyIds: string[]) => {
+  const buildPreview = useCallback(async (familyIds: string[], restrictTo?: RestrictTo) => {
     setBusy(true);
     setError(null);
     try {
-      const { blob, data } = await build(familyIds);
+      const { blob, data } = await build(familyIds, restrictTo);
       revoke();
       const url = URL.createObjectURL(blob);
       urlRef.current = url;
@@ -75,11 +103,11 @@ export function useCardPdf({ layout, includeLookupList, cards }: Options): UseCa
     }
   }, [build, revoke]);
 
-  const download = useCallback(async (familyIds: string[]) => {
+  const download = useCallback(async (familyIds: string[], restrictTo?: RestrictTo) => {
     setBusy(true);
     setError(null);
     try {
-      const { blob, data } = await build(familyIds);
+      const { blob, data } = await build(familyIds, restrictTo);
       setLastCards(data);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');

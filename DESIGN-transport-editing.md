@@ -267,3 +267,95 @@ Print:   Ahmed Sheikh  G7  Bus 9
 | `src/pages/admin/FamilyIds.tsx` | wires `handleTransport` (was dead code); overwrite warning panel |
 
 No migration. No new table, column or RPC.
+
+---
+
+# CORRECTION (required): transport filtering and printing are STUDENT-level
+
+Transport belongs to the individual student, never automatically to the whole
+family. This correction makes filtering, selection, counting and **printing**
+all operate on student records.
+
+## The two print modes are now distinct
+
+```
+FAMILY PRINT            = print the complete active family
+STUDENT/TRANSPORT PRINT = print only the selected/matching students
+```
+
+`resolvePrintBatch()` no longer applies one rule to both:
+
+| Source | Renders |
+|---|---|
+| `{kind:'families', familyIds}` | the **full** active roster of each family |
+| `{kind:'students', studentIds}` | **only** those students; unselected siblings counted in `omittedSiblings`, never rendered |
+
+A card still groups by family — that is the physical artifact — but in student
+mode it lists only the selected members.
+
+## The bug this fixed was in THREE layers, not one
+
+Fixing the resolver alone would not have worked:
+
+1. **`resolvePrintBatch()`** expanded every family to its full roster for both
+   source kinds (old rule 4). Fixed by the mode split above.
+2. **`useCardPdf`** passed only `familyIds` to `getFamilyCards()`, and that RPC
+   deliberately returns the **complete** family. So a narrowed selection
+   re-expanded at PDF build time. Fixed with an optional
+   `RestrictTo = Map<familyId, Set<studentId>>` applied to the server's answer
+   — parent name/phone still come from the server, only the student list
+   narrows. Family mode passes `undefined` and prints everyone.
+3. **"Print all"** in `FamiliesTable` always sent `{kind:'families'}`, so
+   filtering to WALKER and pressing Print printed the bus-riding siblings.
+   It now sends `{kind:'students', studentIds}` whenever a transport is
+   selected.
+
+## The transport dropdown is student-level and route-aware
+
+Built from the data via `transportOptions(rows)`:
+
+```
+All students · Walkers · Car pickup · Any bus · Bus 17 · Bus 18 · …
+```
+
+`'bus'` (any bus) and `` `bus:17` `` (that route only) are distinct selections.
+Helpers in `familyRows.ts`: `studentMatchesTransport`,
+`studentsMatchingTransport`, `busRouteOptions`, `familyRowMatchesSelection`.
+
+When a transport is active:
+- the family row stays visible (staff keep family context), but
+- counts, selection and print all derive from the matching **students**, and
+- the Print button reads e.g. *"Print 2 Bus 17 students"*.
+
+## Partial families are disclosed, never silent
+
+The dialog shows an amber note — *"Printing selected students only. Siblings
+who are not part of this selection are left off the card."* — and each card
+line carries a `+N siblings not printed` badge. `describePrintBatch()` reports
+`N unselected siblings not printed`.
+
+## Empty transport
+
+Unchanged: NULL/empty → WALKER. Such a student appears under the WALKER
+filter, prints through a WALKER selection, is WALKER on the card, and appears
+under neither BUS nor CAR.
+
+## Tests
+
+`src/lib/print/__tests__/transportPrintScope.test.tsx` (25 tests) covers the
+mandated MBK-0003 scenario exactly:
+
+| Test | Expected | Result |
+|---|---|---|
+| 1 — WALKER filter | 1 student: Cabdale | ✅ |
+| 2 — BUS 17 filter | 2 students: Axmed, Maxamed | ✅ |
+| 3 — WALKER print | card has Cabdale G10; **not** Axmed/Maxamed | ✅ |
+| 4 — BUS 17 print | card has Axmed G11 + Maxamed G9; **not** Cabdale | ✅ |
+| 5 — family print | all three siblings | ✅ |
+
+Tests 3 and 4 assert on the **rendered card markup**, not just the resolver, so
+a regression in any of the three layers fails them. Falsified: reverting the
+mode split fails 6 tests.
+
+Two pre-existing `printBatch.test.ts` tests were updated deliberately — they
+asserted the old expand-always behaviour that this correction removes.

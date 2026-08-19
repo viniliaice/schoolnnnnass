@@ -9,20 +9,15 @@ import { useMemo, useState } from 'react';
 import { Pencil, Printer, Search, Users } from 'lucide-react';
 import { displayFamilyId, formatGradeLabel, transportLabel } from '../../../lib/transport';
 import {
-  buildFamilyRows, classOptions, filterFamilyRows,
-  type FamilyRow, type TransportFilter,
+  buildFamilyRows, classOptions, familyRowMatches, familyRowMatchesClass,
+  familyRowMatchesSelection, studentMatchesTransport, studentsMatchingTransport,
+  transportOptions,
+  type FamilyRow, type TransportSelection,
 } from '../../../lib/print/familyRows';
 import { PrintCardsDialog, type DialogSource } from './PrintCardsDialog';
 import { EditTransportDialog } from './EditTransportDialog';
 import { cn } from '../../../utils/cn';
 import type { Student } from '../../../types';
-
-const TRANSPORTS: Array<[TransportFilter, string]> = [
-  ['all', 'All transport'],
-  ['bus', 'Bus riders'],
-  ['walker', 'Walkers'],
-  ['car', 'Car pickup'],
-];
 
 export function FamiliesTable({
   students,
@@ -44,7 +39,7 @@ export function FamiliesTable({
   onEditTransport?: (studentId: string, transport: string) => Promise<void>;
 }) {
   const [query, setQuery] = useState('');
-  const [transport, setTransport] = useState<TransportFilter>('all');
+  const [transport, setTransport] = useState<TransportSelection>('all');
   const [className, setClassName] = useState('');
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dialog, setDialog] = useState<DialogSource | null>(null);
@@ -52,10 +47,24 @@ export function FamiliesTable({
 
   const rows = useMemo(() => buildFamilyRows(students, parentNames), [students, parentNames]);
   const filtered = useMemo(
-    () => filterFamilyRows(rows, { query, transport, className }),
+    () => rows.filter(row =>
+      familyRowMatches(row, query) &&
+      familyRowMatchesSelection(row, transport) &&
+      familyRowMatchesClass(row, className)),
     [rows, query, transport, className],
   );
   const classes = useMemo(() => classOptions(rows), [rows]);
+  const transports = useMemo(() => transportOptions(rows), [rows]);
+
+  // TRANSPORT IS STUDENT-LEVEL. When a transport is selected, the working unit
+  // becomes the matching STUDENTS, not the families that contain them — so
+  // printing cannot drag unselected siblings along.
+  const transportActive = transport !== 'all';
+  const transportName = transports.find(([v]) => v === transport)?.[1] ?? 'All students';
+  const matchingStudents = useMemo(
+    () => (transportActive ? studentsMatchingTransport(filtered, transport) : []),
+    [transportActive, filtered, transport],
+  );
 
   // Selection is keyed by familyId, so it survives filtering and sorting.
   const visibleIds = filtered.map(r => r.familyId);
@@ -109,21 +118,35 @@ export function FamiliesTable({
           >
             <Printer className="h-4 w-4" /> Print selected ({selected.size})
           </button>
+          {/* With a transport selected this prints the MATCHING STUDENTS, not
+              their families — otherwise filtering to WALKER and pressing
+              Print would also print the bus-riding siblings. */}
           <button
             onClick={() =>
-              openPrint({
-                kind: 'families',
-                familyIds: visibleIds,
-                label:
-                  query || transport !== 'all' || className
-                    ? `${visibleIds.length} filtered famil${visibleIds.length === 1 ? 'y' : 'ies'}`
-                    : `all ${visibleIds.length} famil${visibleIds.length === 1 ? 'y' : 'ies'}`,
-              })
+              openPrint(
+                transportActive
+                  ? {
+                      kind: 'students',
+                      studentIds: matchingStudents.map(s => s.id),
+                      label: `${matchingStudents.length} ${transportName.toLowerCase()} student${matchingStudents.length === 1 ? '' : 's'}`,
+                    }
+                  : {
+                      kind: 'families',
+                      familyIds: visibleIds,
+                      label:
+                        query || className
+                          ? `${visibleIds.length} filtered famil${visibleIds.length === 1 ? 'y' : 'ies'}`
+                          : `all ${visibleIds.length} famil${visibleIds.length === 1 ? 'y' : 'ies'}`,
+                    },
+              )
             }
-            disabled={visibleIds.length === 0}
+            disabled={transportActive ? matchingStudents.length === 0 : visibleIds.length === 0}
             className="inline-flex items-center gap-1.5 rounded-xl bg-emerald-800 px-4 py-2 text-sm font-bold text-white transition hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            <Printer className="h-4 w-4" /> Print all ({visibleIds.length})
+            <Printer className="h-4 w-4" />
+            {transportActive
+              ? `Print ${matchingStudents.length} ${transportName} student${matchingStudents.length === 1 ? '' : 's'}`
+              : `Print all (${visibleIds.length})`}
           </button>
         </div>
       </div>
@@ -141,10 +164,10 @@ export function FamiliesTable({
         </div>
         <select
           value={transport}
-          onChange={e => setTransport(e.target.value as TransportFilter)}
+          onChange={e => setTransport(e.target.value as TransportSelection)}
           className="rounded-xl border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800"
         >
-          {TRANSPORTS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          {transports.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
         </select>
         <select
           value={className}

@@ -41,13 +41,26 @@ describe('resolvePrintBatch — students source', () => {
     expect(batch.duplicatesMerged).toBe(1);
   });
 
-  it('expands each family to its FULL roster, including unselected siblings', () => {
+  it('renders ONLY the selected students, never their unselected siblings', () => {
+    // CHANGED DELIBERATELY. This used to expand to the full roster, which made
+    // a transport-filtered print (e.g. "print the walkers") also print the
+    // bus-riding siblings. Student selection is now honoured exactly; use
+    // {kind:'families'} to print a complete family.
     const batch = resolvePrintBatch({ kind: 'students', studentIds: ['a'] }, ROSTER);
     expect(batch.cardCount).toBe(1);
-    // Deeqa and Bishaaro were never selected but must still be on the card.
+    expect(batch.families[0].students.map(s => s.name)).toEqual(['Ahmed Xasan']);
+    // Deeqa and Bishaaro are accounted for, not silently dropped.
+    expect(batch.families[0].omittedSiblings).toBe(2);
+    expect(batch.partialFamilies).toBe(true);
+  });
+
+  it('family mode still expands to the FULL roster', () => {
+    const batch = resolvePrintBatch({ kind: 'families', familyIds: ['0015'] }, ROSTER);
     expect(batch.families[0].students.map(s => s.name)).toEqual([
       'Ahmed Xasan', 'Bishaaro Xasan', 'Deeqa Xasan',
     ]);
+    expect(batch.families[0].omittedSiblings).toBe(0);
+    expect(batch.partialFamilies).toBe(false);
   });
 
   it('reports students with no family ID instead of dropping them', () => {
@@ -116,7 +129,8 @@ describe('describePrintBatch', () => {
   it('states the student→card collapse for the dialog', () => {
     const source: PrintSource = { kind: 'students', studentIds: ['a', 'b', 'c'] };
     const batch = resolvePrintBatch(source, ROSTER);
-    expect(describePrintBatch(batch, source)).toBe('3 students → 2 cards · 1 duplicate family merged');
+    expect(describePrintBatch(batch, source))
+      .toBe('3 students → 2 cards · 1 sibling shares a card · 1 unselected sibling not printed');
   });
 
   it('mentions skipped students', () => {

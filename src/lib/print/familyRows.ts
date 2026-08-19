@@ -143,3 +143,79 @@ export function classOptions(rows: FamilyRow[]): string[] {
   for (const row of rows) for (const c of row.classNames) set.add(c);
   return [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
+
+// ─── STUDENT-LEVEL transport selection ──────────────────────────────────────
+//
+// Transport belongs to the STUDENT, so the dropdown resolves to a set of
+// students, not families. A family with Axmed (bus 17), Cabdale (walker) and
+// Maxamed (bus 17) contributes 2 students under 'bus:17' and 1 under 'walker'.
+// The family row stays visible so staff keep the family context, but every
+// count, selection and print derives from these student ids.
+
+/**
+ * A transport selection: 'all', a mode, or one specific bus route.
+ * Bus routes are encoded as `bus:17` so 'bus' (any bus) stays distinct from
+ * 'bus:17' (that route only).
+ */
+export type TransportSelection = 'all' | 'walker' | 'car' | 'bus' | `bus:${string}`;
+
+/** Does THIS STUDENT match the selection? Empty transport counts as WALKER. */
+export function studentMatchesTransport(student: Student, selection: TransportSelection): boolean {
+  if (selection === 'all') return true;
+  const t = normalizeTransport(student.transport);
+  if (t === 'LEFT') return false;
+  if (selection === 'walker') return t === 'WALKER';
+  if (selection === 'car') return t === 'CAR';
+  if (selection === 'bus') return /^\d+$/.test(t);
+  if (selection.startsWith('bus:')) return t === selection.slice(4);
+  return true;
+}
+
+/** The students matching a transport selection, across the given rows. */
+export function studentsMatchingTransport(
+  rows: FamilyRow[],
+  selection: TransportSelection,
+): Student[] {
+  const out: Student[] = [];
+  for (const row of rows) {
+    for (const student of row.students) {
+      if (studentMatchesTransport(student, selection)) out.push(student);
+    }
+  }
+  return out;
+}
+
+/** Every distinct bus route present, numerically sorted — for the dropdown. */
+export function busRouteOptions(rows: FamilyRow[]): string[] {
+  const set = new Set<string>();
+  for (const row of rows) {
+    for (const student of row.students) {
+      const t = normalizeTransport(student.transport);
+      if (/^\d+$/.test(t)) set.add(t);
+    }
+  }
+  return [...set].sort((a, b) => Number(a) - Number(b));
+}
+
+/**
+ * The full dropdown: All students / Walkers / Car / Any bus / each route.
+ * Built from the data, so a school with routes 17 and 18 sees exactly those.
+ */
+export function transportOptions(rows: FamilyRow[]): Array<[TransportSelection, string]> {
+  const opts: Array<[TransportSelection, string]> = [
+    ['all', 'All students'],
+    ['walker', 'Walkers'],
+    ['car', 'Car pickup'],
+    ['bus', 'Any bus'],
+  ];
+  for (const route of busRouteOptions(rows)) {
+    opts.push([`bus:${route}` as TransportSelection, `Bus ${route}`]);
+  }
+  return opts;
+}
+
+/** Does any student in this family match? Controls family-row visibility. */
+export function familyRowMatchesSelection(row: FamilyRow, selection: TransportSelection): boolean {
+  if (selection === 'all') return true;
+  return row.students.some(s => studentMatchesTransport(s, selection));
+}

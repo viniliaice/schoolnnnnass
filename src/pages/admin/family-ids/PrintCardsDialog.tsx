@@ -12,13 +12,19 @@ import {
   describePrintBatch, resolvePrintBatch, type PrintSource,
 } from '../../../lib/print/printBatch';
 import type { CardLayout } from '../../../lib/print/familyCards';
-import { useCardPdf } from './useCardPdf';
+import { useCardPdf, type RestrictTo } from './useCardPdf';
 import { cn } from '../../../utils/cn';
 import type { Student } from '../../../types';
 
 export type DialogSource =
+  /** FAMILY PRINT — every active sibling is rendered. */
   | { kind: 'families'; familyIds: string[]; label: string }
-  | { kind: 'students' };
+  /**
+   * STUDENT / TRANSPORT PRINT — only these students are rendered.
+   * `studentIds` pre-seeds the picker (e.g. from a transport filter); omit it
+   * to open the dialog with an empty manual selection.
+   */
+  | { kind: 'students'; studentIds?: string[]; label?: string };
 
 interface Props {
   open: boolean;
@@ -46,7 +52,8 @@ export function PrintCardsDialog({ open, onClose, students, source }: Props) {
   // Reset per-open state so a previous selection never leaks into a new print.
   useEffect(() => {
     if (open) {
-      setPicked(new Set());
+      // A transport-filtered print arrives with its students already chosen.
+      setPicked(new Set(source.kind === 'students' ? source.studentIds ?? [] : []));
       setStudentQuery('');
       pdfState.reset();
     }
@@ -83,6 +90,24 @@ export function PrintCardsDialog({ open, onClose, students, source }: Props) {
     });
 
   const familyIds = batch.families.map(f => f.familyId);
+
+  /**
+   * STUDENT/TRANSPORT MODE: pin the exact students to render.
+   *
+   * get_family_cards() returns the complete family, so without this the
+   * selection expands back to every sibling when the PDF is built. Family
+   * mode passes undefined and prints everyone, which is the intended
+   * behaviour there.
+   */
+  const restrictTo: RestrictTo | undefined = useMemo(() => {
+    if (printSource.kind !== 'students') return undefined;
+    const map: RestrictTo = new Map();
+    for (const fam of batch.families) {
+      map.set(fam.familyId, new Set(fam.students.map(s => s.id)));
+    }
+    return map;
+  }, [printSource.kind, batch.families]);
+
   const canPrint = batch.cardCount > 0 && !pdfState.busy;
 
   return (
@@ -93,7 +118,9 @@ export function PrintCardsDialog({ open, onClose, students, source }: Props) {
       description={
         source.kind === 'families'
           ? source.label
-          : 'Search and select students — the system prints one card per family.'
+          : source.label
+            ? `${source.label} — only these students are printed, siblings are not added.`
+            : 'Search and select students — only the students you pick are printed.'
       }
       className="max-w-2xl"
     >
@@ -164,11 +191,26 @@ export function PrintCardsDialog({ open, onClose, students, source }: Props) {
                   · {f.students.map(s => `${s.name} (${formatGradeLabel(s.className)})`).join(', ')}
                   {' · '}
                   {[...new Set(f.students.map(s => transportLabel(s.transport)))].join(' · ')}
+                  {f.omittedSiblings > 0 && (
+                    <span className="ml-1 rounded bg-amber-100 px-1 font-semibold text-amber-900">
+                      +{f.omittedSiblings} sibling{f.omittedSiblings === 1 ? '' : 's'} not printed
+                    </span>
+                  )}
                 </li>
               ))}
             </ul>
           )}
         </div>
+
+        {/* Say the partial-family behaviour out loud: it is intended, but it
+            must never be a surprise on the printed card. */}
+        {batch.partialFamilies && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+            <b>Printing selected students only.</b> Siblings who are not part of
+            this selection are left off the card. Use the family row&apos;s Print
+            button to print a complete family.
+          </div>
+        )}
 
         {(batch.skippedNoFamilyId.length > 0 || batch.skippedLeft.length > 0) && (
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
@@ -221,14 +263,14 @@ export function PrintCardsDialog({ open, onClose, students, source }: Props) {
             Cancel
           </button>
           <button
-            onClick={() => pdfState.buildPreview(familyIds)}
+            onClick={() => pdfState.buildPreview(familyIds, restrictTo)}
             disabled={!canPrint}
             className="rounded-xl bg-slate-700 px-4 py-2 text-sm font-bold text-white hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
           >
             {pdfState.busy ? 'Preparing…' : 'Preview'}
           </button>
           <button
-            onClick={() => pdfState.download(familyIds)}
+            onClick={() => pdfState.download(familyIds, restrictTo)}
             disabled={!canPrint}
             className="rounded-xl bg-emerald-800 px-4 py-2 text-sm font-bold text-white hover:bg-emerald-900 disabled:cursor-not-allowed disabled:opacity-50"
           >
