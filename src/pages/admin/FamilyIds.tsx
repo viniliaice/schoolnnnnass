@@ -14,7 +14,7 @@ import { canGenerateFamilyIds } from '../../lib/routing';
 import { getStudents } from '../../lib/db/students';
 import {
   applyTransportImport, assignFamilyOverride, findLeftStudents, findUnattached,
-  generateFamilyIds, groupStudentsByFamily, markStudentLeft, setStudentTransport,
+  generateFamilyIds, getParentNames, groupStudentsByFamily, markStudentLeft, setStudentTransport,
   type GenerateSummary,
 } from '../../lib/db/familyIds';
 import {
@@ -26,6 +26,7 @@ import { TRANSPORT_EXAMPLE_CSV, downloadExampleWorkbook } from '../../lib/import
 import { displayFamilyId, transportLabel } from '../../lib/transport';
 import { FamilyCardsDocument, type CardLayout, type FamilyCardData } from '../../lib/print/familyCards';
 import { getFamilyCards } from '../../lib/db/familyCards';
+import { FamiliesTable } from './family-ids/FamiliesTable';
 import { cn } from '../../utils/cn';
 import type { Student } from '../../types';
 
@@ -71,11 +72,20 @@ const SAMPLE_FAMILIES: FamilyCardData[] = [
   },
 ];
 
-export function FamilyIds() {
+export type FamilyIdsMode = 'browse' | 'setup';
+
+/**
+ * `/admin/family-ids`       → mode='browse' (admin/supervisor/office)
+ *     search, filter, select and print. No generation surface at all.
+ * `/admin/family-ids/setup` → mode='setup' (admin only)
+ *     import the transport sheet, generate IDs, resolve exceptions.
+ */
+export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode; navigate?: (path: string) => void } = {}) {
   const { addToast } = useToast();
   const { session } = useRole();
   const canWrite = !!session && canGenerateFamilyIds(session.role);
   const [students, setStudents] = useState<Student[]>([]);
+  const [parentNames, setParentNames] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
   const [importText, setImportText] = useState('');
   const [importedRows, setImportedRows] = useState<TransportImportRow[]>([]);
@@ -97,6 +107,15 @@ export function FamilyIds() {
     try {
       const loaded = await getStudents();
       setStudents(loaded);
+      // Parent names decorate the browse table only. profiles is admin-readable,
+      // so this is best-effort: office/supervisor simply see a blank column,
+      // while the PRINTED card always gets the name from get_family_cards().
+      try {
+        const ids = loaded.map(s2 => s2.parentId).filter((id): id is string => !!id);
+        setParentNames(await getParentNames(ids));
+      } catch {
+        setParentNames(new Map());
+      }
     } catch (err) {
       addToast({ type: 'error', title: 'Failed to load students', description: err instanceof Error ? err.message : undefined });
     } finally {
@@ -301,15 +320,40 @@ export function FamilyIds() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-6">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Family IDs</h1>
-          <p className="text-sm text-slate-500">Dismissal gate: import the transport sheet, generate MBK-#### per family, print cards.</p>
+          <h1 className="text-2xl font-bold text-slate-900">
+            {mode === 'setup' ? 'Family IDs — Setup' : 'Family IDs'}
+          </h1>
+          <p className="text-sm text-slate-500">
+            {mode === 'setup'
+              ? 'Admin only: import the transport sheet and generate MBK-#### per family.'
+              : 'Dismissal gate: find a family and print its card.'}
+          </p>
         </div>
-        <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Aqoonsiga qoyska</span>
+        <div className="flex items-center gap-2">
+          {mode === 'browse' && canWrite && navigate && (
+            <button
+              onClick={() => navigate('/admin/family-ids/setup')}
+              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+            >
+              Setup &amp; Generate →
+            </button>
+          )}
+          {mode === 'setup' && navigate && (
+            <button
+              onClick={() => navigate('/admin/family-ids')}
+              className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
+            >
+              ← Back to families
+            </button>
+          )}
+          <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Aqoonsiga qoyska</span>
+        </div>
       </div>
 
-      {/* How-to — clear directions for first-time admins (collapsible, open by default) */}
+      {/* How-to — setup only */}
+      {mode === 'setup' && (
       <section className="mb-6 rounded-2xl border border-indigo-200 bg-indigo-50/70 p-5">
         <button
           onClick={() => setHelpOpen(o => !o)}
@@ -384,6 +428,8 @@ export function FamilyIds() {
         )}
       </section>
 
+      )}
+
       {/* Stats row (IA: stats first) */}
       <div className="mb-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
         <StatCard label="Families" value={families.length} />
@@ -393,7 +439,8 @@ export function FamilyIds() {
       </div>
       <FamilyProgressBar current={familyProgress.current} target={familyProgress.target} percent={familyProgress.percent} />
 
-      {/* Generate */}
+      {/* Generate — setup only */}
+      {mode === 'setup' && (
       <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-base font-semibold text-slate-900">1 · Generate family IDs</h2>
         <p className="mb-3 text-sm text-slate-500">
@@ -457,7 +504,10 @@ export function FamilyIds() {
         )}
       </section>
 
-      {/* Import */}
+      )}
+
+      {/* Import — setup only */}
+      {mode === 'setup' && (
       <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-base font-semibold text-slate-900">2 · Import the transport sheet</h2>
         <p className="mb-3 text-sm text-slate-500">
@@ -588,63 +638,17 @@ export function FamilyIds() {
         )}
       </section>
 
-      {/* Families */}
-      <section className="mb-6 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <h2 className="mb-3 text-base font-semibold text-slate-900">3 · Families</h2>
-        {loading ? (
-          <p className="text-sm text-slate-400">Loading…</p>
-        ) : families.length === 0 ? (
-          <p className="text-sm text-slate-500">No families yet — run Generate. Empty state: your first family ID will appear here.</p>
-        ) : (
-          <div className="max-h-96 overflow-auto rounded-xl border border-slate-200">
-            <table className="w-full text-left text-xs">
-              <thead className="sticky top-0 bg-slate-50 text-slate-500">
-                <tr>
-                  <th className="px-3 py-2">Family ID</th>
-                  <th className="px-3 py-2">Students</th>
-                  <th className="px-3 py-2">Transport</th>
-                  <th className="px-3 py-2">Phone</th>
-                </tr>
-              </thead>
-              <tbody>
-                {families.map(([familyId, kids]) => (
-                  <tr key={familyId} className="border-t border-slate-100 align-top">
-                    <td className="px-3 py-2 font-bold text-emerald-900">{displayFamilyId(familyId)}</td>
-                    <td className="px-3 py-2">
-                      {kids.map(k => (
-                        <div key={k.id} className="flex items-center gap-2">
-                          <span className="font-medium">{k.name}</span>
-                          <span className="text-slate-400">{k.className}</span>
-                        </div>
-                      ))}
-                    </td>
-                    <td className="px-3 py-2">
-                      {kids.map(k => canWrite ? (
-                        <select
-                          key={k.id}
-                          value={k.transport ?? ''}
-                          onChange={e => handleTransport(k.id, e.target.value)}
-                          className="mb-1 block rounded-lg border border-slate-300 px-2 py-1 text-xs"
-                        >
-                          <option value="">—</option>
-                          {TRANSPORT_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
-                        </select>
-                      ) : (
-                        <span key={k.id} className="mb-1 block text-xs font-medium text-slate-600">
-                          {transportLabel(k.transport)}
-                        </span>
-                      ))}
-                    </td>
-                    <td className="px-3 py-2 text-slate-500">{kids.find(k => k.parentPhone)?.parentPhone ?? '—'}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+      )}
 
-      {/* Unattached bucket */}
+      {/* Families — the browse/print surface */}
+      {mode === 'browse' && (
+        <div className="mb-6">
+          <FamiliesTable students={students} parentNames={parentNames} loading={loading} />
+        </div>
+      )}
+
+      {/* Unattached bucket — setup only */}
+      {mode === 'setup' && (
       <section className="mb-6 rounded-2xl border border-amber-200 bg-amber-50 p-5">
         <h2 className="mb-1 text-base font-semibold text-amber-900">Unattached — no parent link, no phone</h2>
         <p className="mb-3 text-sm text-amber-700">These students can't be grouped automatically. Assign a family ID manually (existing or new), or mark as left if they've left the school.</p>
@@ -677,7 +681,10 @@ export function FamilyIds() {
         )}
       </section>
 
-      {/* Marked as left */}
+      )}
+
+      {/* Marked as left — setup only */}
+      {mode === 'setup' && (
       <section className="mb-6 overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm transition-colors">
         <button
           type="button"
@@ -723,7 +730,10 @@ export function FamilyIds() {
         )}
       </section>
 
-      {/* Print */}
+      )}
+
+      {/* Card design preview — setup only */}
+      {mode === 'setup' && (
       <section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <h2 className="mb-1 text-base font-semibold text-slate-900">4 · Print cards</h2>
         <p className="mb-3 text-sm text-slate-500">Office prints: pocket &amp; lanyard (60×90 — fits the 65×95 pouch film), windshield placard for car line (A5 landscape). Pick a group to print only those, or "All". Each card prints FRONT + BACK for duplex lamination; back rows are mirrored for long-edge flip.</p>
@@ -765,6 +775,7 @@ export function FamilyIds() {
         )}
         <AsyncPrintLink families={filteredFamilies} layout={layout} withLookup={withLookup} />
       </section>
+      )}
     </div>
   );
 }

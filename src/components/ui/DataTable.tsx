@@ -11,6 +11,8 @@ import {
   ColumnDef,
   SortingState,
   ColumnFiltersState,
+  RowSelectionState,
+  OnChangeFn,
 } from '@tanstack/react-table';
 // lucide icons intentionally omitted where unused
 import { cn } from '../../utils/cn';
@@ -22,6 +24,19 @@ interface DataTableProps<TData> {
   onSearchChange?: (value: string) => void;
   searchValue?: string;
   className?: string;
+  /**
+   * Opt-in row selection. Off by default so existing callers are unaffected.
+   * When on, pass `rowSelection` + `onRowSelectionChange` to control it, and
+   * `getRowId` so selection is keyed by a stable domain id (e.g. familyId)
+   * rather than the row index — otherwise selection follows position and
+   * silently changes meaning when the data is filtered or sorted.
+   */
+  enableRowSelection?: boolean;
+  rowSelection?: RowSelectionState;
+  onRowSelectionChange?: OnChangeFn<RowSelectionState>;
+  getRowId?: (row: TData, index: number) => string;
+  /** Default page size (existing callers keep the 10-row default). */
+  initialPageSize?: number;
 }
 
 export function DataTable<TData>({
@@ -31,9 +46,17 @@ export function DataTable<TData>({
   onSearchChange,
   searchValue = "",
   className,
+  enableRowSelection = false,
+  rowSelection,
+  onRowSelectionChange,
+  getRowId,
+  initialPageSize,
 }: DataTableProps<TData>) {
   const [sorting, setSorting] = React.useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
+  const [internalSelection, setInternalSelection] = React.useState<RowSelectionState>({});
+
+  const selection = rowSelection ?? internalSelection;
 
   const table = useReactTable({
     data,
@@ -44,9 +67,16 @@ export function DataTable<TData>({
     getSortedRowModel: getSortedRowModel(),
     onColumnFiltersChange: setColumnFilters,
     getFilteredRowModel: getFilteredRowModel(),
+    enableRowSelection,
+    onRowSelectionChange: onRowSelectionChange ?? setInternalSelection,
+    ...(getRowId ? { getRowId } : {}),
+    ...(initialPageSize
+      ? { initialState: { pagination: { pageIndex: 0, pageSize: initialPageSize } } }
+      : {}),
     state: {
       sorting,
       columnFilters,
+      rowSelection: selection,
     },
   });
 

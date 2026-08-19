@@ -28,7 +28,25 @@ describe('canAccessRoute — office role', () => {
   });
 
   it('every guarded route is listed in ROUTE_ACCESS', () => {
-    expect(Object.keys(ROUTE_ACCESS).sort()).toEqual(['/admin/family-ids', '/directory', '/gate']);
+    expect(Object.keys(ROUTE_ACCESS).sort()).toEqual([
+      '/admin/family-ids', '/admin/family-ids/setup', '/directory', '/gate',
+    ]);
+  });
+});
+
+describe('family-ID setup route is admin-only', () => {
+  it('only admins may open /admin/family-ids/setup', () => {
+    expect(canAccessRoute('admin', '/admin/family-ids/setup')).toBe(true);
+    for (const role of ['supervisor', 'office', 'teacher', 'parent'] as const) {
+      expect(canAccessRoute(role, '/admin/family-ids/setup'), role).toBe(false);
+    }
+  });
+
+  it('but supervisor and office can still browse + print', () => {
+    expect(canAccessRoute('supervisor', '/admin/family-ids')).toBe(true);
+    expect(canAccessRoute('office', '/admin/family-ids')).toBe(true);
+    expect(canAccessRoute('teacher', '/admin/family-ids')).toBe(false);
+    expect(canAccessRoute('parent', '/admin/family-ids')).toBe(false);
   });
 });
 

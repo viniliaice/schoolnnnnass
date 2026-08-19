@@ -309,3 +309,52 @@ Full gated sequence executed on a clean database seeded with the **pre-migration
 | Two households legitimately sharing a phone | By design; surfaced by preflight 3c, resolved via admin override |
 | Root `supabase-schema.sql` is a stale snapshot | Pre-existing; documented in `INVESTIGATION-family-ids.md` |
 | Print UX (search/select/print-by-students) | **Phase 2** — spec'd, not in this commit |
+
+---
+
+# Phase 2 — Printing workflow (added 2026-08-19)
+
+Phase 1 (correctness) is unchanged. Phase 2 adds the UI it was built for.
+
+## Gates are now fail-closed, not read-and-judge
+
+The preflight ended with a table a human had to interpret. It now ends with a
+machine-checked verdict that **exits non-zero** when a gate is not satisfied:
+
+```bash
+# before applying (default)
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/preflight-family-id-stability.sql
+# after applying — requires the post-migration end state
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -v phase=post \
+     -f supabase/tests/preflight-family-id-stability.sql
+```
+
+| Condition | Behaviour |
+|---|---|
+| Gate 1: no zero-arg-callable `generate_family_ids` | **FAILS** in both phases — the app's "All" call cannot bind; investigate |
+| Gate 1: more than one overload (phase=post) | **FAILS** |
+| Gate 1: live body lacks the reuse logic (phase=post) | **FAILS** — migration did not take effect |
+| Gate 2: any hardening red flag (phase=post) | **FAILS** |
+| Gate 2: `get_family_cards` missing (phase=post) | **FAILS** |
+| Gate 3: split families / orphaned LEFT students | **WARNS loudly** — never auto-fails, never auto-merges |
+
+Verified by deliberately breaking each one on PostgreSQL 16: required-arg
+signature → `GATE 1 FAIL` (rc=3); re-granting `PUBLIC EXECUTE` → `GATE 2 FAIL`
+(rc=3); restoring both → `PREFLIGHT PASSED` (rc=0).
+
+## What Phase 2 ships
+
+| Area | Change |
+|---|---|
+| Route split | `/admin/family-ids` = browse + print (admin/supervisor/office). `/admin/family-ids/setup` = import + generate (**admin only**) |
+| Route enforcement | `canAccessRoute()` is now **called** in `App.tsx` — it was exported and tested but never used. Denied routes redirect to the role default before any page renders |
+| Families table | Search (family ID / student / parent / phone), transport + class filters, row selection keyed by `familyId`, select-all-filtered, clear, hidden-selection count |
+| Print entry points | Per-row **Print**, **Print selected (N)**, **Print all (N)**, **Print by students…** — all four open the same dialog |
+| Print dialog | Student picker, exact card count, duplicate disclosure, skip reporting, layout choice, preview, download |
+| DataTable | Opt-in `enableRowSelection` / `rowSelection` / `getRowId` / `initialPageSize`; fixes the permanently-`0` "N selected" footer. Existing callers untouched |
+
+Reprint is the same per-row **Print** button: output is byte-identical and no
+write occurs, so a separate action would be a distinction without a difference.
+
+**Still deliberately absent:** print history (`family_card_prints`), card-status
+filters, batch chunking, row clamping. None are needed for the workflow.

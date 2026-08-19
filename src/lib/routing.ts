@@ -14,9 +14,12 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   // Dismissal gate — office is a first-class gate role (read/lookup only).
   '/gate': ['admin', 'supervisor', 'office'],
 
-  // Family-ID admin page — office may VIEW + print + lookup; Generate,
-  // transport-edit, and override are admin-only (enforced in SQL + UI guard).
+  // Family-ID browse/print page — office may VIEW + print + lookup.
   '/admin/family-ids': ['admin', 'supervisor', 'office'],
+
+  // Setup: import the transport sheet + generate IDs. Admin only, enforced
+  // here, in the App route switch, AND in SQL (the RPCs re-check the role).
+  '/admin/family-ids/setup': ['admin'],
 
   // Read-only student directory (name, grade, transport, family ID).
   '/directory': ['admin', 'supervisor', 'office'],

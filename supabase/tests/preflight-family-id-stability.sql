@@ -229,6 +229,136 @@ ORDER BY s.name;
 
 \echo ''
 \echo '════════════════════════════════════════════════════════════════════'
+\echo ' AUTOMATED VERDICT'
+\echo '════════════════════════════════════════════════════════════════════'
+\echo ''
+\echo '-- Machine-checked gate status. A human reading a long report can miss a'
+\echo '-- red flag; this block cannot. Run with -v ON_ERROR_STOP=1 and the'
+\echo '-- script EXITS NON-ZERO when a gate is not satisfied.'
+\echo '--'
+\echo '-- Pass -v phase=pre  (default) to check the PRE-migration expectations'
+\echo '-- Pass -v phase=post to require the POST-migration end state'
+\echo ''
+
+\if :{?phase}
+\else
+  \set phase pre
+\endif
+
+\echo 'Checking gates for phase:' :phase
+SET preflight.phase = :'phase';
+
+DO $$
+DECLARE
+  v_phase TEXT := current_setting('preflight.phase', true);
+  v_overloads INT;
+  v_zero_arg INT;
+  v_redflags INT;
+  v_has_cards INT;
+  v_reuse BOOLEAN;
+  v_splits INT;
+  v_orphans INT;
+  v_fail TEXT := '';
+BEGIN
+  SELECT count(*) INTO v_overloads
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname='public' AND p.proname='generate_family_ids';
+
+  SELECT count(*) INTO v_zero_arg
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname='public' AND p.proname='generate_family_ids'
+    AND p.pronargs - p.pronargdefaults <= 0;
+
+  SELECT count(*) INTO v_redflags
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname='public'
+    AND p.proname IN ('generate_family_ids','mark_student_left','lookup_family',
+                      'get_family_cards','assign_family_override','set_student_transport',
+                      'set_student_import_fields','record_release')
+    AND (
+      NOT p.prosecdef
+      OR p.proconfig IS NULL OR NOT (array_to_string(p.proconfig, ',') LIKE '%search_path%')
+      OR has_function_privilege('public', p.oid, 'EXECUTE')
+      OR pg_get_functiondef(p.oid) NOT ILIKE '%current_profile_role()%'
+    );
+
+  SELECT count(*) INTO v_has_cards
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname='public' AND p.proname='get_family_cards';
+
+  WITH keyed AS (
+    SELECT s."familyId",
+      CASE WHEN s."parentId" IS NOT NULL THEN 'p:' || s."parentId"
+           WHEN public.normalize_phone(s."parentPhone") <> '' THEN 't:' || public.normalize_phone(s."parentPhone")
+      END AS k
+    FROM public.students s
+    WHERE s."familyId" IS NOT NULL AND COALESCE(s."transport",'') <> 'LEFT'
+  )
+  SELECT count(*) INTO v_splits
+  FROM (SELECT k FROM keyed WHERE k IS NOT NULL GROUP BY k HAVING count(DISTINCT "familyId") > 1) t;
+
+  SELECT count(*) INTO v_orphans
+  FROM public.students
+  WHERE COALESCE("transport",'') = 'LEFT' AND "familyId" IS NULL;
+
+  RAISE NOTICE '';
+  RAISE NOTICE 'GATE 1  generate_family_ids overloads = %, zero-arg-callable = %', v_overloads, v_zero_arg;
+  RAISE NOTICE 'GATE 2  hardening red flags = %, get_family_cards present = %', v_redflags, v_has_cards;
+  RAISE NOTICE 'GATE 3  split families = %, LEFT students missing an id = %', v_splits, v_orphans;
+  RAISE NOTICE '';
+
+  -- GATE 1: zero candidates means the app's "All" call already cannot bind.
+  IF v_zero_arg = 0 THEN
+    v_fail := v_fail || E'\n  GATE 1 FAIL: no zero-arg-callable generate_family_ids. The app sends '
+                     || 'rpc(generate_family_ids, {}) — it cannot resolve. INVESTIGATE before deploying.';
+  END IF;
+
+  IF v_phase = 'post' THEN
+    IF v_overloads <> 1 THEN
+      v_fail := v_fail || E'\n  GATE 1 FAIL: expected exactly 1 overload after the migration, found '
+                       || v_overloads || '. Extend the DROP.';
+    END IF;
+    IF v_zero_arg <> 1 THEN
+      v_fail := v_fail || E'\n  GATE 1 FAIL: no-argument call is ambiguous (' || v_zero_arg || ' candidates).';
+    END IF;
+    SELECT pg_get_functiondef(p.oid) LIKE '%v_existing%' INTO v_reuse
+    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+    WHERE n.nspname='public' AND p.proname='generate_family_ids' LIMIT 1;
+    IF NOT COALESCE(v_reuse, false) THEN
+      v_fail := v_fail || E'\n  GATE 1 FAIL: live generate_family_ids does not reuse existing family IDs '
+                       || '(the migration did not take effect).';
+    END IF;
+    IF v_has_cards <> 1 THEN
+      v_fail := v_fail || E'\n  GATE 2 FAIL: get_family_cards is missing — cards would be built from '
+                       || 'RLS-scoped reads and could omit siblings.';
+    END IF;
+    IF v_redflags > 0 THEN
+      v_fail := v_fail || E'\n  GATE 2 FAIL: ' || v_redflags || ' SECURITY DEFINER hardening gap(s). '
+                       || 'See the red-flags table above.';
+    END IF;
+  ELSE
+    IF v_redflags > 0 THEN
+      RAISE NOTICE 'GATE 2 note: % pre-existing hardening gap(s) — the migration is expected to clear these; re-check with -v phase=post.', v_redflags;
+    END IF;
+  END IF;
+
+  -- GATE 3 never auto-fails: split families need a human decision, not a
+  -- blocked script. It is loud, and the runbook requires a recorded decision.
+  IF v_splits > 0 OR v_orphans > 0 THEN
+    RAISE WARNING 'GATE 3 ACTION REQUIRED: % split famil(ies) and % LEFT student(s) without an id need a recorded decision (see 3b/3d above). Do NOT bulk-merge.', v_splits, v_orphans;
+  ELSE
+    RAISE NOTICE 'GATE 3 clear: no split families, no orphaned LEFT students.';
+  END IF;
+
+  IF v_fail <> '' THEN
+    RAISE EXCEPTION 'PREFLIGHT FAILED (phase=%):%', v_phase, v_fail;
+  END IF;
+
+  RAISE NOTICE 'PREFLIGHT PASSED for phase=%.', v_phase;
+END $$;
+
+\echo ''
+\echo '════════════════════════════════════════════════════════════════════'
 \echo ' Preflight complete. Attach this output to the deployment ticket.'
 \echo ' Deploy only when: GATE 1 unambiguous · GATE 2 no red flags ·'
 \echo ' GATE 3 list reviewed and a merge decision recorded per family.'
