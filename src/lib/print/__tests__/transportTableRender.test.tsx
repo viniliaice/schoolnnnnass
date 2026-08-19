@@ -16,7 +16,8 @@ describe('families table with transport editing', () => {
   const admin = renderToStaticMarkup(
     <FamiliesTable students={ROSTER} parentNames={new Map([['p1','Xasan Maxamed Cabdi']])}
       loading={false} canEditTransport onEditTransport={async () => {}} />);
-  const office = renderToStaticMarkup(
+  // A role that may browse/print but NOT edit (supervisor, teacher, parent).
+  const readOnly = renderToStaticMarkup(
     <FamiliesTable students={ROSTER} parentNames={new Map()} loading={false} />);
 
   it('shows each student\'s own transport', () => {
@@ -24,14 +25,14 @@ describe('families table with transport editing', () => {
     expect(admin).toContain('WALKER');   // the null-transport child
     expect(admin).toContain('CAR');
   });
-  it('offers a per-student edit control to admins', () => {
+  it('offers a per-student edit control to editors (admin + office)', () => {
     expect(admin).toContain('Edit transport for Ahmed Sheikh');
     expect(admin).toContain('Edit transport for Amina Sheikh');
     expect(admin).toContain('Edit transport for Yasmin Sheikh');
   });
-  it('hides every edit control from non-admins', () => {
-    expect(office).not.toContain('Edit transport for');
-    expect(office).toContain('Bus 9');   // still readable + printable
-    expect(office).toContain('MBK-0042');
+  it('hides every edit control from roles that may only browse/print', () => {
+    expect(readOnly).not.toContain('Edit transport for');
+    expect(readOnly).toContain('Bus 9');   // still readable + printable
+    expect(readOnly).toContain('MBK-0042');
   });
 });

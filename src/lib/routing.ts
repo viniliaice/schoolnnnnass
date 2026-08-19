@@ -49,13 +49,20 @@ export function canGenerateFamilyIds(role: Role): boolean {
 /**
  * Who may change a student's transport.
  *
- * Admin only — this mirrors set_student_transport(), which raises
- * insufficient_privilege for every other role. Office and supervisor can
- * browse, search and PRINT families, and that read/print access must not
- * silently become student-write access; the UI therefore hides the control
- * for them rather than letting them discover it and hit a server error.
+ * admin + office. Transport corrections are front-desk work: the office is
+ * who takes the parent's phone call, so requiring an admin either delays the
+ * fix or pushes the school to share an admin login — worse for security than
+ * granting this one narrow write.
+ *
+ * This mirrors set_student_transport() (20260820_office_transport_edit.sql),
+ * which raises insufficient_privilege for every other role. It is the ONLY
+ * write office gains: generation, family override, mark-left and the sheet
+ * import all remain admin-only, so print/search access still does not become
+ * general student-write access.
+ *
+ * supervisor is deliberately excluded — a gate/oversight role, not data entry.
  * The client check is convenience only: SQL remains the enforcement point.
  */
 export function canEditTransport(role: Role): boolean {
-  return role === 'admin';
+  return role === 'admin' || role === 'office';
 }

@@ -125,19 +125,27 @@ describe('mixed-transport families', () => {
 });
 
 describe('permissions', () => {
-  it('allows only admin to edit transport', () => {
+  it('allows admin and office to edit transport', () => {
+    // Transport corrections are front-desk work, so office is included.
     expect(canEditTransport('admin')).toBe(true);
-    for (const role of ['supervisor', 'office', 'teacher', 'parent'] as Role[]) {
+    expect(canEditTransport('office')).toBe(true);
+  });
+
+  it('blocks every other role, supervisor included', () => {
+    // supervisor is a gate/oversight role here, not data entry.
+    for (const role of ['supervisor', 'teacher', 'parent'] as Role[]) {
       expect(canEditTransport(role)).toBe(false);
     }
   });
 
-  it('does not grant write access to print/search-only roles', () => {
-    // office + supervisor can browse and print families, and that must not
-    // become student-write access.
-    expect(canEditTransport('office')).toBe(false);
-    expect(canEditTransport('supervisor')).toBe(false);
-    expect(canEditTransport('office')).toBe(canGenerateFamilyIds('office'));
+  it('gives office transport editing WITHOUT family-ID powers', () => {
+    // The narrow-widening invariant: office may fix a transport value, but
+    // must not be able to create, merge or split families. SQL enforces this
+    // (20260820_office_transport_edit.sql); this pins the client's view.
+    expect(canEditTransport('office')).toBe(true);
+    expect(canGenerateFamilyIds('office')).toBe(false);
+    expect(canGenerateFamilyIds('supervisor')).toBe(false);
+    expect(canGenerateFamilyIds('admin')).toBe(true);
   });
 });
 

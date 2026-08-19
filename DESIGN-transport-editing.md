@@ -138,23 +138,53 @@ Save is disabled when nothing changed, and when Bus has no route number.
 
 ## 6. Permissions
 
-**Admin only.** `canEditTransport(role)` in `src/lib/routing.ts`.
+**admin + office.** `canEditTransport(role)` in `src/lib/routing.ts`, mirroring
+`set_student_transport()` as redefined in
+`supabase/migrations/20260820_office_transport_edit.sql`.
 
-This deliberately mirrors `set_student_transport`, which raises
-`insufficient_privilege` for every non-admin. The client check is convenience
-only — **SQL remains the enforcement point.**
+Office was added because transport corrections are front-desk work: the office
+answers the parent's phone call. Requiring an admin for a routine correction
+either delays the fix or pushes the school to share an admin login — worse for
+security than granting this one narrow write.
 
-| Role | Browse / search / print families | Edit transport |
-|---|---|---|
-| admin | ✅ | ✅ |
-| supervisor | ✅ | ❌ |
-| office | ✅ | ❌ |
-| teacher | ❌ | ❌ |
-| parent | ❌ | ❌ |
+| Role | Browse / search / print | Edit transport | Generate / merge / split / import |
+|---|---|---|---|
+| admin | ✅ | ✅ | ✅ |
+| office | ✅ | ✅ | ❌ |
+| supervisor | ✅ | ❌ | ❌ |
+| teacher | ❌ | ❌ | ❌ |
+| parent | ❌ | ❌ | ❌ |
 
-The requirement that print/search-only roles must not gain student-write
-access is satisfied and asserted in tests: office and supervisor render the
-table with **zero** edit controls, while keeping full read and print.
+`supervisor` is deliberately excluded — a gate/oversight role here, not data
+entry. Add later if the school asks.
+
+### The narrow-widening invariant
+
+Office gained `set_student_transport` and **nothing else**. Still admin-only:
+`generate_family_ids`, `assign_family_override`, `mark_student_left`,
+`set_student_import_fields`. So a front-desk account can fix a transport value
+but cannot create, merge or split a family.
+
+Three extra guards came with the widening:
+
+1. **`LEFT` is not settable** through this function (it fails validation), and
+   office additionally **cannot change the transport of a student already
+   marked `LEFT`** — re-enrolment is an admin decision, not a side effect of a
+   transport edit.
+2. **No direct `UPDATE` grant** on `public.students`. The write goes through
+   the `SECURITY DEFINER` function, so validation and the audit row cannot be
+   bypassed.
+3. **Actor attribution.** The audit row now records `actorId`, `actorRole` and
+   the `previous` value, so a wrong change is traceable and reversible. Before,
+   it recorded only the student and the new value — acceptable with one
+   writer, not with two.
+
+Verified on a live Postgres: admin+office allowed; supervisor, teacher, parent
+and anonymous all blocked with `insufficient_privilege`; `'LEFT'`, `'Bike'`,
+`''` and `'0042; DROP TABLE students'` all rejected; every `familyId` unchanged
+across all writes. Pinned by `supabase/tests/rls-office-transport.sql`, which
+was falsified twice (a simulated privilege leak and removed attribution both
+fail it).
 
 ---
 
