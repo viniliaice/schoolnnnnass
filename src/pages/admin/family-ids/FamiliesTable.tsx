@@ -114,11 +114,22 @@ export function FamiliesTable({
           </button>
           <button
             onClick={() =>
-              openPrint({
-                kind: 'families',
-                familyIds: [...selected],
-                label: `${selected.size} selected famil${selected.size === 1 ? 'y' : 'ies'}`,
-              })
+              openPrint(
+                transportActive
+                  ? {
+                      // Selected FAMILIES, but only their matching students.
+                      kind: 'students',
+                      studentIds: filtered
+                        .filter(r => selected.has(r.familyId))
+                        .flatMap(r => r.students.map(s => s.id)),
+                      label: `${selected.size} selected famil${selected.size === 1 ? 'y' : 'ies'} — ${transportName.toLowerCase()} only`,
+                    }
+                  : {
+                      kind: 'families',
+                      familyIds: [...selected],
+                      label: `${selected.size} selected famil${selected.size === 1 ? 'y' : 'ies'}`,
+                    },
+              )
             }
             disabled={selected.size === 0}
             className="inline-flex items-center gap-1.5 rounded-xl bg-slate-800 px-4 py-2 text-sm font-bold text-white transition hover:bg-slate-900 disabled:cursor-not-allowed disabled:opacity-40"
@@ -287,11 +298,22 @@ export function FamiliesTable({
                   selected={selected.has(row.familyId)}
                   onToggle={() => toggleRow(row.familyId)}
                   onPrint={() =>
-                    openPrint({
-                      kind: 'families',
-                      familyIds: [row.familyId],
-                      label: `${displayFamilyId(row.familyId)} — ${row.studentCount} student(s)`,
-                    })
+                    // With a transport selected, `row` is already narrowed to
+                    // the matching students — print exactly those, not the
+                    // whole family. Unfiltered, this stays a family print.
+                    openPrint(
+                      transportActive
+                        ? {
+                            kind: 'students',
+                            studentIds: row.students.map(s => s.id),
+                            label: `${displayFamilyId(row.familyId)} — ${row.studentCount} ${transportName.toLowerCase()} student(s)`,
+                          }
+                        : {
+                            kind: 'families',
+                            familyIds: [row.familyId],
+                            label: `${displayFamilyId(row.familyId)} — ${row.studentCount} student(s)`,
+                          },
+                    )
                   }
                   canEdit={canEditTransport}
                   onEdit={setEditing}
