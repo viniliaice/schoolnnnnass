@@ -10,8 +10,7 @@ import { Pencil, Printer, Search, Users } from 'lucide-react';
 import { displayFamilyId, formatGradeLabel, transportLabel } from '../../../lib/transport';
 import {
   buildFamilyRows, classOptions, familyRowMatches, familyRowMatchesClass,
-  familyRowMatchesSelection, studentMatchesTransport, studentsMatchingTransport,
-  transportOptions,
+  narrowRowsToSelection, studentsMatchingTransport, transportOptions,
   type FamilyRow, type TransportSelection,
 } from '../../../lib/print/familyRows';
 import { PrintCardsDialog, type DialogSource } from './PrintCardsDialog';
@@ -47,10 +46,13 @@ export function FamiliesTable({
 
   const rows = useMemo(() => buildFamilyRows(students, parentNames), [students, parentNames]);
   const filtered = useMemo(
-    () => rows.filter(row =>
-      familyRowMatches(row, query) &&
-      familyRowMatchesSelection(row, transport) &&
-      familyRowMatchesClass(row, className)),
+    () =>
+      // Narrow FIRST: with a transport selected each row must list only the
+      // matching students, not the whole family. Families with no match drop
+      // out entirely.
+      narrowRowsToSelection(rows, transport).filter(
+        row => familyRowMatches(row, query) && familyRowMatchesClass(row, className),
+      ),
     [rows, query, transport, className],
   );
   const classes = useMemo(() => classOptions(rows), [rows]);
@@ -64,6 +66,11 @@ export function FamiliesTable({
   const matchingStudents = useMemo(
     () => (transportActive ? studentsMatchingTransport(filtered, transport) : []),
     [transportActive, filtered, transport],
+  );
+  /** Siblings hidden by the transport filter, across all visible rows. */
+  const hiddenByFilter = useMemo(
+    () => filtered.reduce((n, r) => n + (r.hiddenByFilter ?? 0), 0),
+    [filtered],
   );
 
   // Selection is keyed by familyId, so it survives filtering and sorting.
@@ -181,8 +188,23 @@ export function FamiliesTable({
 
       <div className="mb-2 flex flex-wrap items-center gap-3 text-xs text-slate-600">
         <span>
-          <b>{filtered.length}</b> of {rows.length} families
+          {transportActive ? (
+            <>
+              <b>{matchingStudents.length}</b> {transportName.toLowerCase()} student
+              {matchingStudents.length === 1 ? '' : 's'} in <b>{filtered.length}</b> famil
+              {filtered.length === 1 ? 'y' : 'ies'}
+            </>
+          ) : (
+            <>
+              <b>{filtered.length}</b> of {rows.length} families
+            </>
+          )}
         </span>
+        {hiddenByFilter > 0 && (
+          <span className="text-amber-700">
+            {hiddenByFilter} sibling{hiddenByFilter === 1 ? '' : 's'} on other transport hidden
+          </span>
+        )}
         {visibleIds.length > 0 && (
           <button onClick={toggleAllVisible} className="font-semibold text-emerald-800 hover:underline">
             {allVisibleSelected ? 'Clear these' : `Select all ${visibleIds.length} filtered`}

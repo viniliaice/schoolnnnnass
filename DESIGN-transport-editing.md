@@ -359,3 +359,41 @@ mode split fails 6 tests.
 
 Two pre-existing `printBatch.test.ts` tests were updated deliberately — they
 asserted the old expand-always behaviour that this correction removes.
+
+## Follow-up fix: the filtered ROW must also narrow
+
+Reported against MBK-0018: with the dropdown on Walkers the row still listed
+all three siblings and all three transports.
+
+```
+MBK-0018  asma sh.Cabdilaahi  634459222
+  Axmed Cabdirashiid Daahir    G11   Bus 17
+  Cabdale Cabdirashiid Daahir  G10   WALKER     <- the only walker
+  Maxamed Cabdirashiid Daahir  G9    Bus 17
+  count: 3
+```
+
+Cause: `familyRowMatchesSelection()` decided row VISIBILITY, but the row still
+carried the whole family, so the table listed every sibling. Printing was
+already correct; the table was not. This was my earlier "keep the family
+visible for context" decision, and it was wrong — it reads as though the bus
+riders are walkers.
+
+Fix: `narrowRowToSelection()` / `narrowRowsToSelection()` rebuild each row from
+the matching students only, recomputing `students`, `studentCount`,
+`transports` and `classNames`, and recording `hiddenByFilter`. Families with no
+match drop out entirely. The family identity (ID, parent, phone) is kept, so
+staff still know which family a student belongs to, and the header reads
+"1 walkers student in 1 family · 2 siblings on other transport hidden".
+
+With Walkers selected the row is now:
+
+```
+MBK-0018  asma sh.Cabdilaahi  634459222
+  Cabdale Cabdirashiid Daahir  G10   WALKER
+  count: 1
+```
+
+Tested in `filteredRowContents.test.tsx` (pure model) and
+`filteredTableLive.test.tsx` (drives the real <select> in jsdom). Falsified:
+removing the narrowing reproduces the reported bug in 5 tests.

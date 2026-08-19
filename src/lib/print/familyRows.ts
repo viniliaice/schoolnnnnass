@@ -22,6 +22,11 @@ export interface FamilyRow {
   transports: string[];
   /** Distinct classes, for the class/grade filter. */
   classNames: string[];
+  /**
+   * Siblings hidden because they do not match the active transport filter.
+   * 0 / undefined when the row is complete.
+   */
+  hiddenByFilter?: number;
 }
 
 /**
@@ -218,4 +223,56 @@ export function transportOptions(rows: FamilyRow[]): Array<[TransportSelection, 
 export function familyRowMatchesSelection(row: FamilyRow, selection: TransportSelection): boolean {
   if (selection === 'all') return true;
   return row.students.some(s => studentMatchesTransport(s, selection));
+}
+
+/**
+ * Rebuild a row so it contains ONLY the students matching the selection.
+ *
+ * Row visibility alone is not enough: a mixed family would still LIST every
+ * sibling under a WALKER filter, which reads as though the bus riders are
+ * walkers. When a transport is chosen the row must show the matching students
+ * and nothing else — the student count, the transport column and the printed
+ * output all follow from this narrowed set.
+ *
+ * Returns null when no student in the family matches (row is dropped).
+ */
+export function narrowRowToSelection(
+  row: FamilyRow,
+  selection: TransportSelection,
+): FamilyRow | null {
+  if (selection === 'all') return row;
+  const students = row.students.filter(s => studentMatchesTransport(s, selection));
+  if (students.length === 0) return null;
+  if (students.length === row.students.length) return row;
+
+  const transports: string[] = [];
+  const classNames: string[] = [];
+  for (const s of students) {
+    const label = transportLabel(s.transport);
+    if (label && !transports.includes(label)) transports.push(label);
+    if (s.className && !classNames.includes(s.className)) classNames.push(s.className);
+  }
+  return {
+    ...row,
+    students,
+    studentCount: students.length,
+    transports,
+    classNames,
+    /** How many active siblings this filter is hiding, for the row hint. */
+    hiddenByFilter: row.students.length - students.length,
+  };
+}
+
+/** Narrow every row, dropping families with no matching student. */
+export function narrowRowsToSelection(
+  rows: FamilyRow[],
+  selection: TransportSelection,
+): FamilyRow[] {
+  if (selection === 'all') return rows;
+  const out: FamilyRow[] = [];
+  for (const row of rows) {
+    const narrowed = narrowRowToSelection(row, selection);
+    if (narrowed) out.push(narrowed);
+  }
+  return out;
 }
