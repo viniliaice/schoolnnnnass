@@ -132,15 +132,79 @@ interface NumericOption {
   kind: string;
 }
 
+// Short intensifier prefixes that keep an option numeric, e.g. "about 100" or
+// "at least 5". Anything longer or free-form stays non-numeric.
+const APPROXIMATE_QUANTITY_PREFIX = /^(?:about|approx\.?|approximately|around|roughly|nearly|almost|exactly|circa|at least|at most|up to|over|under|above|below|more than|less than|fewer than|no more than|no less than)\s+/i;
+const FRACTION_PATTERN = /^([+-]?\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/;
+const MIXED_FRACTION_PATTERN = /^([+-]?\d+)\s+(\d+)\/(\d+)$/;
+const CURRENCY_CODE_PATTERN = /^(usd|eur|gbp|sar|aed|egp|kes|sos|etb|ugx|tzs)$/i;
+const NUMERIC_OPTION_PATTERN = /^([$£€])?\s*([+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d{1,3}(?: \d{3})+|\d+)(?:\.\d+)?|\.\d+))\s*(%|[$£€])?(?:\s*([\p{L}°]{1,16}))?$/u;
+
+/**
+ * Parse an option that is a pure numeric value: 12, 3.5, 0.75, 010, 10.0,
+ * 25%, $15, 10$, 15 USD, 2/5, 1 1/2, -3, 1,200, 10 000, 45°, "10 apples",
+ * "about 100". Free-form sentences that merely contain a number ("World War II
+ * began in 1939") do NOT parse and remain non-numeric.
+ */
 function parseNumericOption(value: string): NumericOption | null {
-  const normalized = strip(value).replace(/[−–—]/g, '-');
-  const match = normalized.match(/^([$£€])?\s*([+-]?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?)(%)?(?:\s*([\p{L}°]+))?$/u);
+  const normalized = strip(value).replace(/[−–—]/g, '-').replace(/^~/, '');
+  const withoutPrefix = normalized.replace(APPROXIMATE_QUANTITY_PREFIX, '');
+
+  let numerator: number | null = null;
+  let denominator: number | null = null;
+  const simple = withoutPrefix.match(FRACTION_PATTERN);
+  const mixed = withoutPrefix.match(MIXED_FRACTION_PATTERN);
+  if (simple) {
+    numerator = Number(simple[1]);
+    denominator = Number(simple[2]);
+  } else if (mixed) {
+    numerator = Number(mixed[1]) * Number(mixed[2]) + Number(mixed[3]);
+    denominator = Number(mixed[2]);
+  }
+  if (numerator !== null && denominator !== null) {
+    if (denominator === 0) return null;
+    const fractionValue = numerator / denominator;
+    return Number.isFinite(fractionValue) ? { value: fractionValue, kind: 'number' } : null;
+  }
+
+  const match = withoutPrefix.match(NUMERIC_OPTION_PATTERN);
   if (!match) return null;
-  const numericValue = Number(match[2].replace(/,/g, ''));
+  const numericValue = Number(match[2].replace(/[ ,]/g, ''));
   if (!Number.isFinite(numericValue)) return null;
-  const unit = (match[4] || '').toLowerCase();
-  const kind = match[1] ? `currency:${match[1]}` : match[3] ? 'percent' : unit ? `unit:${unit}` : 'number';
-  return { value: numericValue, kind };
+
+  const prefixSymbol = match[1] || null;
+  const suffixMark = match[3] || null;
+  const trailingWord = (match[4] || '').trim();
+  const currencyCode = trailingWord ? trailingWord.match(CURRENCY_CODE_PATTERN) : null;
+  const unitWord = trailingWord && !currencyCode ? trailingWord.toLowerCase() : '';
+
+  if (prefixSymbol && suffixMark && prefixSymbol !== suffixMark) return null;
+  if ((prefixSymbol || currencyCode) && suffixMark === '%') return null;
+  if (suffixMark && suffixMark !== '%' && unitWord) return null;
+
+  const bareSymbol = prefixSymbol ?? (suffixMark && suffixMark !== '%' ? suffixMark : null);
+  if (prefixSymbol && currencyCode) return { value: numericValue, kind: `currency:${currencyCode[1].toLowerCase()}` };
+  if (bareSymbol) {
+    return { value: numericValue, kind: `currency:${bareSymbol.toLowerCase()}` };
+  }
+  if (suffixMark === '%' || ['percent', 'percentage', 'pct'].includes(unitWord)) {
+    return { value: numericValue, kind: 'percent' };
+  }
+  if (currencyCode) return { value: numericValue, kind: `currency:${currencyCode[1].toLowerCase()}` };
+  if (unitWord) return { value: numericValue, kind: `unit:${unitWord}` };
+  return { value: numericValue, kind: 'number' };
+}
+
+/**
+ * May two parsed numeric kinds share one question's option set? Decimals and
+ * fractions are one abstract numeric type; concrete measurement units (days,
+ * hours, km, m) are legitimately comparable with each other. Percentages and
+ * each currency are their own types and must not be mixed with bare numbers.
+ */
+function compatibleNumericKinds(left: string, right: string): boolean {
+  if (left === right) return true;
+  if (left.startsWith('unit:') && right.startsWith('unit:')) return true;
+  return false;
 }
 
 interface ArithmeticExpression {
@@ -149,6 +213,9 @@ interface ArithmeticExpression {
 
 function parseArithmeticExpression(question: string): ArithmeticExpression | null {
   const normalized = question.replace(/[−–—]/g, '-');
+  // "3/4 of 12" or "25% of 80" are multiplicative phrasings, not division: a
+  // regex cannot reliably solve them, so skip rather than mis-solve them.
+  if (/(?:\d+\s*\/\s*\d+|\d+\s*%)\s+of\s+\d/i.test(normalized)) return null;
   const match = normalized.match(/(?:^|[^\d.])(-?\d+(?:\.\d+)?)\s*([+*×÷/]|\s[xX]\s|-)\s*(-?\d+(?:\.\d+)?)(?!\d|\.\d)/);
   if (!match) return null;
   const left = Number(match[1]);
@@ -174,23 +241,51 @@ function asksForArithmeticResult(question: string): boolean {
   return /\b(?:what is|calculate|compute|solve|evaluate|find (?:the )?(?:answer|value|result|sum|difference|product|quotient)|how (?:do|would|can|should) (?:you|a student)?\s*solve|explain how to solve)\b|(?:equals|equal to)\s*\?*\s*$/i.test(question);
 }
 
+/**
+ * Semantic numeric-distractor rule (mirrors the Edge boundary validator).
+ *
+ * The question type is decided by the CORRECT ANSWER, not by counting digits:
+ * - If the correct answer is non-numeric (a conceptual/definition question),
+ *   any bare-numeric distractor ("12", "45%") is meaningless → reject.
+ * - If the correct answer is numeric (a genuinely numeric/calculation/date/
+ *   quantity/price question), numeric distractors are expected and allowed;
+ *   the option set must simply stay one comparable numeric type with distinct
+ *   values (fractions and decimals are the same type; different measurement
+ *   units such as "24 hours" and "365 days" may be compared in one set).
+ */
 function validateNumericOptions(question: GeneratedQuestion, label: string): void {
   if (question.type !== 'multiple_choice' || !question.options) return;
-  const parsedOptions = question.options.map(parseNumericOption);
-  const numericCount = parsedOptions.filter(Boolean).length;
+  const options = question.options;
+  const correctIndex = question.correctIndex;
+  // CORRECT_INDEX shape is validated structurally; guard standalone callers.
+  if (!Number.isInteger(correctIndex) || correctIndex! < 0 || correctIndex! >= options.length) return;
 
-  if (numericCount > 0 && numericCount < question.options.length) {
+  const parsedOptions = options.map((option) => parseNumericOption(option));
+  const numericCount = parsedOptions.filter(Boolean).length;
+  if (numericCount === 0) return; // fully non-numeric question: nothing numeric to police
+
+  const correctIsNumeric = parsedOptions[correctIndex!] !== null;
+  if (!correctIsNumeric) {
+    throw new Error(`${label} uses a numeric distractor on a non-numeric question`);
+  }
+
+  // Numeric question: every option must be numeric (no word-numbers or prose
+  // mixed into an otherwise numeric set — those are malformed distractors).
+  if (numericCount !== options.length) {
     throw new Error(`${label} mixes numeric answers with malformed numeric distractors`);
   }
-  if (numericCount !== question.options.length) return;
 
   const numericOptions = parsedOptions as NumericOption[];
-  if (new Set(numericOptions.map((option) => option.kind)).size !== 1) {
-    throw new Error(`${label} numeric distractors must use the same value type`);
-  }
   for (let left = 0; left < numericOptions.length; left += 1) {
     for (let right = left + 1; right < numericOptions.length; right += 1) {
-      if (nearlyEqual(numericOptions[left].value, numericOptions[right].value)) {
+      if (!compatibleNumericKinds(numericOptions[left].kind, numericOptions[right].kind)) {
+        throw new Error(`${label} numeric distractors must use the same value type`);
+      }
+      // Only values with the identical kind/unit are directly comparable.
+      if (
+        numericOptions[left].kind === numericOptions[right].kind
+        && nearlyEqual(numericOptions[left].value, numericOptions[right].value)
+      ) {
         throw new Error(`${label} has duplicate numeric answer values`);
       }
     }
