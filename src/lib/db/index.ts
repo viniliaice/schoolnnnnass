@@ -15,3 +15,4 @@ export * from './bulk';
 export * from './promotions';
 export * from './quizzes';
 export * from './lessonPlans';
+export * from './authorizedPickups';

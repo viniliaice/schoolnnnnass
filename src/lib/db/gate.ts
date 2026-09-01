@@ -49,6 +49,8 @@ export interface ReleaseRecord {
   familyId: string;
   staffId: string;
   createdAt: string;
+  /** The selected authorized pickup person, when gate staff chose one. */
+  pickupPersonId?: string | null;
 }
 
 /**
@@ -56,11 +58,12 @@ export interface ReleaseRecord {
  * the student actually belongs to the family and that the caller is a gate
  * role (admin/supervisor/office) — see supabase/migrations/20260802_release_log.sql.
  */
-export async function recordRelease(studentId: string, familyId: string): Promise<ReleaseRecord> {
-  const { data, error } = await supabase.rpc('record_release', {
-    p_student_id: studentId,
-    p_family_id: familyId,
-  });
+export async function recordRelease(studentId: string, familyId: string, pickupPersonId?: string): Promise<ReleaseRecord> {
+  const rpcName = pickupPersonId ? 'record_release_with_pickup' : 'record_release';
+  const params = pickupPersonId
+    ? { p_student_id: studentId, p_family_id: familyId, p_pickup_person_id: pickupPersonId }
+    : { p_student_id: studentId, p_family_id: familyId };
+  const { data, error } = await supabase.rpc(rpcName, params);
   if (error) throw error;
   return data as ReleaseRecord;
 }

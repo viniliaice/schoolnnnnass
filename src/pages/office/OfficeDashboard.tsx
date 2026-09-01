@@ -8,7 +8,7 @@ const TOOLS: { path: string; title: string; so: string; desc: string; icon: type
     path: '/gate',
     title: 'Dismissal Gate',
     so: 'Iridda Dugsiga',
-    desc: 'Look up families by typed ID or QR scan at pickup. Read-only.',
+    desc: 'Look up family cards, release students, and add authorized pickup drivers at the gate.',
     icon: ShieldCheck,
   },
   {
@@ -32,7 +32,7 @@ export function OfficeDashboard({ navigate }: { navigate: (path: string) => void
     <div className="mx-auto max-w-4xl px-4 py-6">
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-slate-900">Office Dashboard</h1>
-        <p className="text-sm text-slate-500">Gate & dismissal tools — read/lookup only.</p>
+        <p className="text-sm text-slate-500">Gate & dismissal tools — lookup, release, and authorized driver profiles.</p>
       </div>
       <div className="grid gap-4 sm:grid-cols-3">
         {TOOLS.map(tool => (

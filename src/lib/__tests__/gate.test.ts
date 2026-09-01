@@ -61,6 +61,17 @@ describe('recordRelease', () => {
     expect(rpc).toHaveBeenCalledWith('record_release', { p_student_id: 's1', p_family_id: '0421' });
   });
 
+  it('records the selected authorized pickup person when one was chosen at the gate', async () => {
+    rpc.mockResolvedValue({
+      data: { id: 8, studentId: 's1', familyId: '0421', staffId: 'office-umal', pickupPersonId: 'person-1', createdAt: '2026-09-01T14:00:00Z' },
+      error: null,
+    });
+    await recordRelease('s1', '0421', 'person-1');
+    expect(rpc).toHaveBeenCalledWith('record_release_with_pickup', {
+      p_student_id: 's1', p_family_id: '0421', p_pickup_person_id: 'person-1',
+    });
+  });
+
   it('throws when the RPC rejects the release (e.g. student not in family)', async () => {
     rpc.mockResolvedValue({ data: null, error: { message: 'Student does not belong to the given family.' } });
     await expect(recordRelease('s1', '9999')).rejects.toThrow(/does not belong/);

@@ -167,7 +167,7 @@ function AppContent() {
           }
         }
 
-        // Office routes (gate staff — read/lookup only)
+        // Office routes (gate staff — lookup, release, and driver profiles)
         if (session.role === 'office') {
           switch (currentPath) {
             case '/gate': return <GateScreen navigate={navigate} />;

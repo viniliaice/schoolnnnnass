@@ -1,6 +1,6 @@
 // Route access control — single source of truth for which roles may open
-// which routes. App.tsx consults this for every path; the office role is
-// read/lookup only (its write actions are additionally blocked in SQL).
+// which routes. App.tsx consults this for every path; office has the narrow
+// gate driver-profile write path and remains restricted everywhere else.
 
 import type { Role } from '../types';
 
@@ -11,7 +11,7 @@ import type { Role } from '../types';
  * IDs, and the gate audit trail; generate/transport-edit stay admin-only).
  */
 export const ROUTE_ACCESS: Record<string, Role[]> = {
-  // Dismissal gate — office is a first-class gate role (read/lookup only).
+  // Dismissal gate — office is a first-class gate role, including driver profiles.
   '/gate': ['admin', 'supervisor', 'office'],
 
   // Family-ID browse/print page — office may VIEW + print + lookup.
@@ -55,10 +55,10 @@ export function canGenerateFamilyIds(role: Role): boolean {
  * granting this one narrow write.
  *
  * This mirrors set_student_transport() (20260820_office_transport_edit.sql),
- * which raises insufficient_privilege for every other role. It is the ONLY
- * write office gains: generation, family override, mark-left and the sheet
- * import all remain admin-only, so print/search access still does not become
- * general student-write access.
+ * which raises insufficient_privilege for every other role. Family-card
+ * driver profiles have their own narrow gate RPC; generation, family
+ * override, mark-left and the sheet import all remain admin-only, so print /
+ * search access still does not become general student-write access.
  *
  * supervisor is deliberately excluded — a gate/oversight role, not data entry.
  * The client check is convenience only: SQL remains the enforcement point.
