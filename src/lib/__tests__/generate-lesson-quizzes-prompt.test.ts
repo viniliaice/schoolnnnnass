@@ -714,9 +714,14 @@ describe('generate-lesson-quizzes resource optimization', () => {
       error: 'Quiz generation returned invalid structured output',
       code: 'QUIZ_GENERATION_FAILED',
       provider: 'all',
+      // Allowlisted category only (never generated content); the UI uses it to
+      // report the actual cause instead of a hardcoded duplicate-options guess.
+      validationErrorCode: 'FORBIDDEN_CONTEXT',
     }));
-    expect(body).not.toHaveProperty('validationErrorCode');
+    expect(body.validationErrorCode).toMatch(/^[A-Z_]{1,32}$/);
     expect(body).not.toHaveProperty('raw_excerpt');
+    expect(body).not.toHaveProperty('validationPath');
+    expect(body).not.toHaveProperty('validationRule');
 
     const validationLogs = errorSpy.mock.calls.filter(
       (call) => call[0] === '[generate-lesson-quizzes] validation metadata',

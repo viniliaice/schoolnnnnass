@@ -99,7 +99,9 @@ async function edgeFunctionErrorMessage(error: unknown): Promise<string> {
   if (context instanceof Response) {
     try {
       const body = await context.clone().json();
-      const detail = [body?.error, body?.code, body?.provider, body?.model].filter(Boolean).join(' · ');
+      // body.validationErrorCode is an allowlisted category (never content);
+      // it lets the UI explain the actual failure cause via quizValidationFailureHint.
+      const detail = [body?.error, body?.validationErrorCode, body?.code, body?.provider, body?.model].filter(Boolean).join(' · ');
       return detail ? `${base}: ${detail}` : base;
     } catch {
       try {

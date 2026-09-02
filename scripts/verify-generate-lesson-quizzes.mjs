@@ -149,8 +149,42 @@ const conceptualGood = response([
   fillerQuiz(1).questions[0], fillerQuiz(1).questions[1], fillerQuiz(1).questions[3],
 ]);
 
+const teacherDeliveryQuizOne = {
+  title: 'Learning check 1',
+  questions: [
+    { type: 'multiple_choice', question: 'Which gas do plants absorb to make food?', options: ['Carbon dioxide', 'Oxygen', 'Nitrogen', 'Helium'], correctIndex: 0 },
+    { type: 'multiple_choice', question: 'Which strategy should the teacher use to teach this concept?', options: ['A think-pair-share discussion', 'A silent test', 'A field trip', 'A film night'], correctIndex: 0 },
+    { type: 'multiple_choice', question: 'Which part of the plant takes in water?', options: ['Roots', 'Leaves', 'Flowers', 'Seeds'], correctIndex: 0 },
+    { type: 'direct_answer', question: 'Explain why sunlight matters to plants.', rubric: 'Award one point for energy for food-making and one for a clear example.' },
+  ],
+};
+const forbiddenFirst = JSON.stringify({ quizzes: [teacherDeliveryQuizOne, fillerQuiz(5), fillerQuiz(6)] });
+const forbiddenAlways = JSON.stringify({
+  quizzes: [
+    { ...teacherDeliveryQuizOne, title: 'Learning check 1', questions: teacherDeliveryQuizOne.questions.map((q, i) => i === 1 ? q : { ...q, question: q.question }) },
+    fillerQuiz(5),
+    fillerQuiz(6),
+  ].map((quiz, index) => index === 0 ? { ...quiz, questions: [...quiz.questions.slice(0, 1), teacherDeliveryQuizOne.questions[1], ...quiz.questions.slice(2)] } : quiz),
+});
+
 const scenarios = [
   { name: 'retry after NUMERIC_DISTRACTOR', stubs: [conceptualBad, conceptualGood] },
+  {
+    name: 'retry after FORBIDDEN_CONTEXT',
+    stubs: [forbiddenFirst, conceptualGood],
+    expectHttp: 200,
+    expectFirstCode: 'FORBIDDEN_CONTEXT',
+    expectFirstPath: 'quizzes[0].questions[1]',
+    expectRetryContains: 'teacher-facing or instructional-delivery question',
+  },
+  {
+    name: 'persistent FORBIDDEN_CONTEXT fails clearly',
+    stubs: [forbiddenAlways, forbiddenAlways],
+    expectHttp: 502,
+    expectFirstCode: 'FORBIDDEN_CONTEXT',
+    expectBodyCode: 'FORBIDDEN_CONTEXT',
+    mustNotMention: 'duplicate',
+  },
   { name: 'math calculations', stubs: [response([
     { type: 'multiple_choice', question: 'What is 8 × 7?', options: ['54', '56', '58', '64'], correctIndex: 1 },
     { type: 'multiple_choice', question: 'What is 45 + 38?', options: ['73', '83', '87', '93'], correctIndex: 1 },
@@ -234,13 +268,21 @@ for (const scenario of scenarios) {
     .map(([, , meta]) => meta);
   const first = validationLogs[0] || {};
 
-  const ok = result.status === 200
-    && Array.isArray(body.quizzes) && body.quizzes.length === 3
-    && body.quizzes.every((q) => q.questions.length === 4)
-    && validationLogs.at(-1)?.validationResult === 'passed'
+  const expectedHttp = scenario.expectHttp ?? 200;
+  const lastCode = validationLogs.at(-1)?.validationErrorCode ?? null;
+  const ok = result.status === expectedHttp
+    && (expectedHttp === 502 || (Array.isArray(body.quizzes) && body.quizzes.length === 3
+      && body.quizzes.every((q) => q.questions.length === 4)
+      && validationLogs.at(-1)?.validationResult === 'passed'))
+    && (!scenario.expectFirstCode || first.validationErrorCode === scenario.expectFirstCode)
+    && (!scenario.expectFirstPath || first.validationPath === scenario.expectFirstPath)
+    && (!scenario.expectBodyCode || body.validationErrorCode === scenario.expectBodyCode)
+    && (!scenario.expectRetryContains || stubState.requests[1]?.body?.input?.includes(scenario.expectRetryContains) === true)
+    && (!scenario.mustNotMention
+      || JSON.stringify({ logs: validationLogs, body }).toLowerCase().includes(scenario.mustNotMention) === false)
     && first.promptChars < 6000
     && stubState.requests.length === scenario.stubs.length
-    && (scenario.name.startsWith('retry')
+    && (scenario.name === 'retry after NUMERIC_DISTRACTOR'
       ? stubState.requests[1]?.body?.input?.includes('NUMERIC_DISTRACTOR') === true
       : true);
   if (!ok) failures += 1;
@@ -251,6 +293,7 @@ for (const scenario of scenarios) {
     validationResult: validationLogs.at(-1)?.validationResult ?? null,
     firstAttemptCode: first.validationErrorCode ?? null,
     firstAttemptPath: first.validationPath ?? null,
+    finalCode: expectedHttp === 502 ? (body.validationErrorCode ?? lastCode) : null,
     promptChars: first.promptChars ?? null,
     latencyMs: first.latencyMs ?? null,
     executionMs,

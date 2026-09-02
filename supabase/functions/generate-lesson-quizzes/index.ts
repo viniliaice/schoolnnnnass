@@ -176,12 +176,20 @@ class QuizValidationError extends Error {
   readonly validationErrorCode: QuizValidationErrorCode;
   /** Structural location of the failure, e.g. quizzes[1].questions[2].options[3]. */
   readonly validationPath: string;
+  /** Short allowlisted rule id (FORBIDDEN_CONTEXT rules only), e.g. artifact-worksheet. */
+  readonly validationRule: string | null;
 
-  constructor(validationErrorCode: QuizValidationErrorCode, message: string, validationPath: string) {
+  constructor(
+    validationErrorCode: QuizValidationErrorCode,
+    message: string,
+    validationPath: string,
+    validationRule: string | null = null,
+  ) {
     super(message);
     this.name = 'QuizValidationError';
     this.validationErrorCode = validationErrorCode;
     this.validationPath = validationPath;
+    this.validationRule = validationRule;
   }
 }
 
@@ -189,8 +197,9 @@ function failQuizValidation(
   validationErrorCode: QuizValidationErrorCode,
   message: string,
   validationPath: string,
+  validationRule: string | null = null,
 ): never {
-  throw new QuizValidationError(validationErrorCode, message, validationPath);
+  throw new QuizValidationError(validationErrorCode, message, validationPath, validationRule);
 }
 
 /** Return only a fixed allowlisted category; never derive telemetry from model content. */
@@ -205,6 +214,12 @@ export function quizValidationErrorCode(error: unknown): QuizValidationErrorCode
 export function quizValidationPath(error: unknown): string | null {
   const value = (error as { validationPath?: unknown })?.validationPath;
   return typeof value === 'string' && /^[a-zA-Z0-9_.[\]]{0,120}$/.test(value) ? value : null;
+}
+
+/** Short allowlisted rule id for the failure (FORBIDDEN_CONTEXT rules); never content. */
+export function quizValidationRule(error: unknown): string | null {
+  const value = (error as { validationRule?: unknown })?.validationRule;
+  return typeof value === 'string' && /^[a-z0-9-]{1,40}$/.test(value) ? value : null;
 }
 
 /** Classify a quiz validation code into schema vs semantic failure. */
@@ -300,32 +315,58 @@ function validateGeneratedQuizStructure(
 }
 
 interface ForbiddenAssessmentRule {
+  /** Short allowlisted rule id recorded in validation metadata (never content). */
+  id: string;
   pattern: RegExp;
   /** Closely matching objective language; not a category-wide exemption. */
   objectivePattern: RegExp;
+  /**
+   * 'agent' rules flag teacher-as-delivery-agent phrasing and are rescued when
+   * the question has a narrative/content frame ("the teacher in the story") —
+   * the student is then analysing content, not delivery. 'strict' rules cover
+   * lesson artifacts and administrative metadata and are never frame-rescued.
+   */
+  kind: 'agent' | 'strict';
 }
+
+// The teacher is the one making a pedagogical choice: "... should the teacher
+// use", "what did the teacher plan", "the teacher's strategy", etc. A bare
+// mention of a teacher (a story character, a historical role) is NOT delivery.
+const TEACHER_DELIVERY_AGENT_PATTERN = /\b(?:(?:should|could|would|must|can|will|shall)\s+(?:the\s+|a\s+|an\s+)?(?:teacher|instructor|educator)|(?:what|which|how|when|where|why)\s+(?:should|could|would|must|can|will|did|does|do)\s+(?:the\s+|a\s+|an\s+)?(?:teacher|instructor|educator)|(?:teacher|instructor|educator)(?:'s|s)?\s+(?:should|could|would|must|will|use|uses|used|do|does|did|plan|plans|planned|prepare|prepares|prepared|choose|chooses|chose|assign|assigns|assigned|teach|teaches|taught|deliver|delivers|delivered|present|presents|presented|demonstrate|demonstrates|demonstrated|manage|manages|managed|assess|assesses|assessed|grade|grades|graded|start|starts|started|begin|begins|began|continue|continues|continued)|(?:teacher|instructor|educator)(?:'s)?\s+(?:strateg(?:y|ies)|method|methods|technique|techniques|approach|resources?|materials?|lesson\s+plans?|planning|objective|delivery))\b/i;
+
+// A teacher (or any mentioned person) inside supplied content the student is
+// asked to comprehend: story, passage, history, experiment write-up, etc.
+const NARRATIVE_CONTENT_FRAME = /\bin\s+(?:the\s+)?(?:story|passage|text|reading|novel|poem|book|article|play|scene|film|video|history|interview|conversation)\b/i;
+
 const FORBIDDEN_ASSESSMENT_PATTERNS: ForbiddenAssessmentRule[] = [
-  { pattern: /\b(?:teacher|instructor|educator)(?:'s|s)?\b/i, objectivePattern: /\b(?:teacher|instructor|educator)(?:'s|s)?\b/i },
-  { pattern: /\b(?:teaching|instructional|classroom)\s+(?:method|strategy|technique)\b/i, objectivePattern: /\b(?:teaching|instructional|classroom)\s+(?:method|strategy|technique)\b/i },
-  { pattern: /\bworksheet(?:s)?\b/i, objectivePattern: /\bworksheet(?:s)?\b/i },
-  { pattern: /\bworkbook(?:s)?\b/i, objectivePattern: /\bworkbook(?:s)?\b/i },
-  { pattern: /\btextbook(?:s)?\b/i, objectivePattern: /\btextbook(?:s)?\b/i },
-  { pattern: /\bhandout(?:s)?\b/i, objectivePattern: /\bhandout(?:s)?\b/i },
-  { pattern: /\bresource(?:s)?\b/i, objectivePattern: /\bresource(?:s)?\b/i },
-  { pattern: /\bslide(?:s|\s+number)?\b/i, objectivePattern: /\bslide(?:s|\s+number)?\b/i },
-  { pattern: /\bpage(?:\s+\d+)?\b/i, objectivePattern: /\bpage(?:s|\s+\d+)?\b/i },
-  { pattern: /\bchart(?:s)?\b/i, objectivePattern: /\bchart(?:s)?\b/i },
-  { pattern: /\bdiagram(?:s)?\b/i, objectivePattern: /\bdiagram(?:s)?\b/i },
-  { pattern: /\btable(?:s)?\b/i, objectivePattern: /\btable(?:s)?\b/i },
-  { pattern: /\bimage(?:s)?\b/i, objectivePattern: /\bimage(?:s)?\b/i },
-  { pattern: /\bpassage(?:s)?\b/i, objectivePattern: /\bpassage(?:s)?\b/i },
-  { pattern: /\blesson plan(?:ning)?\b/i, objectivePattern: /\blesson plan(?:ning)?\b/i },
-  { pattern: /\blearning objective(?:s)?\b/i, objectivePattern: /\blearning objective(?:s)?\b/i },
-  { pattern: /\b(?:period number|lesson metadata|database id|identifier|correctindex|quiz generation|json|prompt)\b/i, objectivePattern: /\b(?:period number|lesson metadata|database id|identifier|correctindex|quiz generation|json|prompt)\b/i },
-  { pattern: /\b(?:warm[- ]?up|plenary|lesson|class|period)\s+activit(?:y|ies)\b/i, objectivePattern: /\b(?:warm[- ]?up|plenary|lesson|class|period)\s+activit(?:y|ies)\b/i },
-  { pattern: /\bactivit(?:y|ies)\s+(?:in|during|from)\s+(?:the\s+)?(?:lesson|class|period)\b/i, objectivePattern: /\bactivit(?:y|ies)\s+(?:in|during|from)\s+(?:the\s+)?(?:lesson|class|period)\b/i },
-  { pattern: /\b(?:method|strategy|technique)\s+(?:used|chosen|planned)\s+(?:in|for)\s+(?:the\s+)?(?:lesson|class)\b/i, objectivePattern: /\b(?:method|strategy|technique)\s+(?:used|chosen|planned)\s+(?:in|for)\s+(?:the\s+)?(?:lesson|class)\b/i },
-  { pattern: /\b(?:attendance|group size|due date|submission instructions|grading (?:method|policy)|mark allocation|how many minutes)\b/i, objectivePattern: /\b(?:attendance|group size|due date|submission instructions|grading (?:method|policy)|mark allocation|how many minutes)\b/i },
+  { id: 'teacher-delivery-agent', kind: 'agent', pattern: TEACHER_DELIVERY_AGENT_PATTERN, objectivePattern: /\b(?:teacher|instructor|educator)(?:'s|s)?\b/i },
+  { id: 'teaching-method', kind: 'strict', pattern: /\b(?:teaching|instructional|classroom)\s+(?:method|strategy|technique)\b/i, objectivePattern: /\b(?:teaching|instructional|classroom)\s+(?:method|strategy|technique)\b/i },
+  { id: 'artifact-worksheet', kind: 'strict', pattern: /\bworksheet(?:s)?\b/i, objectivePattern: /\bworksheet(?:s)?\b/i },
+  { id: 'artifact-workbook', kind: 'strict', pattern: /\bworkbook(?:s)?\b/i, objectivePattern: /\bworkbook(?:s)?\b/i },
+  { id: 'artifact-textbook', kind: 'strict', pattern: /\btextbook(?:s)?\b/i, objectivePattern: /\btextbook(?:s)?\b/i },
+  { id: 'artifact-handout', kind: 'strict', pattern: /\bhandout(?:s)?\b/i, objectivePattern: /\bhandout(?:s)?\b/i },
+  // "Resource"/"materials" alone are legitimate academic words (natural
+  // resources, properties of materials, library-skills questions); only the
+  // instructional-delivery collocations are forbidden.
+  { id: 'delivery-resource', kind: 'strict', pattern: /\b(?:teaching|learning|classroom|lesson|school)\s+resources?\b|\bresources?\s+(?:for|used?\s+in|during)\s+(?:the\s+)?(?:lesson|class|period|activity|week)\b/i, objectivePattern: /\b(?:teaching|learning|classroom|lesson|school)\s+resources?\b|\bresources?\s+(?:for|used?\s+in|during)\s+(?:the\s+)?(?:lesson|class|period|activity|week)\b/i },
+  { id: 'delivery-materials', kind: 'strict', pattern: /\b(?:teaching|classroom|lesson)\s+materials?\b|\bmaterials?\s+(?:for|used?\s+in)\s+(?:the\s+)?(?:lesson|class|activity)\b/i, objectivePattern: /\b(?:teaching|classroom|lesson)\s+materials?\b|\bmaterials?\s+(?:for|used?\s+in)\s+(?:the\s+)?(?:lesson|class|activity)\b/i },
+  { id: 'artifact-slide', kind: 'strict', pattern: /\bslide(?:s|\s+number)?\b/i, objectivePattern: /\bslide(?:s|\s+number)?\b/i },
+  { id: 'artifact-page', kind: 'strict', pattern: /\bpage(?:\s+\d+)?\b/i, objectivePattern: /\bpage(?:s|\s+\d+)?\b/i },
+  { id: 'artifact-chart', kind: 'strict', pattern: /\bchart(?:s)?\b/i, objectivePattern: /\bchart(?:s)?\b/i },
+  { id: 'artifact-diagram', kind: 'strict', pattern: /\bdiagram(?:s)?\b/i, objectivePattern: /\bdiagram(?:s)?\b/i },
+  { id: 'artifact-table', kind: 'strict', pattern: /\btable(?:s)?\b/i, objectivePattern: /\btable(?:s)?\b/i },
+  { id: 'artifact-image', kind: 'strict', pattern: /\bimage(?:s)?\b/i, objectivePattern: /\bimage(?:s)?\b/i },
+  // "Passage" is a normal reading-comprehension content word ("main idea of
+  // the passage") and is allowed; delivery phrasing is caught by the agent rule.
+  { id: 'lesson-plan', kind: 'strict', pattern: /\blesson plan(?:ning)?\b/i, objectivePattern: /\blesson plan(?:ning)?\b/i },
+  { id: 'learning-objective', kind: 'strict', pattern: /\blearning objective(?:s)?\b/i, objectivePattern: /\blearning objective(?:s)?\b/i },
+  { id: 'assessment-metadata', kind: 'strict', pattern: /\b(?:period number|lesson metadata|database id|identifier|correctindex|quiz generation|json|prompt)\b/i, objectivePattern: /\b(?:period number|lesson metadata|database id|identifier|correctindex|quiz generation|json|prompt)\b/i },
+  { id: 'lesson-activity', kind: 'strict', pattern: /\b(?:warm[- ]?up|plenary|lesson|class|period)\s+activit(?:y|ies)\b/i, objectivePattern: /\b(?:warm[- ]?up|plenary|lesson|class|period)\s+activit(?:y|ies)\b/i },
+  { id: 'activity-in-lesson', kind: 'strict', pattern: /\bactivit(?:y|ies)\s+(?:in|during|from)\s+(?:the\s+)?(?:lesson|class|period)\b/i, objectivePattern: /\bactivit(?:y|ies)\s+(?:in|during|from)\s+(?:the\s+)?(?:lesson|class|period)\b/i },
+  { id: 'method-for-lesson', kind: 'strict', pattern: /\b(?:method|strategy|technique)\s+(?:used|chosen|planned)\s+(?:in|for)\s+(?:the\s+)?(?:lesson|class)\b/i, objectivePattern: /\b(?:method|strategy|technique)\s+(?:used|chosen|planned)\s+(?:in|for)\s+(?:the\s+)?(?:lesson|class)\b/i },
+  // Subtle instructional-planning phrasing without the word "teacher".
+  { id: 'planning-step', kind: 'strict', pattern: /\bwhat\s+comes\s+next\s+in\s+(?:the\s+)?(?:lesson|plan)\b|\bhow\s+should\s+(?:this|the)\s+lesson\s+be\s+(?:delivered|taught|introduced|presented)\b|\bwhich\s+(?:lesson[- ]?plan|planning)\s+step\b/i, objectivePattern: /\bwhat\s+comes\s+next\s+in\s+(?:the\s+)?(?:lesson|plan)\b|\bhow\s+should\s+(?:this|the)\s+lesson\s+be\s+(?:delivered|taught|introduced|presented)\b|\bwhich\s+(?:lesson[- ]?plan|planning)\s+step\b/i },
+  { id: 'admin-metadata', kind: 'strict', pattern: /\b(?:attendance|group size|due date|submission instructions|grading (?:method|policy)|mark allocation|how many minutes)\b/i, objectivePattern: /\b(?:attendance|group size|due date|submission instructions|grading (?:method|policy)|mark allocation|how many minutes)\b/i },
 ];
 const PLACEHOLDER_PATTERN = /(?:\b(?:tbd|todo|lorem ipsum|placeholder|answer here|fill this in)\b|\[(?:insert|replace|add)[^\]]*\]|\b(?:insert|write)\s+(?:question|answer|option|text)\s+here\b|^\s*(?:question|option)\s*[a-d1-9](?:[.?:\-]|\s*$))/i;
 const TRUNCATION_PATTERN = /(?:\[(?:context\s+)?truncated\]|(?:\.{3}|…|\betc\.)\s*$)/i;
@@ -556,9 +597,17 @@ export function validateQuizQuality(input: unknown, context: QuizQualityContext 
         failQuizValidation('PLACEHOLDER_OR_TRUNCATION', `${label} contains placeholder or truncated text`, questionPath);
       }
       for (const rule of FORBIDDEN_ASSESSMENT_PATTERNS) {
-        if (assessmentText.some((value: string) => rule.pattern.test(value)) && !objectiveAllows(rule, context)) {
-          failQuizValidation('FORBIDDEN_CONTEXT', `${label} asks about teacher delivery, resources, or lesson planning`, questionPath);
-        }
+        if (!assessmentText.some((value: string) => rule.pattern.test(value))) continue;
+        if (objectiveAllows(rule, context)) continue;
+        // A teacher inside content the student is analysing ("the teacher in
+        // the story discovered...") is academic content, not lesson delivery.
+        if (rule.kind === 'agent' && NARRATIVE_CONTENT_FRAME.test(question.question)) continue;
+        failQuizValidation(
+          'FORBIDDEN_CONTEXT',
+          `${label} asks about teacher delivery, resources, or lesson planning`,
+          questionPath,
+          rule.id,
+        );
       }
 
       if (question.type === 'multiple_choice' && question.options) {
@@ -826,7 +875,8 @@ The example shows one quiz object only to define its fields. The actual "quizzes
 
 Student-assessment rules:
 - Assess only what STUDENTS know, understand, apply, or reason about from the supplied student topics and learning objectives.
-- NEVER ask about the teacher, lesson administration, planning decisions, activities, teaching methods, resources, worksheets, workbooks, textbook pages, slides, charts/diagrams not supplied here, metadata, IDs, prompts, or quiz construction. A normally forbidden item is allowed only when the student learning objective explicitly asks students to learn that item.
+- NEVER ask about the teacher's job or choices: what a teacher should do, use, prepare, plan, or choose; lesson administration, planning decisions, lesson-plan steps, teaching methods or strategies, classroom resources or materials, worksheets, workbooks, textbook pages, slides, charts/diagrams not supplied here, metadata, IDs, prompts, or quiz construction. A normally forbidden item is allowed only when the student learning objective explicitly asks students to learn that item.
+- Questions assess the STUDENT, never the delivery of the lesson. It IS acceptable to mention an experiment, activity, demonstration, example, lesson, passage, or resource when the question tests the underlying academic concept — e.g. "Which activity produces glucose in a plant?" or "What is the main idea of the passage?".
 - Match the class/grade. Use concrete, simple recall or application for KG and early primary; do not force abstract higher-order reasoning. Use suitably deeper application or reasoning only for older grades.
 - Vary the angle across all 12 questions (knowledge, understanding, application, or reasoning as age-appropriate). Do not repeat or lightly reword a stem or answer set across quizzes.
 - Every multiple_choice has exactly 4 meaningful, pairwise-distinct options and correctIndex 0–3.
@@ -877,7 +927,12 @@ export const TARGETED_RETRY_CORRECTIONS: Record<QuizValidationErrorCode, string>
   DUPLICATE_QUESTION: `CORRECTION — your previous response repeated a question stem across quizzes. Every question stem must be unique across all 3 quizzes. Return JSON only.`,
   DUPLICATE_ANSWER_SET: `CORRECTION — your previous response repeated an entire answer set. Do not reuse the same four options for different questions. Return JSON only.`,
   PLACEHOLDER_OR_TRUNCATION: `CORRECTION — your previous response contained placeholder or truncated text. Write every title, question, option, and rubric complete and concise with no placeholders or trailing ellipses. Return JSON only.`,
-  FORBIDDEN_CONTEXT: `CORRECTION — your previous response asked about teacher delivery, lesson administration, or resources instead of student learning. Assess only what STUDENTS know, understand, apply, or reason about from the lesson content. Return JSON only.`,
+  FORBIDDEN_CONTEXT: `CORRECTION — your previous quiz response failed validation because it contained a teacher-facing or instructional-delivery question (FORBIDDEN_CONTEXT). Regenerate the ENTIRE quiz set with fresh questions.
+- Every question must test STUDENT learning from the supplied lesson content: what a student knows, understands, applies, or reasons about.
+- Do NOT ask about teacher actions, lesson delivery, teaching strategies or methods, classroom resources or materials, classroom management, lesson planning, or what a teacher should do, use, prepare, or choose.
+- A question MAY mention an experiment, activity, demonstration, lesson, classroom example, or resource when the student is being tested on the underlying academic concept (e.g. "Which activity produces glucose in a plant?").
+- Do not keep or reword the problematic question — write a completely fresh one.
+- Return the exact required JSON structure and nothing else.`,
   ARITHMETIC_ANSWER: `CORRECTION — an arithmetic question in your previous response had a wrong or ambiguous answer. Solve each calculation independently, place exactly one correct value among the options, make correctIndex point to it, and state the solved answer in the rubric for direct arithmetic. Return JSON only.`,
   UNKNOWN_VALIDATION: `CORRECTION — your previous response failed quiz validation. Re-read every rule in this prompt, especially the output contract and question shapes, and regenerate a fully valid quiz set. Return JSON only.`,
 };
@@ -1301,6 +1356,7 @@ function validateCandidateWithTelemetry(
       validationResult: 'failed',
       validationErrorCode: quizValidationErrorCode(validationError),
       validationPath: quizValidationPath(validationError),
+      validationRule: quizValidationRule(validationError),
       failurePhase: failurePhaseForValidationCode(quizValidationErrorCode(validationError)),
       repairs: candidate.repairs,
       ...summarizeQuizShape(candidate.value),
@@ -1403,6 +1459,7 @@ async function attemptGenerationWithValidation(
     // content are discarded; the public error stays INVALID_QUIZ_RESPONSE.
     err.validationErrorCode = quizValidationErrorCode(validationError);
     err.validationPath = quizValidationPath(validationError);
+    err.validationRule = quizValidationRule(validationError);
     err.failurePhase = failurePhaseForValidationCode(err.validationErrorCode);
     throw err;
   }
@@ -1574,6 +1631,7 @@ export async function handleRequest(req: Request): Promise<Response> {
           failurePhase: failurePhaseForError(err),
           validationErrorCode: typeof err?.validationErrorCode === 'string' ? err.validationErrorCode : null,
           validationPath: typeof err?.validationPath === 'string' ? err.validationPath : null,
+          validationRule: typeof err?.validationRule === 'string' ? err.validationRule : null,
           totalProviderAttempts: diagnostics.providerAttempts,
           executionMs: Date.now() - diagnostics.startedAt,
         });
@@ -1582,13 +1640,16 @@ export async function handleRequest(req: Request): Promise<Response> {
 
     const detail =
       lastError instanceof Error ? lastError.message.slice(0, 500) : 'No quiz generation provider configured';
+    const lastValidationCode = typeof (lastError as any)?.validationErrorCode === 'string'
+      && QUIZ_VALIDATION_ERROR_CODE_SET.has((lastError as any).validationErrorCode)
+      ? (lastError as any).validationErrorCode as QuizValidationErrorCode
+      : null;
     console.error('[generate-lesson-quizzes] failed all providers', {
       provider: 'all',
       errorCode: diagnosticErrorCode(lastError),
       failurePhase: failurePhaseForError(lastError),
-      validationErrorCode: typeof (lastError as any)?.validationErrorCode === 'string'
-        ? (lastError as any).validationErrorCode
-        : null,
+      validationErrorCode: lastValidationCode,
+      validationRule: quizValidationRule(lastError),
       totalProviderAttempts: diagnostics.providerAttempts,
       executionMs: Date.now() - diagnostics.startedAt,
     });
@@ -1597,6 +1658,9 @@ export async function handleRequest(req: Request): Promise<Response> {
         error: detail,
         code: 'QUIZ_GENERATION_FAILED',
         provider: 'all',
+        // Allowlisted category only (never generated content); lets the client
+        // show the real cause instead of a hardcoded guess.
+        validationErrorCode: lastValidationCode,
       },
       502,
       undefined,

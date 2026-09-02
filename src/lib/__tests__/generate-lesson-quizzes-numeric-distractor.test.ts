@@ -538,8 +538,9 @@ describe('provider retry and failure semantics', () => {
       error: 'Quiz generation returned invalid structured output',
       code: 'QUIZ_GENERATION_FAILED',
       provider: 'all',
+      // Allowlisted category only, so the UI can name the real cause.
+      validationErrorCode: 'NUMERIC_DISTRACTOR',
     }));
-    expect(body).not.toHaveProperty('validationErrorCode');
     expect(errorSpy).toHaveBeenCalledWith(
       '[generate-lesson-quizzes] failed all providers',
       expect.objectContaining({

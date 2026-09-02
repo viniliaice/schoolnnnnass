@@ -13,6 +13,7 @@ import { AiReviewPanel, minutesSince } from '../../components/lesson-planner/AiR
 import { LessonPlanPdfDocument } from '../shared/LessonPlanPdfDocument';
 import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
 import { describePlanWeek } from '../../utils/weekDates';
+import { quizValidationFailureHint } from '../../lib/quizGenerationValidation';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
 import { getSubjects } from '../../lib/db/subjects';
 import { useI18n } from '../../lib/i18n/AppLanguageContext';
@@ -308,7 +309,7 @@ export function LessonPlanReview() {
                         Dismiss
                       </button>
                     </div>
-                    <p className="text-xs text-rose-700/80 mt-2">If this keeps failing, the model returned duplicate answer options. The system already retried automatically — a second manual retry often succeeds.</p>
+                    <p className="text-xs text-rose-700/80 mt-2">{quizValidationFailureHint(quizError) ?? 'The model could not produce a valid quiz set.'} The system already retried automatically — a second manual retry often succeeds.</p>
                   </div>
                 </div>
               )}
