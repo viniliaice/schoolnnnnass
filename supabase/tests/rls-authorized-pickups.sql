@@ -81,6 +81,11 @@ BEGIN
   IF position('photo' in v_def) = 0 OR position('required' in v_def) = 0 THEN
     RAISE EXCEPTION 'create_authorized_pickup() does not enforce the required photo';
   END IF;
+  -- Staff must explicitly select one or more students; no implicit "all
+  -- family students" default is permitted server-side.
+  IF position('At least one student must be selected' in v_def) = 0 THEN
+    RAISE EXCEPTION 'create_authorized_pickup() does not require an explicit student selection';
+  END IF;
   IF position('audit_logs' in v_def) = 0 THEN
     RAISE EXCEPTION 'create_authorized_pickup() does not write the audit trail';
   END IF;
@@ -120,7 +125,7 @@ BEGIN
   END IF;
 END $$;
 
--- ── 6. release_log carries the optional pickup person ─────────────────────
+-- ── 6. release_log carries the (required) pickup person ───────────────────
 DO $$
 DECLARE
   v_ok BOOLEAN;
