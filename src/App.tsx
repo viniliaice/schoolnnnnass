@@ -19,6 +19,7 @@ import { BulkUpload } from './pages/admin/BulkUpload';
 import { FamilyIds } from './pages/admin/FamilyIds';
 import { canAccessRoute, DEFAULT_ROUTE } from './lib/routing';
 import { GateScreen } from './pages/admin/gate/GateScreen';
+import { ManageDrivers } from './pages/admin/drivers/ManageDrivers';
 import { OfficeDashboard } from './pages/office/OfficeDashboard';
 import { StudentDirectory } from './pages/office/StudentDirectory';
 import { ExamVerification } from './pages/admin/ExamVerification';
@@ -103,6 +104,7 @@ function AppContent() {
             case '/admin/bulk': return <BulkUpload />;
             case '/admin/family-ids': return <FamilyIds mode="browse" navigate={navigate} />;
             case '/admin/family-ids/setup': return <FamilyIds mode="setup" navigate={navigate} />;
+            case '/admin/drivers': return <ManageDrivers />;
             case '/directory': return <StudentDirectory />;
             case '/admin/bulk-grades': return <BulkUploadGrades />;
             case '/admin/exams': return <ExamVerification />;
@@ -172,6 +174,7 @@ function AppContent() {
           switch (currentPath) {
             case '/gate': return <GateScreen navigate={navigate} />;
             case '/admin/family-ids': return <FamilyIds mode="browse" navigate={navigate} />;
+            case '/admin/drivers': return <ManageDrivers />;
             case '/directory': return <StudentDirectory />;
             case '/messages': return <MessagesPage />;
             case '/streams': return <StreamsPage />;

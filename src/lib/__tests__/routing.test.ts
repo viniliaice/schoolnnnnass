@@ -29,7 +29,7 @@ describe('canAccessRoute — office role', () => {
 
   it('every guarded route is listed in ROUTE_ACCESS', () => {
     expect(Object.keys(ROUTE_ACCESS).sort()).toEqual([
-      '/admin/family-ids', '/admin/family-ids/setup', '/directory', '/gate',
+      '/admin/drivers', '/admin/family-ids', '/admin/family-ids/setup', '/directory', '/gate',
     ]);
   });
 });

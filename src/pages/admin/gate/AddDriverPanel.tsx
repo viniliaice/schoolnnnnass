@@ -7,6 +7,12 @@
 // photo captured once at creation. There is no approval step and no
 // photo-pending lifecycle — saving creates a record that is immediately
 // usable for release in the same session.
+//
+// De-dupe: before creating a row the panel checks the phone against existing
+// drivers (server-side normalize_phone()). A match offers "attach to existing
+// driver" — which links the selected students to that person WITHOUT creating
+// a duplicate row — instead of the create path. "Create separate driver" is
+// the explicit override for two distinct people who share a number.
 
 import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
@@ -14,7 +20,10 @@ import { Dialog } from '../../../components/ui/Dialog';
 import { PhotoCapture } from '../../../components/photo/PhotoCapture';
 import { useToast } from '../../../context/ToastContext';
 import { supabase } from '../../../lib/supabase';
-import { createAuthorizedPickup, PICKUP_BUCKET } from '../../../lib/db/authorizedPickups';
+import {
+  attachStudentsToAuthorizedPickup, createAuthorizedPickup, findAuthorizedPickupByPhone,
+  PICKUP_BUCKET, type AuthorizedPickup,
+} from '../../../lib/db/authorizedPickups';
 import { displayFamilyId } from '../../../lib/transport';
 import type { GateLookupRow } from '../../../lib/db/gate';
 import type { GateStrings } from '../../../lib/i18n/gateStrings';
@@ -42,6 +51,8 @@ export function AddDriverPanel({
   const [photoBlob, setPhotoBlob] = useState<Blob | null>(null);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // A driver whose normalized phone already matches — surfaced as "attach".
+  const [existing, setExisting] = useState<AuthorizedPickup | null>(null);
 
   // Seed on open: NO student is pre-selected. Staff must explicitly choose
   // which student(s) this driver is taking, so a driver is never silently
@@ -54,6 +65,7 @@ export function AddDriverPanel({
       setSelected(new Set());
       setPhotoBlob(null);
       setError(null);
+      setExisting(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -71,17 +83,43 @@ export function AddDriverPanel({
     onClose();
   };
 
-  const save = async () => {
-    if (!name.trim() || !phone.trim()) {
-      setError(t.driverFieldsRequired);
+  /** Link the selected students to the EXISTING driver (de-dupe path). */
+  const attach = async () => {
+    if (!existing) return;
+    if (selected.size === 0) {
+      setError(t.selectStudentError);
       return;
     }
+    setSaving(true);
+    setError(null);
+    try {
+      await attachStudentsToAuthorizedPickup(existing.id, [...selected]);
+      addToast({
+        type: 'success',
+        title: `${t.addDriver}: ${existing.name}`,
+        description: `${selected.size} → ${displayFamilyId(familyId)}`,
+      });
+      onClose();
+      onAdded();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      addToast({ type: 'error', title: t.saveDriverFailed, description: message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  /** Validate + upload + create a NEW row (with/without the duplicate override). */
+  const doCreate = async (allowDuplicatePhone: boolean) => {
     if (!photoBlob) {
       setError(t.photoRequired);
+      setSaving(false);
       return;
     }
     if (selected.size === 0) {
       setError(t.selectStudentError);
+      setSaving(false);
       return;
     }
 
@@ -105,6 +143,7 @@ export function AddDriverPanel({
         relationship: relationship.trim(),
         photoPath: path,
         studentIds: [...selected],
+        allowDuplicatePhone,
       });
 
       addToast({
@@ -130,6 +169,30 @@ export function AddDriverPanel({
     }
   };
 
+  const save = async () => {
+    if (!name.trim() || !phone.trim()) {
+      setError(t.driverFieldsRequired);
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      // De-dupe: one driver per normalized phone. A match offers "attach"
+      // instead of creating a second row for the same person.
+      const match = await findAuthorizedPickupByPhone(phone.trim());
+      if (match) {
+        setExisting(match);
+        setSaving(false);
+        return;
+      }
+      await doCreate(false);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      setSaving(false);
+    }
+  };
+
   return (
     <Dialog
       open={open}
@@ -142,7 +205,7 @@ export function AddDriverPanel({
           <label className="mb-1 block text-xs font-bold text-slate-500">{t.driverName}</label>
           <input
             value={name}
-            onChange={e => setName(e.target.value)}
+            onChange={e => { setName(e.target.value); setExisting(null); }}
             placeholder={t.driverName}
             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-600"
           />
@@ -152,7 +215,7 @@ export function AddDriverPanel({
           <label className="mb-1 block text-xs font-bold text-slate-500">{t.driverPhone}</label>
           <input
             value={phone}
-            onChange={e => setPhone(e.target.value)}
+            onChange={e => { setPhone(e.target.value); setExisting(null); }}
             inputMode="tel"
             placeholder={t.driverPhone}
             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-600"
@@ -168,6 +231,30 @@ export function AddDriverPanel({
             className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-600"
           />
         </div>
+
+        {/* De-dupe: an existing driver with this phone — attach instead. */}
+        {existing && (
+          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">
+            <p className="font-bold text-amber-900">{existing.name} · {existing.phoneNumber}</p>
+            <p className="mt-0.5 text-xs text-amber-700">{t.existingDriver}. {t.attachHint}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                onClick={() => void attach()}
+                disabled={saving}
+                className="rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-900 disabled:opacity-50"
+              >
+                {t.attachToExisting} {existing.name}
+              </button>
+              <button
+                onClick={() => { setExisting(null); void doCreate(true); }}
+                disabled={saving}
+                className="rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100"
+              >
+                {t.createSeparateDriver}
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Which students this driver may pick up (staff must select each). */}
         <div>
@@ -192,10 +279,12 @@ export function AddDriverPanel({
         </div>
 
         {/* Required photo — captured once at creation. */}
-        <div>
-          <label className="mb-1 block text-xs font-bold text-slate-500">{t.photoRequired}</label>
-          <PhotoCapture onChange={setPhotoBlob} takeLabel={t.takePhoto} retakeLabel={t.retakePhoto} />
-        </div>
+        {!existing && (
+          <div>
+            <label className="mb-1 block text-xs font-bold text-slate-500">{t.photoRequired}</label>
+            <PhotoCapture onChange={setPhotoBlob} takeLabel={t.takePhoto} retakeLabel={t.retakePhoto} />
+          </div>
+        )}
 
         {error && (
           <p role="alert" className="rounded-xl bg-red-50 px-3 py-2 text-sm font-semibold text-red-700">
@@ -211,14 +300,16 @@ export function AddDriverPanel({
           >
             {t.cancel}
           </button>
-          <button
-            onClick={() => void save()}
-            disabled={saving}
-            className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-emerald-800 px-5 py-2 text-sm font-black text-white transition hover:bg-emerald-900 disabled:opacity-50"
-          >
-            {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-            {saving ? t.saving : `✓ ${t.saveDriver}`}
-          </button>
+          {!existing && (
+            <button
+              onClick={() => void save()}
+              disabled={saving}
+              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-emerald-800 px-5 py-2 text-sm font-black text-white transition hover:bg-emerald-900 disabled:opacity-50"
+            >
+              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+              {saving ? t.saving : `✓ ${t.saveDriver}`}
+            </button>
+          )}
         </div>
       </div>
     </Dialog>

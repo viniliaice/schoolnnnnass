@@ -12,7 +12,11 @@ vi.mock('../supabase', () => ({
 }));
 
 import { supabase } from '../supabase';
-import { createAuthorizedPickup, getFamilyPickups, resolvePickupPhotoUrls, PICKUP_BUCKET } from '../db/authorizedPickups';
+import {
+  attachStudentsToAuthorizedPickup, createAuthorizedPickup, findAuthorizedPickupByPhone,
+  findDriverByPhone, getFamilyPickups, listAuthorizedPickups, removeStudentFromAuthorizedPickup,
+  resolvePickupPhotoUrls, PICKUP_BUCKET, type ManagedDriver,
+} from '../db/authorizedPickups';
 
 const rpc = supabase.rpc as unknown as ReturnType<typeof vi.fn>;
 
@@ -54,7 +58,22 @@ describe('createAuthorizedPickup', () => {
       p_relationship: 'Awoowe',
       p_photo_path: 'pickup-1.jpg',
       p_student_ids: ['s1', 's2'],
+      p_allow_duplicate_phone: false,
     });
+  });
+
+  it('passes p_allow_duplicate_phone = true for the explicit duplicate override', async () => {
+    rpc.mockResolvedValue({ data: { id: 'p', studentIds: ['s1'] }, error: null });
+    await createAuthorizedPickup({
+      id: 'p',
+      name: 'X',
+      phoneNumber: '123',
+      relationship: '',
+      photoPath: 'p.jpg',
+      studentIds: ['s1'],
+      allowDuplicatePhone: true,
+    });
+    expect(rpc).toHaveBeenCalledWith('create_authorized_pickup', expect.objectContaining({ p_allow_duplicate_phone: true }));
   });
 
   it('throws the RPC error (e.g. missing required photo)', async () => {
@@ -69,6 +88,107 @@ describe('createAuthorizedPickup', () => {
         studentIds: ['s1'],
       }),
     ).rejects.toThrow(/photo is required/);
+  });
+});
+
+describe('findDriverByPhone (de-dupe)', () => {
+  const drivers: ManagedDriver[] = [
+    { id: 'a', name: 'Xasan', phoneNumber: '+252 61 2345678', relationship: null, photoPath: 'a.jpg', addedAt: '', studentCount: 1, familyCount: 1, students: [] },
+    { id: 'b', name: 'Cali', phoneNumber: '0619999999', relationship: null, photoPath: 'b.jpg', addedAt: '', studentCount: 1, familyCount: 1, students: [] },
+  ];
+
+  it('matches the same normalized phone across formats', () => {
+    // '+252 61 2345678' normalizes to '612345678' (the +252 prefix is stripped
+    // when 9 digits follow), and so do the other +252 spellings.
+    expect(findDriverByPhone(drivers, '612345678')?.id).toBe('a');
+    expect(findDriverByPhone(drivers, '+252 61 2345678')?.id).toBe('a');
+    expect(findDriverByPhone(drivers, '+252612345678')?.id).toBe('a');
+  });
+
+  it('returns undefined for a non-matching or empty phone', () => {
+    expect(findDriverByPhone(drivers, '0700000000')).toBeUndefined();
+    expect(findDriverByPhone(drivers, '')).toBeUndefined();
+    expect(findDriverByPhone(drivers, 'abc')).toBeUndefined();
+  });
+});
+
+describe('findAuthorizedPickupByPhone', () => {
+  it('returns the existing driver for the phone (server-side normalization)', async () => {
+    rpc.mockResolvedValue({
+      data: { id: 'pickup-1', name: 'Xasan Cali', phoneNumber: '+252 61 2345678', relationship: null, photoPath: 'p.jpg', addedAt: '' },
+      error: null,
+    });
+    const found = await findAuthorizedPickupByPhone('0612345678');
+    expect(found?.id).toBe('pickup-1');
+    expect(rpc).toHaveBeenCalledWith('find_authorized_pickup_by_phone', { p_phone: '0612345678' });
+  });
+
+  it('returns null when there is no match', async () => {
+    rpc.mockResolvedValue({ data: null, error: null });
+    await expect(findAuthorizedPickupByPhone('0700000000')).resolves.toBeNull();
+  });
+});
+
+describe('listAuthorizedPickups', () => {
+  it('returns every driver with linked students and counts', async () => {
+    rpc.mockResolvedValue({
+      data: [
+        {
+          id: 'pickup-1', name: 'Xasan Cali', phoneNumber: '612345678', relationship: 'Adeer',
+          photoPath: 'pickup-1.jpg', addedAt: '', studentCount: 2, familyCount: 2,
+          students: [
+            { id: 's1', name: 'Fartun', className: 'Grade 4-A', familyId: '0042', transport: 'WALKER' },
+            { id: 's2', name: 'Axmed', className: 'Grade 7-B', familyId: '0017', transport: '9' },
+          ],
+        },
+      ],
+      error: null,
+    });
+    const list = await listAuthorizedPickups();
+    expect(list).toHaveLength(1);
+    expect(list[0].studentCount).toBe(2);
+    expect(list[0].familyCount).toBe(2);
+    expect(rpc).toHaveBeenCalledWith('list_authorized_pickups');
+  });
+});
+
+describe('attachStudentsToAuthorizedPickup', () => {
+  it('links an existing driver to additional students', async () => {
+    rpc.mockResolvedValue({ data: { id: 'pickup-1', studentIds: ['s3', 's4'] }, error: null });
+    await attachStudentsToAuthorizedPickup('pickup-1', ['s3', 's4']);
+    expect(rpc).toHaveBeenCalledWith('attach_students_to_authorized_pickup', {
+      p_pickup_id: 'pickup-1',
+      p_student_ids: ['s3', 's4'],
+    });
+  });
+
+  it('rejects an empty student selection WITHOUT calling the RPC', async () => {
+    await expect(attachStudentsToAuthorizedPickup('pickup-1', [])).rejects.toThrow(/At least one student/);
+    await expect(attachStudentsToAuthorizedPickup('pickup-1', '' as unknown as string[])).rejects.toThrow(/At least one student/);
+    await expect(attachStudentsToAuthorizedPickup('', ['s1'])).rejects.toThrow(/driver is required/i);
+    expect(rpc).not.toHaveBeenCalled();
+  });
+
+  it('throws when the RPC rejects (e.g. driver not found)', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'Driver not found.' } });
+    await expect(attachStudentsToAuthorizedPickup('nope', ['s1'])).rejects.toThrow(/Driver not found/);
+  });
+});
+
+describe('removeStudentFromAuthorizedPickup', () => {
+  it('unlinks one student from a driver', async () => {
+    rpc.mockResolvedValue({ data: { personId: 'pickup-1', studentId: 's1', removed: true }, error: null });
+    await removeStudentFromAuthorizedPickup('pickup-1', 's1');
+    expect(rpc).toHaveBeenCalledWith('remove_student_from_authorized_pickup', {
+      p_pickup_id: 'pickup-1',
+      p_student_id: 's1',
+    });
+  });
+
+  it('rejects a missing driver or student WITHOUT calling the RPC', async () => {
+    await expect(removeStudentFromAuthorizedPickup('', 's1')).rejects.toThrow(/required/);
+    await expect(removeStudentFromAuthorizedPickup('pickup-1', '')).rejects.toThrow(/required/);
+    expect(rpc).not.toHaveBeenCalled();
   });
 });
 
@@ -108,6 +228,16 @@ describe('resolvePickupPhotoUrls', () => {
     expect(urls.get('p2')).toContain('p2.jpg');
     expect(createSignedUrl).toHaveBeenCalledTimes(2);
     expect(createSignedUrl).toHaveBeenCalledWith('p1.jpg', 3600);
+  });
+
+  it('accepts ManagedDriver rows (id + photoPath) as well', async () => {
+    createSignedUrl.mockImplementation((path: string) =>
+      Promise.resolve({ data: { signedUrl: `https://x/signed/${path}` }, error: null }),
+    );
+    const urls = await resolvePickupPhotoUrls([
+      { id: 'd1', name: 'A', phoneNumber: '1', relationship: null, photoPath: 'd1.jpg', addedAt: '', studentCount: 1, familyCount: 1, students: [] },
+    ]);
+    expect(urls.get('d1')).toContain('d1.jpg');
   });
 
   it('drops entries whose signing failed (falls back to initial avatar)', async () => {

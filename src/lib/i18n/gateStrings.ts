@@ -64,6 +64,11 @@ export interface GateStrings {
   releaseTo: string;
   saveDriverFailed: string;
   driverSavedFor: string;
+  // De-dupe: this phone already belongs to an existing driver.
+  existingDriver: string;
+  attachHint: string;
+  attachToExisting: string;
+  createSeparateDriver: string;
 }
 
 const SO: GateStrings = {
@@ -120,6 +125,10 @@ const SO: GateStrings = {
   releaseTo: 'Ku sii day',
   saveDriverFailed: 'Kaydinta dareewalaha ayaa fashilantay',
   driverSavedFor: 'Lagu daray qoyska',
+  existingDriver: 'Lambarkan waxaa hore u leh dareewale jira',
+  attachHint: 'Ardayda la doortay ku dar dareewalahan hore u jira, halkii aad mid cusub abuuri lahayd',
+  attachToExisting: 'Ku dar',
+  createSeparateDriver: 'Abuur dareewale cusub',
 };
 
 const EN: GateStrings = {
@@ -176,6 +185,10 @@ const EN: GateStrings = {
   releaseTo: 'Release to',
   saveDriverFailed: 'Could not save driver',
   driverSavedFor: 'Added to family',
+  existingDriver: 'This phone already belongs to an existing driver',
+  attachHint: 'Attach the selected students to this driver instead of creating a duplicate',
+  attachToExisting: 'Attach to',
+  createSeparateDriver: 'Create separate driver',
 };
 
 export const GATE_STRINGS: Record<GateLang, GateStrings> = { so: SO, en: EN };
