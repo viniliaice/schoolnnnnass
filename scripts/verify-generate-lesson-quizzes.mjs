@@ -167,6 +167,48 @@ const forbiddenAlways = JSON.stringify({
   ].map((quiz, index) => index === 0 ? { ...quiz, questions: [...quiz.questions.slice(0, 1), teacherDeliveryQuizOne.questions[1], ...quiz.questions.slice(2)] } : quiz),
 });
 
+const duplicateSetQuizOne = {
+  title: 'Learning check 1',
+  questions: [
+    { type: 'multiple_choice', question: 'Which gas do plants absorb to make food?', options: ['Carbon dioxide', 'Oxygen', 'Nitrogen', 'Helium'], correctIndex: 0 },
+    { type: 'multiple_choice', question: 'Which part of the plant takes in water?', options: ['Roots', 'Leaves', 'Flowers', 'Stems'], correctIndex: 0 },
+    { type: 'multiple_choice', question: 'What is the main idea of the passage?', options: ['The coast changes slowly over time', 'Fish live near reefs', 'Boats carry goods', 'Tides follow the moon'], correctIndex: 0 },
+    { type: 'direct_answer', question: 'Explain why sunlight matters to plants.', rubric: 'Award one point for energy for food-making and one for a clear example.' },
+  ],
+};
+// quizzes[1].questions[2] reuses quizzes[0].questions[0]'s option set — the
+// exact production DUPLICATE_ANSWER_SET path.
+const duplicateSetFirst = JSON.stringify({
+  quizzes: [
+    duplicateSetQuizOne,
+    {
+      title: 'Learning check 2',
+      questions: [
+        fillerQuiz(2).questions[0],
+        fillerQuiz(2).questions[1],
+        { type: 'multiple_choice', question: 'Which gas do people breathe out most?', options: ['Carbon dioxide', 'Oxygen', 'Nitrogen', 'Helium'], correctIndex: 0 },
+        { type: 'direct_answer', question: 'Explain in one sentence why breathing matters.', rubric: 'Award one point for a relevant reason and one for clear wording.' },
+      ],
+    },
+    fillerQuiz(7),
+  ],
+});
+const duplicateSetFixed = JSON.stringify({
+  quizzes: [
+    duplicateSetQuizOne,
+    {
+      title: 'Learning check 2',
+      questions: [
+        fillerQuiz(2).questions[0],
+        fillerQuiz(2).questions[1],
+        { type: 'multiple_choice', question: 'Which gas do people breathe out most?', options: ['Mostly nitrogen', 'Mostly argon', 'Mostly helium', 'Mostly hydrogen'], correctIndex: 0 },
+        { type: 'direct_answer', question: 'Explain in one sentence why breathing matters.', rubric: 'Award one point for a relevant reason and one for clear wording.' },
+      ],
+    },
+    fillerQuiz(7),
+  ],
+});
+
 const scenarios = [
   { name: 'retry after NUMERIC_DISTRACTOR', stubs: [conceptualBad, conceptualGood] },
   {
@@ -184,6 +226,22 @@ const scenarios = [
     expectFirstCode: 'FORBIDDEN_CONTEXT',
     expectBodyCode: 'FORBIDDEN_CONTEXT',
     mustNotMention: 'duplicate',
+  },
+  {
+    name: 'targeted repair after DUPLICATE_ANSWER_SET',
+    stubs: [duplicateSetFirst, duplicateSetFixed],
+    expectHttp: 200,
+    expectFirstCode: 'DUPLICATE_ANSWER_SET',
+    expectFirstPath: 'quizzes[1].questions[2].options',
+    expectRetryContains: 'TARGETED REPAIR',
+  },
+  {
+    name: 'persistent DUPLICATE_ANSWER_SET fails clearly',
+    stubs: [duplicateSetFirst, duplicateSetFirst],
+    expectHttp: 502,
+    expectFirstCode: 'DUPLICATE_ANSWER_SET',
+    expectBodyCode: 'DUPLICATE_ANSWER_SET',
+    mustNotMention: 'carbon dioxide',
   },
   { name: 'math calculations', stubs: [response([
     { type: 'multiple_choice', question: 'What is 8 × 7?', options: ['54', '56', '58', '64'], correctIndex: 1 },

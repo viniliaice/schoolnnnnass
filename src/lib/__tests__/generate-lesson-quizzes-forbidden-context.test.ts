@@ -379,7 +379,7 @@ describe('user-facing failure hints', () => {
     expect(forbidden).not.toContain('duplicate');
 
     const duplicates = quizValidationFailureHint('... · DUPLICATE_ANSWER_SET · QUIZ_GENERATION_FAILED · all');
-    expect(duplicates).toContain('duplicate answer options');
+    expect(duplicates).toContain('reused the same answer options for more than one question');
 
     const numeric = quizValidationFailureHint('... · NUMERIC_DISTRACTOR · QUIZ_GENERATION_FAILED · all');
     expect(numeric).toContain('numeric');

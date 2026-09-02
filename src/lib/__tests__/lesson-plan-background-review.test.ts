@@ -8,14 +8,26 @@ const lessonPlanSchemaPath = 'supabase/migrations/20260727_lesson_plans.sql';
 const edgePath = 'supabase/functions/generate-lesson-review/index.ts';
 const clientPath = 'src/lib/db/lessonPlans.ts';
 
-const migration = readFileSync(migrationPath, 'utf8');
+/**
+ * The contract tests below compare source text (markers) and hash extracted
+ * source. A Windows checkout with core.autocrlf=true stores these files with
+ * CRLF bytes, which changes every hash and defeats every \n marker search even
+ * though the CONTENT is identical. Normalize line endings on read so the
+ * contracts verify content, not byte format. (Regression-checked by the
+ * "line-ending agnostic" test at the bottom of this file.)
+ */
+function readSourceNormalized(path: string): string {
+  return readFileSync(path, 'utf8').replace(/\r\n?/g, '\n');
+}
+
+const migration = readSourceNormalized(migrationPath);
 const allLifecycleSql = [
-  readFileSync(lessonPlanSchemaPath, 'utf8'),
-  readFileSync(lockingMigrationPath, 'utf8'),
+  readSourceNormalized(lessonPlanSchemaPath),
+  readSourceNormalized(lockingMigrationPath),
   migration,
 ].join('\n');
-const edgeSource = readFileSync(edgePath, 'utf8');
-const clientSource = readFileSync(clientPath, 'utf8');
+const edgeSource = readSourceNormalized(edgePath);
+const clientSource = readSourceNormalized(clientPath);
 
 function functionBody(sql: string, signatureStart: string): string {
   const start = sql.indexOf(signatureStart);
@@ -326,6 +338,39 @@ describe('background lesson-plan AI review contracts', () => {
     expect(sha256(buildPromptSource!)).toBe('8f7a221a5aa96e3d5de9188004a7ff8fa47d76a46915c9f1896f1740c289482e');
     expect(buildPromptSource).toContain('const periodsText = payload.periods');
     expect(buildPromptSource).toContain('.map((period) => {');
+  });
+
+  it('extracts the same contracts from a CRLF (Windows autocrlf) checkout', () => {
+    // Reproduces the three failures seen on Windows checkouts: with CRLF bytes
+    // the marker searches returned -1 and sha256(systemPrompt) became
+    // 0fa77c98…b75370041 instead of the pinned canonical hash. Normalization
+    // must make every contract above environment-independent.
+    const rawEdge = readFileSync(edgePath, 'utf8').replace(/\r\n?/g, '\n').replace(/\n/g, '\r\n');
+    const normalizedEdge = rawEdge.replace(/\r\n?/g, '\n');
+    expect(normalizedEdge).toBe(edgeSource);
+
+    const systemPrompt = normalizedEdge.match(/const SYSTEM_PROMPT = `([\s\S]*?)`;/)?.[1];
+    const buildPromptSource = normalizedEdge.match(/function buildPrompt\(payload: ReviewPayload\): string \{[\s\S]*?\n\}/)?.[0];
+    expect(sha256(systemPrompt!)).toBe('807575b78a41ae2242f1f58b8f65cd04c2f194cda91716338c140cb5a869ab19');
+    expect(sha256(buildPromptSource!)).toBe('8f7a221a5aa96e3d5de9188004a7ff8fa47d76a46915c9f1896f1740c289482e');
+    expect(buildPromptSource).toContain('const periodsText = payload.periods');
+
+    // The client marker search that returned -1 on CRLF checkouts.
+    const rawClient = readFileSync(clientPath, 'utf8').replace(/\r\n?/g, '\n').replace(/\n/g, '\r\n');
+    const normalizedClient = rawClient.replace(/\r\n?/g, '\n');
+    expect(normalizedClient).toBe(clientSource);
+    const retryBody = functionBodyFromSource(
+      normalizedClient,
+      'export async function retryAIReview(',
+      '/**\n * Persist the supervisor comment',
+    );
+    expect(retryBody).toContain('retry_lesson_plan_ai_review');
+    const timeoutBody = functionBodyFromSource(
+      normalizedClient,
+      'export async function expireStuckAiReviews(',
+      '/**\n * Dispatch review generation',
+    );
+    expect(timeoutBody).toContain("supabase.rpc('expire_stuck_ai_reviews'");
   });
 
   it('does not embed full lesson payloads into review rows', () => {

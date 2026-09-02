@@ -172,24 +172,45 @@ const SEMANTIC_VALIDATION_CODES = new Set<string>([
   'ARITHMETIC_ANSWER',
 ]);
 
+/**
+ * Structured, bounded context for a DUPLICATE_ANSWER_SET failure: which
+ * question reused another question's option set. Used ONLY to build the
+ * targeted retry correction (the excerpt goes to the provider, which generated
+ * it); it is never logged and never included in error responses.
+ */
+export interface DuplicateAnswerSetDetail {
+  /** Path of the question that reused an earlier question's option set. */
+  repeatPath: string;
+  repeatQuestion: string;
+  repeatOptions: string[];
+  /** Path of the earlier question whose option set was reused. */
+  originalPath: string;
+  originalQuestion: string;
+  originalOptions: string[];
+}
+
 class QuizValidationError extends Error {
   readonly validationErrorCode: QuizValidationErrorCode;
   /** Structural location of the failure, e.g. quizzes[1].questions[2].options[3]. */
   readonly validationPath: string;
   /** Short allowlisted rule id (FORBIDDEN_CONTEXT rules only), e.g. artifact-worksheet. */
   readonly validationRule: string | null;
+  /** Bounded DUPLICATE_ANSWER_SET context for the targeted retry; never logged. */
+  readonly duplicateAnswerSet: DuplicateAnswerSetDetail | null;
 
   constructor(
     validationErrorCode: QuizValidationErrorCode,
     message: string,
     validationPath: string,
     validationRule: string | null = null,
+    duplicateAnswerSet: DuplicateAnswerSetDetail | null = null,
   ) {
     super(message);
     this.name = 'QuizValidationError';
     this.validationErrorCode = validationErrorCode;
     this.validationPath = validationPath;
     this.validationRule = validationRule;
+    this.duplicateAnswerSet = duplicateAnswerSet;
   }
 }
 
@@ -198,8 +219,14 @@ function failQuizValidation(
   message: string,
   validationPath: string,
   validationRule: string | null = null,
+  duplicateAnswerSet: DuplicateAnswerSetDetail | null = null,
 ): never {
-  throw new QuizValidationError(validationErrorCode, message, validationPath, validationRule);
+  throw new QuizValidationError(validationErrorCode, message, validationPath, validationRule, duplicateAnswerSet);
+}
+
+/** Bounded excerpt of generated text for retry context; never for telemetry. */
+function boundedDetailText(value: unknown, limit = 200): string {
+  return typeof value === 'string' ? value.slice(0, limit) : '';
 }
 
 /** Return only a fixed allowlisted category; never derive telemetry from model content. */
@@ -220,6 +247,42 @@ export function quizValidationPath(error: unknown): string | null {
 export function quizValidationRule(error: unknown): string | null {
   const value = (error as { validationRule?: unknown })?.validationRule;
   return typeof value === 'string' && /^[a-z0-9-]{1,40}$/.test(value) ? value : null;
+}
+
+/**
+ * Shape-validated, bounded DUPLICATE_ANSWER_SET context. Guards the values
+ * before they can influence the retry prompt; returns null for anything
+ * malformed. Never logged.
+ */
+export function duplicateAnswerSetDetail(error: unknown): DuplicateAnswerSetDetail | null {
+  const value = (error as { duplicateAnswerSet?: unknown })?.duplicateAnswerSet;
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<Record<keyof DuplicateAnswerSetDetail, unknown>>;
+  const validOptions = (list: unknown): string[] | null => (
+    Array.isArray(list)
+      && list.length > 0
+      && list.length <= 4
+      && list.every((item) => typeof item === 'string' && item.length > 0 && item.length <= 200)
+      ? list as string[]
+      : null
+  );
+  const repeatOptions = validOptions(candidate.repeatOptions);
+  const originalOptions = validOptions(candidate.originalOptions);
+  if (
+    typeof candidate.repeatPath !== 'string' || typeof candidate.repeatQuestion !== 'string'
+    || typeof candidate.originalPath !== 'string' || typeof candidate.originalQuestion !== 'string'
+    || !repeatOptions || !originalOptions
+  ) {
+    return null;
+  }
+  return {
+    repeatPath: candidate.repeatPath.slice(0, 120),
+    repeatQuestion: candidate.repeatQuestion.slice(0, 300),
+    repeatOptions,
+    originalPath: candidate.originalPath.slice(0, 120),
+    originalQuestion: candidate.originalQuestion.slice(0, 300),
+    originalOptions,
+  };
 }
 
 /** Classify a quiz validation code into schema vs semantic failure. */
@@ -576,7 +639,9 @@ export function validateQuizQuality(input: unknown, context: QuizQualityContext 
     failQuizValidation('QUIZ_SHAPE', 'Quiz quality validation requires quizzes', 'quizzes');
   }
   const seenQuestions = new Set<string>();
-  const seenAnswerSets = new Set<string>();
+  // First use of each normalized option set, retained so a DUPLICATE_ANSWER_SET
+  // failure can name BOTH colliding questions in the targeted retry prompt.
+  const seenAnswerSets = new Map<string, { path: string; question: string; options: string[] }>();
 
   quizzes.forEach((quiz: any, quizIndex: number) => {
     const quizPath = `quizzes[${quizIndex}]`;
@@ -612,10 +677,28 @@ export function validateQuizQuality(input: unknown, context: QuizQualityContext 
 
       if (question.type === 'multiple_choice' && question.options) {
         const answerSet = question.options.map(normalizeAssessmentText).sort().join('|');
-        if (seenAnswerSets.has(answerSet)) {
-          failQuizValidation('DUPLICATE_ANSWER_SET', `${label} repeats an answer set from another question`, `${questionPath}.options`);
+        const original = seenAnswerSets.get(answerSet);
+        if (original) {
+          failQuizValidation(
+            'DUPLICATE_ANSWER_SET',
+            `${label} repeats an answer set from another question`,
+            `${questionPath}.options`,
+            null,
+            {
+              repeatPath: questionPath,
+              repeatQuestion: boundedDetailText(question.question),
+              repeatOptions: question.options.map((option: unknown) => boundedDetailText(option)),
+              originalPath: original.path,
+              originalQuestion: original.question,
+              originalOptions: original.options,
+            },
+          );
         }
-        seenAnswerSets.add(answerSet);
+        seenAnswerSets.set(answerSet, {
+          path: questionPath,
+          question: boundedDetailText(question.question),
+          options: question.options.map((option: unknown) => boundedDetailText(option)),
+        });
       }
       validateNumericOptions(question, label, questionPath);
       validateDirectArithmetic(question, label, questionPath);
@@ -880,6 +963,7 @@ Student-assessment rules:
 - Match the class/grade. Use concrete, simple recall or application for KG and early primary; do not force abstract higher-order reasoning. Use suitably deeper application or reasoning only for older grades.
 - Vary the angle across all 12 questions (knowledge, understanding, application, or reasoning as age-appropriate). Do not repeat or lightly reword a stem or answer set across quizzes.
 - Every multiple_choice has exactly 4 meaningful, pairwise-distinct options and correctIndex 0–3.
+- Give every question its OWN four options: never reuse or lightly reword another question's option set, even across different quizzes. After ignoring capitalization, punctuation, whitespace, and number formatting, no two questions may share the same set of four options.
 - Each wrong option must be a plausible same-type answer based on a different likely student mistake or misconception; never use nonsense, malformed values, or differences only in spacing/punctuation.
 - Distractor typing (decide from the question): if the question genuinely expects a numeric value (calculation, count, date, measurement, price, percentage), make ALL 4 options numeric values in ONE shared type and format — e.g. "What is 7 + 5?" → 10, 11, 12, 13; "How much did it cost?" → $5, $10, $15, $20. If the question is conceptual (definition, vocabulary, science, history, reading), every option must be a meaningful NON-numeric alternative of the same kind as the correct answer — NEVER a bare number such as 12 or 35.
 - For every mathematical question, solve it independently before writing options. Include exactly one correct value, make correctIndex point to it, and re-check the operation. Numeric distractors must be valid, distinct, same-type values caused by plausible errors. For direct arithmetic, state the solved answer in the rubric.
@@ -925,7 +1009,7 @@ export const TARGETED_RETRY_CORRECTIONS: Record<QuizValidationErrorCode, string>
   CORRECT_INDEX: `CORRECTION — a question in your previous response had an invalid correctIndex. correctIndex must be the integer 0, 1, 2, or 3 pointing at the correct option. Return JSON only.`,
   DIRECT_ANSWER_SHAPE: `CORRECTION — a direct-answer question in your previous response was malformed. Question 4 of each quiz must be direct_answer with a non-empty rubric and NO options. Return JSON only.`,
   DUPLICATE_QUESTION: `CORRECTION — your previous response repeated a question stem across quizzes. Every question stem must be unique across all 3 quizzes. Return JSON only.`,
-  DUPLICATE_ANSWER_SET: `CORRECTION — your previous response repeated an entire answer set. Do not reuse the same four options for different questions. Return JSON only.`,
+  DUPLICATE_ANSWER_SET: `CORRECTION — your previous response reused the same entire answer set for two different questions (DUPLICATE_ANSWER_SET). Regenerate the full quiz set so every multiple-choice question has its OWN option set, different from every other question's. Options must stay distinct even after normalizing capitalization, punctuation, whitespace, and number formatting. Return JSON only.`,
   PLACEHOLDER_OR_TRUNCATION: `CORRECTION — your previous response contained placeholder or truncated text. Write every title, question, option, and rubric complete and concise with no placeholders or trailing ellipses. Return JSON only.`,
   FORBIDDEN_CONTEXT: `CORRECTION — your previous quiz response failed validation because it contained a teacher-facing or instructional-delivery question (FORBIDDEN_CONTEXT). Regenerate the ENTIRE quiz set with fresh questions.
 - Every question must test STUDENT learning from the supplied lesson content: what a student knows, understands, applies, or reasons about.
@@ -937,10 +1021,40 @@ export const TARGETED_RETRY_CORRECTIONS: Record<QuizValidationErrorCode, string>
   UNKNOWN_VALIDATION: `CORRECTION — your previous response failed quiz validation. Re-read every rule in this prompt, especially the output contract and question shapes, and regenerate a fully valid quiz set. Return JSON only.`,
 };
 
+/**
+ * Targeted repair block for DUPLICATE_ANSWER_SET, naming the exact colliding
+ * questions with a bounded excerpt of the previous response. The excerpt goes
+ * to the provider only (the provider generated it); it is never logged and
+ * never returned to clients.
+ */
+export function duplicateAnswerSetRetryDetail(detail: DuplicateAnswerSetDetail): string {
+  const listOptions = (options: string[]) => options
+    .slice(0, 4)
+    .map((option, index) => `${'ABCD'[index] || '?'}. ${option}`)
+    .join('\n');
+  return `TARGETED REPAIR — DUPLICATE_ANSWER_SET: two questions reused the same answer options.
+- Repeating question at ${detail.repeatPath}: "${detail.repeatQuestion}" with current options:
+${listOptions(detail.repeatOptions)}
+- It repeats the exact option set of the earlier question at ${detail.originalPath}: "${detail.originalQuestion}".
+Required correction:
+- Replace the repeating question's options with four NEW distinct options specific to that question (or write a fresh question on the same subtopic).
+- Preserve the question's topic and the correct answer's meaning.
+- Do not change unrelated questions.
+- Do not repeat normalized option text: options must differ by more than capitalization, punctuation, or whitespace, and numeric options must not normalize to the same value.
+- No two questions may share the same set of four options.
+- Return the complete corrected quiz set as JSON only.`;
+}
+
 /** The correction block appended to a retry prompt for a specific code. */
-export function targetedRetryCorrection(code: QuizValidationErrorCode): string {
+export function targetedRetryCorrection(
+  code: QuizValidationErrorCode,
+  duplicateDetail: DuplicateAnswerSetDetail | null = null,
+): string {
   const text = TARGETED_RETRY_CORRECTIONS[code] || TARGETED_RETRY_CORRECTIONS.UNKNOWN_VALIDATION;
-  return `\n\nVALIDATION FEEDBACK FOR THIS RETRY ATTEMPT\n${text}`;
+  const repair = code === 'DUPLICATE_ANSWER_SET' && duplicateDetail
+    ? `\n${duplicateAnswerSetRetryDetail(duplicateDetail)}`
+    : '';
+  return `\n\nVALIDATION FEEDBACK FOR THIS RETRY ATTEMPT\n${text}${repair}`;
 }
 
 /** Append a retry correction while respecting the hard prompt budget. */
@@ -1460,6 +1574,9 @@ async function attemptGenerationWithValidation(
     err.validationErrorCode = quizValidationErrorCode(validationError);
     err.validationPath = quizValidationPath(validationError);
     err.validationRule = quizValidationRule(validationError);
+    // Bounded DUPLICATE_ANSWER_SET context so the retry can name the exact
+    // colliding questions. Goes into the retry prompt only — never logged.
+    err.duplicateAnswerSet = duplicateAnswerSetDetail(validationError);
     err.failurePhase = failurePhaseForValidationCode(err.validationErrorCode);
     throw err;
   }
@@ -1546,6 +1663,9 @@ export async function handleRequest(req: Request): Promise<Response> {
     // The fallback attempt receives a correction targeting this exact error
     // instead of a byte-identical prompt that reproduces the same defect.
     let lastValidationErrorCode: QuizValidationErrorCode | null = null;
+    // Bounded collision context for a DUPLICATE_ANSWER_SET retry. Used only to
+    // build the targeted repair prompt; never logged or returned.
+    let lastDuplicateSetDetail: DuplicateAnswerSetDetail | null = null;
 
     const prompt = buildCompactPrompt(payload);
     const qualityContext = qualityContextFromPayload(payload);
@@ -1596,7 +1716,7 @@ export async function handleRequest(req: Request): Promise<Response> {
       try {
         const strategy: GenerationStrategy = lastValidationErrorCode ? 'targeted_retry' : 'initial';
         const attemptPrompt = lastValidationErrorCode
-          ? buildRetryPrompt(prompt, payload, targetedRetryCorrection(lastValidationErrorCode))
+          ? buildRetryPrompt(prompt, payload, targetedRetryCorrection(lastValidationErrorCode, lastDuplicateSetDetail))
           : prompt;
         const result = await attemptGenerationWithValidation(
           attemptPrompt,
@@ -1623,6 +1743,9 @@ export async function handleRequest(req: Request): Promise<Response> {
             && QUIZ_VALIDATION_ERROR_CODE_SET.has(err.validationErrorCode)
             ? err.validationErrorCode as QuizValidationErrorCode
             : 'UNKNOWN_VALIDATION';
+          lastDuplicateSetDetail = lastValidationErrorCode === 'DUPLICATE_ANSWER_SET'
+            ? duplicateAnswerSetDetail(err)
+            : null;
         }
         console.error('[generate-lesson-quizzes] provider failed final', {
           provider: route.provider,

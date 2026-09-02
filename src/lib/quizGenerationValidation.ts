@@ -433,7 +433,7 @@ export const QUIZ_VALIDATION_FAILURE_HINTS: Record<string, string> = {
   NUMERIC_DISTRACTOR: 'A generated question had invalid numeric answer choices, so the quiz set was rejected.',
   ARITHMETIC_ANSWER: 'A generated calculation question had a wrong or ambiguous answer, so the quiz set was rejected.',
   DUPLICATE_QUESTION: 'The model returned duplicate questions, so the quiz set was rejected.',
-  DUPLICATE_ANSWER_SET: 'The model returned duplicate answer options, so the quiz set was rejected.',
+  DUPLICATE_ANSWER_SET: 'The model reused the same answer options for more than one question, so the quiz set was rejected.',
   PLACEHOLDER_OR_TRUNCATION: 'A generated question was incomplete or contained placeholder text, so the quiz set was rejected.',
   QUIZ_COUNT: 'The model returned the wrong number of quizzes, so the quiz set was rejected.',
   QUIZ_SHAPE: 'A generated quiz was structurally invalid, so the quiz set was rejected.',
