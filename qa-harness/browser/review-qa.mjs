@@ -120,10 +120,15 @@ const b = await puppeteer.launch(LAUNCH);
   await selectPlan(p, 1);
   const pre = await text(p);
   rec('3a revisions: explains that teacher editing is re-enabled',
-      /unlocks the plan so the teacher can edit and resubmit/i.test(pre));
-  rec('3b revisions: ONE shared field, labelled as the teacher-facing note',
-      /Note for the teacher/i.test(pre)
-      && (await p.evaluate(()=>document.querySelectorAll('textarea').length))===1);
+      /unlocks the plan for the teacher to edit/i.test(pre));
+  rec('3b revisions: ONE shared field, accessibly named as the teacher note',
+      await p.evaluate(()=>{
+        const t=document.querySelectorAll('textarea');
+        if (t.length !== 1) return false;
+        const name = t[0].getAttribute('aria-label')
+          || document.querySelector(`label[for="${t[0].id}"]`)?.innerText || '';
+        return /note for the teacher/i.test(name);
+      }));
 
   await p.type('textarea', 'Please add differentiation for the lower group.');
   await clickBtn(p, /^Send back$/);
@@ -361,6 +366,44 @@ for (const [label, vw] of [['mobile 375', {width:375,height:800}], ['tablet 768'
       rec(`13 contrast: ${theme}/${mode}`, bad.length===0, bad.length?JSON.stringify(bad.slice(0,4)):'');
     }
   }
+  await p.close();
+}
+
+// ── 14. Sticky panel height on laptop screens ────────────────────────────
+for (const [label, vp] of [['1366x630 laptop',{width:1366,height:630}],
+                           ['1440x760 laptop',{width:1440,height:760}]]) {
+  const p = await open(b, 'n=20&lat=300', vp);
+  await selectPlan(p, 3);
+  const m = await p.evaluate(()=>{
+    const el=document.querySelector('[aria-labelledby="decision-heading"]');
+    const r=el.getBoundingClientRect();
+    return { pct:+(r.height/window.innerHeight*100).toFixed(1), h:+r.height.toFixed(0) };
+  });
+  // The lesson plan is the primary content: the decision bar must stay under
+  // 40% of the viewport so the plan keeps the majority of the screen.
+  rec(`14 ${label}: decision panel <=40% of viewport`, m.pct <= 40, JSON.stringify(m));
+  await p.close();
+}
+
+// ── 15. Note field growth does not move the buttons ──────────────────────
+{
+  const p = await open(b, 'n=20&lat=300', {width:1366,height:630});
+  await selectPlan(p, 3);
+  const approveY = () => p.evaluate(()=>{
+    const e=[...document.querySelectorAll('button')].find(x=>/Approve/.test(x.innerText));
+    return +e.getBoundingClientRect().y.toFixed(1);
+  });
+  const before = await approveY();
+  await p.focus('#decision-comment');
+  await sleep(400);
+  const focused = await approveY();
+  await p.type('#decision-comment', 'Add differentiation for the lower group.');
+  await sleep(400);
+  const typed = await approveY();
+  rec('15 note field: Approve never moves while typing',
+      before===focused && before===typed, `y ${before}/${focused}/${typed}`);
+  rec('15 note field: no layout shift from growth',
+      (await p.evaluate(()=>window.__cls||0)) < 0.001);
   await p.close();
 }
 

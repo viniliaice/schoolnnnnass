@@ -795,3 +795,18 @@ html[data-mode="light"] .review-chip-neutral { background-color: #f1f5f9; color:
 .review-decision-secondary:hover:not(:disabled) {
   background-color: color-mix(in srgb, var(--surface-2) 85%, var(--text) 15%);
 }
+
+/* Decision note field: compact at rest, roomier when actually in use. Animating
+   height (not min-height, and not any box above it) keeps the buttons from
+   jumping while the supervisor types. */
+.review-note {
+  /* 44px at rest: the compact state must still be a legal touch target. */
+  height: 2.75rem;
+  transition: height 180ms ease-out;
+}
+.review-note:focus,
+.review-note-filled { height: 4.75rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .review-note { transition: none; }
+}

@@ -58,7 +58,7 @@ export function DecisionPanel({
     <section
       aria-labelledby="decision-heading"
       className={cn(
-        'review-decision no-print z-10 rounded-2xl border-2 p-4 shadow-sm sm:p-5',
+        'review-decision no-print z-10 rounded-2xl border-2 p-3 shadow-sm sm:p-4',
         'lg:sticky lg:bottom-4',
       )}
     >
@@ -154,25 +154,31 @@ export function DecisionPanel({
         </div>
       ) : (
         <>
-          <label htmlFor="decision-comment" className="review-decision-text mt-3 block text-xs font-semibold">
-            Note for the teacher <span className="review-decision-muted font-normal">(optional)</span>
-          </label>
-          {/* rows=2 keeps the buttons above the fold on a laptop; the field is
-              resize-y for the rare long note. */}
+          {/* One line at rest, taller once focused or non-empty. The note is
+              optional and usually skipped, so it must not permanently reserve
+              three lines of a sticky bar that is already competing with the
+              lesson plan for laptop height. Height is animated, not the layout
+              box of anything above it, so nothing else moves. */}
           <textarea
             id="decision-comment"
+            aria-label="Note for the teacher (optional)"
             value={comment}
             onChange={(e) => onCommentChange(e.target.value)}
             placeholder={commentPlaceholder}
-            rows={2}
+            rows={1}
             disabled={busy}
-            className="mt-1 w-full resize-y rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm leading-6 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200 disabled:bg-slate-100"
+            className={cn(
+              'review-note mt-2 w-full resize-y rounded-lg border border-slate-300 bg-white px-3 py-2',
+              'text-sm leading-6 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200',
+              'disabled:bg-slate-100',
+              comment.trim() && 'review-note-filled',
+            )}
           />
 
-          <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {/* Approve is primary: solid fill, full width, first in DOM and
-                reading order. Send back / Reject are quiet outlines sharing the
-                row below — same weight as each other, clearly subordinate. */}
+          <div className="mt-2 grid gap-2 sm:grid-cols-4">
+            {/* Approve is primary: solid fill and double width, first in DOM
+                and reading order. Send back / Reject are quiet outlines of
+                equal weight beside it. One row keeps the sticky bar short. */}
             <button
               type="button"
               onClick={() => onDecide('approve')}
@@ -207,8 +213,8 @@ export function DecisionPanel({
             </button>
           </div>
 
-          <p className="review-decision-muted mt-2 text-xs">
-            Sending back unlocks the plan so the teacher can edit and resubmit.
+          <p className="review-decision-muted mt-1.5 text-xs leading-4">
+            Send back unlocks the plan for the teacher to edit.
           </p>
         </>
       )}
