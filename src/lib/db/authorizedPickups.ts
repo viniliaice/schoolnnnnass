@@ -117,9 +117,30 @@ export async function listAuthorizedPickups(): Promise<ManagedDriver[]> {
 }
 
 /**
- * Link an EXISTING driver to additional students anywhere in the school.
- * Mirrors recordRelease()'s client guard: an empty selection never reaches the
- * RPC (the RPC re-checks the same rule server-side).
+ * Search registered drivers by name or phone for the gate's "Add driver" picker.
+ * Returns driver IDENTITY only (no student/family data) — gate roles in SQL.
+ */
+export async function searchAuthorizedPickups(query: string): Promise<AuthorizedPickup[]> {
+  const { data, error } = await supabase.rpc('search_authorized_pickups', { p_query: query ?? '' });
+  if (error) throw error;
+  return (data ?? []) as AuthorizedPickup[];
+}
+
+/**
+ * Clear a student's driver assignment(s). Removes the junction rows only — the
+ * registered driver record is untouched. Gate roles in SQL.
+ */
+export async function removeStudentDriver(studentId: string): Promise<void> {
+  if (!studentId) throw new Error('A student is required.');
+  const { error } = await supabase.rpc('remove_student_driver', { p_student_id: studentId });
+  if (error) throw error;
+}
+
+/**
+ * Assign an EXISTING driver to students. REPLACE semantics: a student ends up
+ * with exactly ONE driver (the RPC clears any prior assignment first), so this
+ * is both "Add driver" and "Change driver". An empty selection never reaches
+ * the RPC (the RPC re-checks the same rule server-side).
  */
 export async function attachStudentsToAuthorizedPickup(
   pickupId: string,

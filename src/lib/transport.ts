@@ -71,13 +71,14 @@ export function normalizeName(name: unknown): string {
 }
 
 /**
- * The three choices staff pick from. There is deliberately no 'BUS' stored
- * value: the DB CHECK constraint is
- *   transport IS NULL OR transport IN ('WALKER','CAR','LEFT') OR transport ~ '^\d+$'
+ * The choices staff pick from. There is deliberately no 'BUS' stored value: the
+ * DB CHECK constraint is
+ *   transport IS NULL OR transport IN ('WALKER','CAR','DRIVER','LEFT') OR transport ~ '^\d+$'
  * so a bus rider IS the bus number ('9'). 'BUS' exists only in the UI, where
- * it is paired with a route number and stored as those digits.
+ * it is paired with a route number and stored as those digits. 'DRIVER' marks a
+ * student who leaves with an assigned registered driver (see the dismissal gate).
  */
-export type TransportChoice = 'WALKER' | 'CAR' | 'BUS';
+export type TransportChoice = 'WALKER' | 'CAR' | 'DRIVER' | 'BUS';
 
 /**
  * Canonical stored transport for a student.
@@ -97,7 +98,7 @@ export function normalizeTransport(transport: string | null | undefined): string
   if (value === '') return 'WALKER';
   if (value === 'LEFT') return 'LEFT';
   const upper = value.toUpperCase();
-  if (upper === 'WALKER' || upper === 'CAR') return upper;
+  if (upper === 'WALKER' || upper === 'CAR' || upper === 'DRIVER') return upper;
   if (/^\d+$/.test(value)) return value;
   return value;
 }
@@ -106,6 +107,7 @@ export function normalizeTransport(transport: string | null | undefined): string
 export function transportChoiceOf(transport: string | null | undefined): TransportChoice {
   const value = normalizeTransport(transport);
   if (value === 'CAR') return 'CAR';
+  if (value === 'DRIVER') return 'DRIVER';
   if (/^\d+$/.test(value)) return 'BUS';
   return 'WALKER';
 }
@@ -121,7 +123,7 @@ export function busNumberOf(transport: string | null | undefined): string {
  * Returns null when BUS is chosen without a route number (caller must block).
  */
 export function toStoredTransport(choice: TransportChoice, busNumber: string): string | null {
-  if (choice === 'WALKER' || choice === 'CAR') return choice;
+  if (choice === 'WALKER' || choice === 'CAR' || choice === 'DRIVER') return choice;
   const digits = (busNumber ?? '').replace(/\D/g, '');
   return digits === '' ? null : String(Number(digits));
 }
@@ -133,6 +135,7 @@ export function toStoredTransport(choice: TransportChoice, busNumber: string): s
 export function transportLabel(transport: string | null | undefined): string {
   const value = normalizeTransport(transport);
   if (value === 'WALKER' || value === 'CAR' || value === 'LEFT') return value;
+  if (value === 'DRIVER') return 'Driver';
   if (/^\d+$/.test(value)) return `Bus ${value}`;
   return value;
 }

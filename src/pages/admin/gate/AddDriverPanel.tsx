@@ -1,288 +1,130 @@
-// "Add Driver" form at the dismissal gate.
+// "Add driver" / "Change driver" picker at the dismissal gate.
 //
-// Staff scan a family card, see who is authorized to pick up its students, and
-// tap "Add driver" when the arriving adult isn't listed. The form is
-// deliberately fast: name, phone, relationship, which students they may pick
-// up (staff must explicitly select — none is pre-selected), and a REQUIRED
-// photo captured once at creation. There is no approval step and no
-// photo-pending lifecycle — saving creates a record that is immediately
-// usable for release in the same session.
-//
-// De-dupe: before creating a row the panel checks the phone against existing
-// drivers (server-side normalize_phone()). A match offers "attach to existing
-// driver" — which links the selected students to that person WITHOUT creating
-// a duplicate row — instead of the create path. "Create separate driver" is
-// the explicit override for two distinct people who share a number.
+// The driver record is the source of truth: staff SEARCH the registered drivers
+// (authorized_pickups) and SELECT one. This never creates a driver and never
+// accepts an arbitrary name — a student is assigned an existing driver via
+// attach_students_to_authorized_pickup(), which has REPLACE semantics (one
+// driver per student). Drivers themselves are registered on the /admin/drivers
+// management screen (admin + office).
 
 import { useEffect, useState } from 'react';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Search } from 'lucide-react';
 import { Dialog } from '../../../components/ui/Dialog';
-import { PhotoCapture } from '../../../components/photo/PhotoCapture';
 import { useToast } from '../../../context/ToastContext';
-import { supabase } from '../../../lib/supabase';
-import {
-  attachStudentsToAuthorizedPickup, createAuthorizedPickup, findAuthorizedPickupByPhone,
-  PICKUP_BUCKET, type AuthorizedPickup,
-} from '../../../lib/db/authorizedPickups';
-import { displayFamilyId } from '../../../lib/transport';
+import { attachStudentsToAuthorizedPickup, searchAuthorizedPickups, type AuthorizedPickup } from '../../../lib/db/authorizedPickups';
 import type { GateLookupRow } from '../../../lib/db/gate';
-import type { GateStrings } from '../../../lib/i18n/gateStrings';
+import type { GateLang, GateStrings } from '../../../lib/i18n/gateStrings';
 
 export function AddDriverPanel({
   open,
   onClose,
-  familyId,
-  students,
+  student,
   t,
-  onAdded,
+  onAssigned,
 }: {
   open: boolean;
   onClose: () => void;
-  familyId: string;
-  students: GateLookupRow[];
+  /** The single DRIVER-transport student being assigned a driver. */
+  student: GateLookupRow | null;
   t: GateStrings;
-  onAdded: () => void;
+  lang?: GateLang;
+  onAssigned: () => void;
 }) {
   const { addToast } = useToast();
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [relationship, setRelationship] = useState('');
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [photoBlob, setPhotoBlob] = useState<Blob | null>(null);
-  const [saving, setSaving] = useState(false);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<AuthorizedPickup[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [assigning, setAssigning] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // A driver whose normalized phone already matches — surfaced as "attach".
-  const [existing, setExisting] = useState<AuthorizedPickup | null>(null);
 
-  // Seed on open: NO student is pre-selected. Staff must explicitly choose
-  // which student(s) this driver is taking, so a driver is never silently
-  // authorized for siblings they aren't collecting.
   useEffect(() => {
     if (open) {
-      setName('');
-      setPhone('');
-      setRelationship('');
-      setSelected(new Set());
-      setPhotoBlob(null);
+      setQuery('');
+      setResults([]);
       setError(null);
-      setExisting(null);
+      setAssigning(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
-  const toggle = (id: string) =>
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // Debounce-free but cancelled-safe search: every keystroke queries the
+  // registered-driver list (identity only — no student/family data).
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setLoading(true);
+    searchAuthorizedPickups(query)
+      .then(list => { if (!cancelled) setResults(list); })
+      .catch(() => { if (!cancelled) setResults([]); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [open, query]);
 
-  const close = () => {
-    if (saving) return;
-    onClose();
-  };
-
-  /** Link the selected students to the EXISTING driver (de-dupe path). */
-  const attach = async () => {
-    if (!existing) return;
-    if (selected.size === 0) {
-      setError(t.selectStudentError);
-      return;
-    }
-    setSaving(true);
+  const assign = async (driver: AuthorizedPickup) => {
+    if (!student) return;
+    setAssigning(driver.id);
     setError(null);
     try {
-      await attachStudentsToAuthorizedPickup(existing.id, [...selected]);
+      await attachStudentsToAuthorizedPickup(driver.id, [student.id]);
       addToast({
         type: 'success',
-        title: `${t.addDriver}: ${existing.name}`,
-        description: `${selected.size} → ${displayFamilyId(familyId)}`,
+        title: `${t.assignDriver}: ${driver.name}`,
+        description: `${driver.name} · ${driver.phoneNumber}`,
       });
+      onAssigned();
       onClose();
-      onAdded();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
       addToast({ type: 'error', title: t.saveDriverFailed, description: message });
     } finally {
-      setSaving(false);
-    }
-  };
-
-  /** Validate + upload + create a NEW row (with/without the duplicate override). */
-  const doCreate = async (allowDuplicatePhone: boolean) => {
-    if (!photoBlob) {
-      setError(t.photoRequired);
-      setSaving(false);
-      return;
-    }
-    if (selected.size === 0) {
-      setError(t.selectStudentError);
-      setSaving(false);
-      return;
-    }
-
-    setSaving(true);
-    setError(null);
-    const id = `pickup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const path = `${id}.jpg`;
-    try {
-      // 1. Upload the photo (captured once at creation, permanent). The bucket
-      // is private; we store the object PATH, and the gate signs it for display.
-      const { error: uploadError } = await supabase.storage
-        .from(PICKUP_BUCKET)
-        .upload(path, photoBlob, { contentType: 'image/jpeg', upsert: true });
-      if (uploadError) throw uploadError;
-
-      // 2. Create the person + student links (role-checked in SQL).
-      await createAuthorizedPickup({
-        id,
-        name: name.trim(),
-        phoneNumber: phone.trim(),
-        relationship: relationship.trim(),
-        photoPath: path,
-        studentIds: [...selected],
-        allowDuplicatePhone,
-      });
-
-      addToast({
-        type: 'success',
-        title: `${t.addDriver}: ${name.trim()}`,
-        description: `${t.driverSavedFor} ${displayFamilyId(familyId)}`,
-      });
-      onClose();
-      onAdded();
-    } catch (err) {
-      // Best-effort cleanup of the uploaded object so a failed save doesn't
-      // leave an orphan in storage; the retry re-uploads with upsert anyway.
-      try {
-        await supabase.storage.from(PICKUP_BUCKET).remove([path]);
-      } catch {
-        /* non-critical */
-      }
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-      addToast({ type: 'error', title: t.saveDriverFailed, description: message });
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const save = async () => {
-    if (!name.trim() || !phone.trim()) {
-      setError(t.driverFieldsRequired);
-      return;
-    }
-    setSaving(true);
-    setError(null);
-    try {
-      // De-dupe: one driver per normalized phone. A match offers "attach"
-      // instead of creating a second row for the same person.
-      const match = await findAuthorizedPickupByPhone(phone.trim());
-      if (match) {
-        setExisting(match);
-        setSaving(false);
-        return;
-      }
-      await doCreate(false);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      setError(message);
-      setSaving(false);
+      setAssigning(null);
     }
   };
 
   return (
     <Dialog
       open={open}
-      onClose={close}
-      title={t.addDriver}
-      description={`${displayFamilyId(familyId)} · ${t.studentsForDriver}`}
+      onClose={onClose}
+      title={t.assignDriver}
+      description={student ? `${student.name} · ${student.className}` : undefined}
     >
-      <div className="space-y-4">
-        <div>
-          <label className="mb-1 block text-xs font-bold text-slate-500">{t.driverName}</label>
+      <div className="space-y-3">
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-3 top-2.5 h-4 w-4 text-slate-400" />
           <input
-            value={name}
-            onChange={e => { setName(e.target.value); setExisting(null); }}
-            placeholder={t.driverName}
-            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-600"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+            placeholder={t.searchDriver}
+            autoFocus
+            className="w-full rounded-xl border border-slate-300 py-2 pl-9 pr-3 text-sm focus:border-emerald-700 focus:outline-none"
           />
         </div>
 
-        <div>
-          <label className="mb-1 block text-xs font-bold text-slate-500">{t.driverPhone}</label>
-          <input
-            value={phone}
-            onChange={e => { setPhone(e.target.value); setExisting(null); }}
-            inputMode="tel"
-            placeholder={t.driverPhone}
-            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-600"
-          />
-        </div>
-
-        <div>
-          <label className="mb-1 block text-xs font-bold text-slate-500">{t.relationship}</label>
-          <input
-            value={relationship}
-            onChange={e => setRelationship(e.target.value)}
-            placeholder={t.relationshipPlaceholder}
-            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:border-emerald-600"
-          />
-        </div>
-
-        {/* De-dupe: an existing driver with this phone — attach instead. */}
-        {existing && (
-          <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-sm">
-            <p className="font-bold text-amber-900">{existing.name} · {existing.phoneNumber}</p>
-            <p className="mt-0.5 text-xs text-amber-700">{t.existingDriver}. {t.attachHint}</p>
-            <div className="mt-2 flex flex-wrap gap-2">
+        {loading ? (
+          <p className="py-6 text-center text-sm text-slate-400">…</p>
+        ) : results.length === 0 ? (
+          <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
+            {t.noDriversMatch}
+          </p>
+        ) : (
+          <div className="max-h-72 space-y-1.5 overflow-auto">
+            {results.map(d => (
               <button
-                onClick={() => void attach()}
-                disabled={saving}
-                className="rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-900 disabled:opacity-50"
+                key={d.id}
+                onClick={() => void assign(d)}
+                disabled={assigning !== null}
+                className="flex w-full items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-emerald-400 disabled:opacity-60"
               >
-                {t.attachToExisting} {existing.name}
+                <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-sm font-black text-emerald-800">
+                  {d.name.trim()[0]?.toUpperCase() ?? '?'}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-bold text-slate-800">{d.name}</span>
+                  <span className="block truncate text-xs text-slate-500">{d.phoneNumber}{d.relationship ? ` · ${d.relationship}` : ''}</span>
+                </span>
+                {assigning === d.id && <Loader2 className="h-4 w-4 animate-spin text-emerald-700" />}
               </button>
-              <button
-                onClick={() => { setExisting(null); void doCreate(true); }}
-                disabled={saving}
-                className="rounded-lg border border-amber-400 bg-white px-3 py-1.5 text-xs font-bold text-amber-800 hover:bg-amber-100"
-              >
-                {t.createSeparateDriver}
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Which students this driver may pick up (staff must select each). */}
-        <div>
-          <label className="mb-1 block text-xs font-bold text-slate-500">{t.studentsForDriver}</label>
-          <div className="space-y-1 rounded-xl border border-slate-200 p-2">
-            {students.map(s => (
-              <label
-                key={s.id}
-                className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-sm hover:bg-slate-50"
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.has(s.id)}
-                  onChange={() => toggle(s.id)}
-                  className="h-4 w-4 accent-emerald-700"
-                />
-                <span className="font-medium text-slate-700">{s.name}</span>
-                <span className="text-xs text-slate-400">{s.className}</span>
-              </label>
             ))}
-          </div>
-        </div>
-
-        {/* Required photo — captured once at creation. */}
-        {!existing && (
-          <div>
-            <label className="mb-1 block text-xs font-bold text-slate-500">{t.photoRequired}</label>
-            <PhotoCapture onChange={setPhotoBlob} takeLabel={t.takePhoto} retakeLabel={t.retakePhoto} />
           </div>
         )}
 
@@ -291,26 +133,6 @@ export function AddDriverPanel({
             {error}
           </p>
         )}
-
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={close}
-            disabled={saving}
-            className="min-h-[44px] rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-600 transition hover:bg-slate-50 disabled:opacity-50"
-          >
-            {t.cancel}
-          </button>
-          {!existing && (
-            <button
-              onClick={() => void save()}
-              disabled={saving}
-              className="inline-flex min-h-[44px] items-center gap-1.5 rounded-xl bg-emerald-800 px-5 py-2 text-sm font-black text-white transition hover:bg-emerald-900 disabled:opacity-50"
-            >
-              {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-              {saving ? t.saving : `✓ ${t.saveDriver}`}
-            </button>
-          )}
-        </div>
       </div>
     </Dialog>
   );

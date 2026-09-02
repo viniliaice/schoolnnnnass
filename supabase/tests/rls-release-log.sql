@@ -126,12 +126,12 @@ BEGIN
   IF position('integrity_constraint_violation' in v_def) = 0 THEN
     RAISE EXCEPTION 'record_release() lacks the student-belongs-to-family integrity check';
   END IF;
-  -- When a pickup person is named, they must be authorized for this student.
+  -- A driver release must be to a driver actually assigned to this student.
   IF position('authorized_pickup_students' in v_def) = 0 THEN
-    RAISE EXCEPTION 'record_release() lacks the driver-is-authorized-for-student check';
+    RAISE EXCEPTION 'record_release() lacks the driver-is-assigned-for-student check';
   END IF;
-  -- A release must never silently succeed without a specific selected driver.
-  IF position('A driver must be selected before releasing a student' in v_def) = 0 THEN
+  -- A DRIVER student must not release without a specific selected driver.
+  IF position('A driver must be selected before releasing this student' in v_def) = 0 THEN
     RAISE EXCEPTION 'record_release() does not require a selected driver';
   END IF;
 END $$;

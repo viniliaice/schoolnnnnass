@@ -48,30 +48,31 @@ export interface ReleaseRecord {
   studentId: string;
   familyId: string;
   staffId: string;
-  /** The authorized pickup person who received the child (always set). */
-  pickupPersonId: string;
+  /** The assigned driver who received the child — NULL for a walking release. */
+  pickupPersonId: string | null;
+  /** 'driver' when released to a driver, 'walking' otherwise. */
+  mode: 'driver' | 'walking';
   createdAt: string;
 }
 
 /**
- * Record a successful handoff. A specific, staff-selected driver is REQUIRED:
- * the wrapper refuses an empty selection, and the RPC independently rejects a
- * missing driver and verifies the driver is actually authorized for this
- * student (see supabase/migrations/20260901_authorized_pickups.sql). There is
- * no fallback path that releases without a driver on record.
+ * Record a successful handoff. The RPC decides driver-vs-walking from the
+ * student's transport:
+ *  - walking/car → pass `null`; released one-click.
+ *  - driver      → pass the assigned registered driver id; the RPC rejects a
+ *    missing driver, an unknown driver, or a driver not assigned to the student.
+ *  - bus/left/unknown → the RPC rejects the release outright.
+ * The RPC also refuses a second release of the same student on the same day.
  */
 export async function recordRelease(
   studentId: string,
   familyId: string,
-  pickupPersonId: string,
+  pickupPersonId: string | null,
 ): Promise<ReleaseRecord> {
-  if (!pickupPersonId) {
-    throw new Error('A driver must be selected before releasing a student.');
-  }
   const { data, error } = await supabase.rpc('record_release', {
     p_student_id: studentId,
     p_family_id: familyId,
-    p_pickup_person_id: pickupPersonId,
+    p_pickup_person_id: pickupPersonId ?? null,
   });
   if (error) throw error;
   return data as ReleaseRecord;

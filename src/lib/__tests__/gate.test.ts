@@ -51,29 +51,44 @@ describe('lookupGateFamily', () => {
 });
 
 describe('recordRelease', () => {
-  it('records a successful handoff with the selected driver, staff, and timestamp', async () => {
+  it('records a driver release with the assigned driver, staff, and timestamp', async () => {
     rpc.mockResolvedValue({
-      data: { id: 7, studentId: 's1', familyId: '0421', staffId: 'office-umal', pickupPersonId: 'pickup-1', createdAt: '2026-08-02T14:00:00Z' },
+      data: { id: 7, studentId: 's1', familyId: '0421', staffId: 'office-umal', pickupPersonId: 'pickup-1', mode: 'driver', createdAt: '2026-08-02T14:00:00Z' },
       error: null,
     });
     const record = await recordRelease('s1', '0421', 'pickup-1');
-    expect(record).toMatchObject({ studentId: 's1', familyId: '0421', staffId: 'office-umal', pickupPersonId: 'pickup-1' });
+    expect(record).toMatchObject({ studentId: 's1', familyId: '0421', staffId: 'office-umal', pickupPersonId: 'pickup-1', mode: 'driver' });
     expect(rpc).toHaveBeenCalledWith('record_release', { p_student_id: 's1', p_family_id: '0421', p_pickup_person_id: 'pickup-1' });
   });
 
-  it('refuses to release with no driver selected (never calls the RPC)', async () => {
-    await expect(recordRelease('s1', '0421', '')).rejects.toThrow(/driver must be selected/);
-    await expect(recordRelease('s1', '0421', '' as unknown as string)).rejects.toThrow(/driver must be selected/);
-    expect(rpc).not.toHaveBeenCalled();
+  it('records a walking release with a null driver (one-click)', async () => {
+    rpc.mockResolvedValue({
+      data: { id: 8, studentId: 's2', familyId: '0421', staffId: 'office-umal', pickupPersonId: null, mode: 'walking', createdAt: '2026-08-02T14:01:00Z' },
+      error: null,
+    });
+    const record = await recordRelease('s2', '0421', null);
+    expect(record.pickupPersonId).toBeNull();
+    expect(record.mode).toBe('walking');
+    expect(rpc).toHaveBeenCalledWith('record_release', { p_student_id: 's2', p_family_id: '0421', p_pickup_person_id: null });
   });
 
-  it('throws when the RPC rejects the release (e.g. student not in family)', async () => {
-    rpc.mockResolvedValue({ data: null, error: { message: 'Student does not belong to the given family.' } });
-    await expect(recordRelease('s1', '9999', 'pickup-1')).rejects.toThrow(/does not belong/);
+  it('throws when the RPC rejects a bus student', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'Bus students cannot be released through the Dismissal Gate.' } });
+    await expect(recordRelease('s1', '0421', null)).rejects.toThrow(/Bus students/);
   });
 
-  it('throws when the driver is not authorized for the student', async () => {
-    rpc.mockResolvedValue({ data: null, error: { message: 'Driver is not authorized to pick up this student.' } });
-    await expect(recordRelease('s1', '0421', 'pickup-9')).rejects.toThrow(/not authorized/);
+  it('throws when the RPC rejects a missing driver for a DRIVER student', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'A driver must be selected before releasing this student.' } });
+    await expect(recordRelease('s1', '0421', null)).rejects.toThrow(/driver must be selected/);
+  });
+
+  it('throws when the RPC rejects an unassigned driver', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'Driver is not assigned to this student.' } });
+    await expect(recordRelease('s1', '0421', 'pickup-9')).rejects.toThrow(/not assigned/);
+  });
+
+  it('throws when the RPC rejects a double release', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'Student has already been released today.' } });
+    await expect(recordRelease('s1', '0421', 'pickup-1')).rejects.toThrow(/already been released/);
   });
 });

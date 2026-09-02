@@ -181,7 +181,7 @@ BEGIN
   END IF;
 END $$;
 
--- ── 9. record_release() REQUIRES a selected driver ────────────────────────
+-- ── 9. record_release() REQUIRES a selected driver for a DRIVER student ───
 DO $$
 DECLARE
   v_def TEXT;
@@ -190,8 +190,12 @@ BEGIN
   IF v_def IS NULL THEN
     RAISE EXCEPTION 'record_release() does not exist';
   END IF;
-  IF position('A driver must be selected before releasing a student' in v_def) = 0 THEN
+  IF position('A driver must be selected before releasing this student' in v_def) = 0 THEN
     RAISE EXCEPTION 'record_release() does not reject a missing driver';
+  END IF;
+  -- The driver must actually be assigned to the student.
+  IF position('Driver is not assigned to this student' in v_def) = 0 THEN
+    RAISE EXCEPTION 'record_release() does not reject an unassigned driver';
   END IF;
 END $$;
 

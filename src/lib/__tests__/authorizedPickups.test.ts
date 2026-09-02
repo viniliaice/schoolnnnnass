@@ -14,7 +14,8 @@ vi.mock('../supabase', () => ({
 import { supabase } from '../supabase';
 import {
   attachStudentsToAuthorizedPickup, createAuthorizedPickup, findAuthorizedPickupByPhone,
-  findDriverByPhone, getFamilyPickups, listAuthorizedPickups, removeStudentFromAuthorizedPickup,
+  findDriverByPhone, getFamilyPickups, listAuthorizedPickups, removeStudentDriver,
+  removeStudentFromAuthorizedPickup, searchAuthorizedPickups,
   resolvePickupPhotoUrls, PICKUP_BUCKET, type ManagedDriver,
 } from '../db/authorizedPickups';
 
@@ -172,6 +173,40 @@ describe('attachStudentsToAuthorizedPickup', () => {
   it('throws when the RPC rejects (e.g. driver not found)', async () => {
     rpc.mockResolvedValue({ data: null, error: { message: 'Driver not found.' } });
     await expect(attachStudentsToAuthorizedPickup('nope', ['s1'])).rejects.toThrow(/Driver not found/);
+  });
+});
+
+describe('searchAuthorizedPickups', () => {
+  it('searches registered drivers (identity only) for the gate picker', async () => {
+    rpc.mockResolvedValue({
+      data: [
+        { id: 'pickup-1', name: 'ASKO', phoneNumber: '980797', relationship: null, photoPath: 'pickup-1.jpg', addedAt: '' },
+        { id: 'pickup-2', name: 'MOHAMED', phoneNumber: '982115', relationship: null, photoPath: 'pickup-2.jpg', addedAt: '' },
+      ],
+      error: null,
+    });
+    const results = await searchAuthorizedPickups('ASKO');
+    expect(results).toHaveLength(2);
+    expect(results[0].name).toBe('ASKO');
+    expect(rpc).toHaveBeenCalledWith('search_authorized_pickups', { p_query: 'ASKO' });
+  });
+
+  it('returns [] on empty results', async () => {
+    rpc.mockResolvedValue({ data: [], error: null });
+    await expect(searchAuthorizedPickups('zzz')).resolves.toEqual([]);
+  });
+});
+
+describe('removeStudentDriver', () => {
+  it('clears a student assignment via the student-centric RPC', async () => {
+    rpc.mockResolvedValue({ data: { studentId: 's1', removed: true }, error: null });
+    await removeStudentDriver('s1');
+    expect(rpc).toHaveBeenCalledWith('remove_student_driver', { p_student_id: 's1' });
+  });
+
+  it('rejects an empty student WITHOUT calling the RPC', async () => {
+    await expect(removeStudentDriver('')).rejects.toThrow(/required/);
+    expect(rpc).not.toHaveBeenCalled();
   });
 });
 

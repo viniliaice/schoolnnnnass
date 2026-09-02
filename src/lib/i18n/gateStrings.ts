@@ -69,6 +69,18 @@ export interface GateStrings {
   attachHint: string;
   attachToExisting: string;
   createSeparateDriver: string;
+  // Transport eligibility (walking / driver / bus) at the gate.
+  notEligible: string;
+  driverNotAssigned: string;
+  changeDriver: string;
+  removeDriver: string;
+  searchDriver: string;
+  assignDriver: string;
+  noDriversMatch: string;
+  releaseAllFor: string;
+  studentsAssigned: string;
+  bulkReleased: string;
+  releaseFailedBulk: string;
 }
 
 const SO: GateStrings = {
@@ -129,6 +141,17 @@ const SO: GateStrings = {
   attachHint: 'Ardayda la doortay ku dar dareewalahan hore u jira, halkii aad mid cusub abuuri lahayd',
   attachToExisting: 'Ku dar',
   createSeparateDriver: 'Abuur dareewale cusub',
+  notEligible: 'Kuma jiro Iridda Dugsiga',
+  driverNotAssigned: 'Dareewale looma qorin',
+  changeDriver: 'Beddel dareewale',
+  removeDriver: 'Ka saar dareewale',
+  searchDriver: 'Raadi dareewale…',
+  assignDriver: 'Dooro dareewale',
+  noDriversMatch: 'Dareewale la raadiyay lama helin',
+  releaseAllFor: 'Ku sii day dhammaan',
+  studentsAssigned: 'arday ayaa loo qoray',
+  bulkReleased: 'waa la siiyay',
+  releaseFailedBulk: 'waa fashilantay',
 };
 
 const EN: GateStrings = {
@@ -189,6 +212,17 @@ const EN: GateStrings = {
   attachHint: 'Attach the selected students to this driver instead of creating a duplicate',
   attachToExisting: 'Attach to',
   createSeparateDriver: 'Create separate driver',
+  notEligible: 'Not eligible for Dismissal Gate',
+  driverNotAssigned: 'Driver not assigned',
+  changeDriver: 'Change driver',
+  removeDriver: 'Remove driver',
+  searchDriver: 'Search driver…',
+  assignDriver: 'Assign driver',
+  noDriversMatch: 'No drivers match your search',
+  releaseAllFor: 'Release all for',
+  studentsAssigned: 'students assigned',
+  bulkReleased: 'released',
+  releaseFailedBulk: 'release failed',
 };
 
 export const GATE_STRINGS: Record<GateLang, GateStrings> = { so: SO, en: EN };
@@ -197,13 +231,14 @@ export function gateT(lang: GateLang): GateStrings {
   return GATE_STRINGS[lang];
 }
 
-/** Localized transport badge: 'WALKER' → 'Lug'/'Walker', '9' → 'Bas 9'/'Bus 9'. */
+/** Localized transport badge: 'WALKER' → 'Lug'/'Walker', 'DRIVER' → 'Dareewale'/'Driver', '9' → 'Bas 9'/'Bus 9'. */
 export function gateTransportLabel(lang: GateLang, transport: string | null | undefined): string {
   // Empty transport is WALKER at the gate too, so dismissal never shows '—'
   // for a child who simply walks home.
   const value = normalizeTransport(transport);
   if (value === 'WALKER') return lang === 'so' ? 'Lug' : 'Walker';
   if (value === 'CAR') return lang === 'so' ? 'Gaari' : 'Car';
+  if (value === 'DRIVER') return lang === 'so' ? 'Dareewale' : 'Driver';
   if (/^\d+$/.test(value)) return lang === 'so' ? `Bas ${value}` : `Bus ${value}`;
   return value;
 }

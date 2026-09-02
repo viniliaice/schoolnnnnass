@@ -6,12 +6,14 @@
 // set_student_transport(), so a sibling can never be changed by accident.
 //
 // There is no 'BUS' value in the database. The CHECK constraint is
-//   transport IS NULL OR transport IN ('WALKER','CAR','LEFT') OR transport ~ '^\d+$'
+//   transport IS NULL OR transport IN ('WALKER','CAR','DRIVER','LEFT') OR transport ~ '^\d+$'
 // so choosing Bus means storing the route number ('9'). That is why the route
-// field appears only for Bus and is required before Save enables.
+// field appears only for Bus and is required before Save enables. 'DRIVER'
+// marks a student who leaves with an assigned registered driver (see the
+// dismissal gate).
 
 import { useEffect, useState } from 'react';
-import { Bus, Car, Footprints, Loader2 } from 'lucide-react';
+import { Bus, Car, Footprints, Loader2, UserRound } from 'lucide-react';
 import {
   busNumberOf, toStoredTransport, transportChoiceOf, transportLabel,
   type TransportChoice,
@@ -23,6 +25,7 @@ import type { Student } from '../../../types';
 const CHOICES: Array<{ value: TransportChoice; label: string; Icon: typeof Bus }> = [
   { value: 'WALKER', label: 'Walker', Icon: Footprints },
   { value: 'CAR', label: 'Car', Icon: Car },
+  { value: 'DRIVER', label: 'Driver', Icon: UserRound },
   { value: 'BUS', label: 'Bus', Icon: Bus },
 ];
 
