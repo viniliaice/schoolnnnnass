@@ -1,4 +1,5 @@
--- RLS / schema assertions for Dismissal Gate eligibility (20260903_gate_eligibility.sql).
+-- RLS / schema assertions for Dismissal Gate eligibility
+-- (20260903_gate_eligibility.sql + 20260904_gate_walking_driver.sql).
 --
 -- Run against a database with the migrations applied:
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/rls-gate-eligibility.sql

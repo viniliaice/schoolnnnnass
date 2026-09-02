@@ -68,6 +68,12 @@ data) so supervisor at the gate cannot cross-reference families through a shared
   pickup (driver OR walking-with-driver); unique (studentId, UTC day).
 
 ### New/changed RPCs
+Migrations are append-only: `20260903_gate_eligibility.sql` adds the transport
+CHECK (`DRIVER`), the walking/driver/bus release classification, the per-day
+double-release UNIQUE index (with same-day dedup), `remove_student_driver()`, and
+`search_authorized_pickups()`. `20260904_gate_walking_driver.sql` then relaxes the
+release rule for walking-with-a-driver and adds bus rejection to assignment.
+
 - `record_release(student_id, family_id, pickup_person_id)` — pickup nullable.
   - no driver → walking release (WALKER/CAR only; a DRIVER student is rejected and
     must pick a driver).
