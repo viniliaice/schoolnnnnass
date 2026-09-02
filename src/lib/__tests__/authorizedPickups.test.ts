@@ -174,6 +174,11 @@ describe('attachStudentsToAuthorizedPickup', () => {
     rpc.mockResolvedValue({ data: null, error: { message: 'Driver not found.' } });
     await expect(attachStudentsToAuthorizedPickup('nope', ['s1'])).rejects.toThrow(/Driver not found/);
   });
+
+  it('surfaces a bus-student rejection from the server', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'Bus students cannot be assigned a driver.' } });
+    await expect(attachStudentsToAuthorizedPickup('pickup-1', ['s-bus'])).rejects.toThrow(/Bus students/);
+  });
 });
 
 describe('searchAuthorizedPickups', () => {

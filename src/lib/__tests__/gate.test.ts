@@ -72,6 +72,16 @@ describe('recordRelease', () => {
     expect(rpc).toHaveBeenCalledWith('record_release', { p_student_id: 's2', p_family_id: '0421', p_pickup_person_id: null });
   });
 
+  it('records a walking student released to an assigned driver (temporary pickup)', async () => {
+    rpc.mockResolvedValue({
+      data: { id: 9, studentId: 's3', familyId: '0421', staffId: 'office-umal', pickupPersonId: 'pickup-1', mode: 'driver', createdAt: '2026-08-02T14:02:00Z' },
+      error: null,
+    });
+    const record = await recordRelease('s3', '0421', 'pickup-1');
+    expect(record).toMatchObject({ studentId: 's3', pickupPersonId: 'pickup-1', mode: 'driver' });
+    expect(rpc).toHaveBeenCalledWith('record_release', { p_student_id: 's3', p_family_id: '0421', p_pickup_person_id: 'pickup-1' });
+  });
+
   it('throws when the RPC rejects a bus student', async () => {
     rpc.mockResolvedValue({ data: null, error: { message: 'Bus students cannot be released through the Dismissal Gate.' } });
     await expect(recordRelease('s1', '0421', null)).rejects.toThrow(/Bus students/);

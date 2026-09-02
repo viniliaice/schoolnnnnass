@@ -57,11 +57,13 @@ export interface ReleaseRecord {
 
 /**
  * Record a successful handoff. The RPC decides driver-vs-walking from the
- * student's transport:
- *  - walking/car → pass `null`; released one-click.
- *  - driver      → pass the assigned registered driver id; the RPC rejects a
- *    missing driver, an unknown driver, or a driver not assigned to the student.
- *  - bus/left/unknown → the RPC rejects the release outright.
+ * arguments:
+ *  - pass `null`        → a walking release (WALKER/CAR only; a DRIVER student
+ *                         is rejected and must pick a driver first).
+ *  - pass a driver id   → a driver pickup; allowed for WALKER, CAR, and DRIVER
+ *                         students whose current assignment IS that driver. A
+ *                         walking student's permanent transport stays unchanged.
+ *  - bus/left/unknown   → the RPC rejects the release outright.
  * The RPC also refuses a second release of the same student on the same day.
  */
 export async function recordRelease(

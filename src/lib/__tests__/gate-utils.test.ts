@@ -66,27 +66,29 @@ describe('gateEligibility (transport → release class)', () => {
 
 describe('buildBulkReleasePlan', () => {
   const students = [
-    { id: 's1', transport: 'DRIVER' }, // assigned to d1
-    { id: 's2', transport: 'DRIVER' }, // assigned to d1
-    { id: 's3', transport: 'DRIVER' }, // assigned to d2
-    { id: 's4', transport: '9' },      // bus — excluded even if assigned
-    { id: 's5', transport: 'WALKER' }, // walking — excluded from driver bulk
-    { id: 's6', transport: 'DRIVER' }, // no assignment
+    { id: 's1', transport: 'WALKER' }, // walking, assigned to d1 (temporary pickup)
+    { id: 's2', transport: 'DRIVER' }, // driver, assigned to d1
+    { id: 's3', transport: 'DRIVER' }, // driver, assigned to d2
+    { id: 's4', transport: '9' },      // bus — never included, even if assigned
+    { id: 's5', transport: 'WALKER' }, // walking, unassigned
+    { id: 's6', transport: 'DRIVER' }, // driver, unassigned
+    { id: 's7', transport: 'LEFT' },   // left — never included
   ];
   const assignments: Record<string, string> = {
-    s1: 'd1', s2: 'd1', s3: 'd2', s4: 'd1', s6: '',
+    s1: 'd1', s2: 'd1', s3: 'd2', s4: 'd1', s6: '', s7: 'd1',
   };
 
-  it('releases exactly the DRIVER students assigned to that driver', () => {
+  it('includes walking AND driver students assigned to that driver', () => {
     expect(buildBulkReleasePlan(students, assignments, 'd1')).toEqual(['s1', 's2']);
   });
 
-  it('never includes bus students, walking students, or other drivers', () => {
+  it('never includes bus, LEFT, other drivers, or unassigned students', () => {
     const plan = buildBulkReleasePlan(students, assignments, 'd1');
-    expect(plan).not.toContain('s4'); // bus
-    expect(plan).not.toContain('s5'); // walking
+    expect(plan).not.toContain('s4'); // bus (assigned but excluded)
+    expect(plan).not.toContain('s5'); // walking unassigned
     expect(plan).not.toContain('s3'); // other driver
-    expect(plan).not.toContain('s6'); // unassigned driver student
+    expect(plan).not.toContain('s6'); // driver unassigned
+    expect(plan).not.toContain('s7'); // LEFT
   });
 });
 

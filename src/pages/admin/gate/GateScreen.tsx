@@ -10,9 +10,12 @@
 //   same path as the keypad (no extra code).
 //
 // Transport eligibility (2026-09-03): the gate is NOT for every student.
-//   walking  (WALKER / CAR / unset) → one-click release, no driver.
+//   walking  (WALKER / CAR / unset) → one-click release, AND may be assigned a
+//                                      registered driver for a temporary pickup
+//                                      (permanent transport is left unchanged).
 //   driver   (DRIVER)               → release requires an assigned registered driver.
-//   bus      (numeric)              → never released here (no button; server rejects).
+//   bus      (numeric)              → never released or assigned (no buttons;
+//                                      the server rejects both).
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
@@ -23,7 +26,7 @@ import { errorBuzz, successBeep } from '../../../lib/gate/beep';
 import { gateT, gateTransportLabel, type GateLang } from '../../../lib/i18n/gateStrings';
 import { displayFamilyId } from '../../../lib/transport';
 import { useToast } from '../../../context/ToastContext';
-import { AddDriverPanel } from './AddDriverPanel';
+import { AssignDriverPanel } from './AssignDriverPanel';
 
 type GateStatus = 'idle' | 'checking' | 'found' | 'not-found' | 'error';
 type CameraState = 'off' | 'starting' | 'on' | 'denied';
@@ -55,7 +58,8 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
   const [pickupsLoading, setPickupsLoading] = useState(false);
   // personId -> signed photo URL (private bucket; resolved per render).
   const [photoUrls, setPhotoUrls] = useState<Map<string, string>>(new Map());
-  // The DRIVER-transport student currently being assigned a driver.
+  // The eligible student (walking or driver transport) currently being assigned
+  // a registered driver.
   const [pickerStudent, setPickerStudent] = useState<GateLookupRow | null>(null);
   // Result of the last "Release all for X" (partial-failure aware).
   const [bulkSummary, setBulkSummary] = useState<BulkSummary | null>(null);
@@ -109,8 +113,9 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
 
   const driverById = useMemo(() => new Map((pickups ?? []).map(p => [p.id, p])), [pickups]);
 
-  // Record one handoff. The RPC branches on transport: walking (driverId null)
-  // vs driver (driverId required + assigned). Bus/LEFT/unknown are rejected.
+  // Record one handoff. driverId null = a plain walking release; a driver id =
+  // a driver pickup (walking or DRIVER transport). Bus/LEFT/unknown are rejected
+  // by the RPC, and a DRIVER student without an assignment cannot release.
   const handleRelease = useCallback(async (student: GateLookupRow, familyId: string, driverId: string | null) => {
     setReleasing(prev => ({ ...prev, [student.id]: true }));
     setReleaseErrors(prev => ({ ...prev, [student.id]: false }));
@@ -386,7 +391,6 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
             {pickupsLoading ? null : (
               <BulkReleaseButtons
                 students={result.students}
-                pickups={pickups ?? []}
                 assignmentByStudent={assignmentByStudent}
                 driverById={driverById}
                 released={released}
@@ -404,6 +408,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
               const driver = driverById.get(assignmentByStudent[s.id]);
 
               if (eligibility === 'excluded') {
+                const isBus = /^\d+$/.test((s.transport ?? '').trim());
                 return (
                   <div key={s.id} className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3">
                     <div className="min-w-0">
@@ -411,46 +416,31 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
                       <div className="text-sm text-slate-500">{s.className}</div>
                     </div>
                     <div className="shrink-0 text-right">
-                      <div className="text-sm font-semibold text-slate-600">🚌 {gateTransportLabel(lang, s.transport)}</div>
+                      <div className="text-sm font-semibold text-slate-600">
+                        {isBus ? '🚌 ' : ''}{gateTransportLabel(lang, s.transport)}
+                      </div>
                       <div className="text-xs font-semibold text-amber-700">{t.notEligible}</div>
                     </div>
                   </div>
                 );
               }
 
-              if (eligibility === 'walking') {
-                return (
-                  <div key={s.id} className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white p-3">
-                    <div className="min-w-0">
-                      <div className="text-lg font-bold">{s.name}</div>
-                      <div className="text-sm text-slate-500">{s.className} · 🚶 {gateTransportLabel(lang, s.transport)}</div>
-                      {releasedAt && (
-                        <div className="text-xs font-semibold text-emerald-700">{t.releasedAt}: {new Date(releasedAt).toLocaleTimeString()}</div>
-                      )}
-                      {releaseErrors[s.id] && <div className="text-xs font-semibold text-red-600">{t.releaseFailed}</div>}
-                    </div>
-                    {releasedAt ? (
-                      <span className="shrink-0 rounded-full bg-emerald-700 px-3 py-1 text-xs font-black text-white">✓ {t.released}</span>
-                    ) : (
-                      <button
-                        onClick={() => void handleRelease(s, result.familyId, null)}
-                        disabled={!!releasing[s.id]}
-                        className="min-h-[44px] shrink-0 rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50"
-                      >
-                        {releasing[s.id] ? t.releasing : `✓ ${t.release}`}
-                      </button>
-                    )}
-                  </div>
-                );
-              }
+              // Eligible: walking (WALKER/CAR) or driver (DRIVER) transport.
+              // `driver` is the student's CURRENT pickup assignment — it may be
+              // set on a walking student for a temporary pickup, and the
+              // student's permanent transport is never overwritten.
+              const isWalking = eligibility === 'walking';
+              const badge = driver
+                ? `🚗 ${isWalking ? t.driverPickup : gateTransportLabel(lang, s.transport)}`
+                : `${isWalking ? '🚶' : '🚗'} ${gateTransportLabel(lang, s.transport)}`;
+              const canRelease = isWalking || Boolean(driver);
 
-              // driver student
               return (
                 <div key={s.id} className="mt-2 rounded-xl border border-emerald-200 bg-white p-3">
                   <div className="flex items-center justify-between gap-3">
                     <div className="min-w-0">
                       <div className="text-lg font-bold">{s.name}</div>
-                      <div className="text-sm text-slate-500">{s.className} · 🚗 {gateTransportLabel(lang, s.transport)}</div>
+                      <div className="text-sm text-slate-500">{s.className} · {badge}</div>
                       <div className="mt-0.5 text-sm font-semibold text-slate-700">
                         {driver ? `${driver.name} · ${driver.phoneNumber}` : t.driverNotAssigned}
                       </div>
@@ -459,41 +449,47 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
                       )}
                       {releaseErrors[s.id] && <div className="text-xs font-semibold text-red-600">{t.releaseFailed}</div>}
                     </div>
-                    {releasedAt ? (
-                      <span className="shrink-0 rounded-full bg-emerald-700 px-3 py-1 text-xs font-black text-white">✓ {t.released}</span>
-                    ) : driver ? (
-                      <button
-                        onClick={() => void handleRelease(s, result.familyId, driver.id)}
-                        disabled={!!releasing[s.id]}
-                        className="min-h-[44px] shrink-0 rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50"
-                      >
-                        {releasing[s.id] ? t.releasing : `✓ ${t.release}`}
-                      </button>
-                    ) : (
-                      <button
-                        onClick={() => setPickerStudent(s)}
-                        className="min-h-[44px] shrink-0 rounded-xl bg-amber-500 px-4 text-sm font-black text-white shadow-sm transition active:scale-95"
-                      >
-                        + {t.addDriver}
-                      </button>
-                    )}
-                  </div>
-                  {driver && !releasedAt && (
-                    <div className="mt-2 flex gap-2">
-                      <button
-                        onClick={() => setPickerStudent(s)}
-                        className="min-h-[36px] rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-600 transition hover:bg-slate-50"
-                      >
-                        {t.changeDriver}
-                      </button>
-                      <button
-                        onClick={() => void handleRemoveDriver(s, result.familyId)}
-                        className="min-h-[36px] rounded-lg border border-rose-300 bg-white px-3 text-xs font-bold text-rose-700 transition hover:bg-rose-50"
-                      >
-                        {t.removeDriver}
-                      </button>
+                    <div className="flex shrink-0 flex-col items-end gap-1.5">
+                      {releasedAt ? (
+                        <span className="rounded-full bg-emerald-700 px-3 py-1 text-xs font-black text-white">✓ {t.released}</span>
+                      ) : (
+                        <>
+                          {canRelease && (
+                            <button
+                              onClick={() => void handleRelease(s, result.familyId, driver?.id ?? null)}
+                              disabled={!!releasing[s.id]}
+                              className="min-h-[44px] shrink-0 rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50"
+                            >
+                              {releasing[s.id] ? t.releasing : `✓ ${t.release}`}
+                            </button>
+                          )}
+                          {driver ? (
+                            <button
+                              onClick={() => setPickerStudent(s)}
+                              className="min-h-[36px] shrink-0 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-600 transition hover:bg-slate-50"
+                            >
+                              {t.changeDriver}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => setPickerStudent(s)}
+                              className="min-h-[44px] shrink-0 rounded-xl bg-amber-500 px-4 text-sm font-black text-white shadow-sm transition active:scale-95"
+                            >
+                              + {t.addDriver}
+                            </button>
+                          )}
+                          {driver && (
+                            <button
+                              onClick={() => void handleRemoveDriver(s, result.familyId)}
+                              className="min-h-[36px] shrink-0 rounded-lg border border-rose-300 bg-white px-3 text-xs font-bold text-rose-700 transition hover:bg-rose-50"
+                            >
+                              {t.removeDriver}
+                            </button>
+                          )}
+                        </>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </div>
               );
             })}
@@ -542,8 +538,8 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
         </div>
       )}
 
-      {/* Assign a REGISTERED driver to one DRIVER-transport student. */}
-      <AddDriverPanel
+      {/* Assign a REGISTERED driver to one eligible student (walking or driver). */}
+      <AssignDriverPanel
         open={pickerStudent !== null}
         onClose={() => setPickerStudent(null)}
         student={pickerStudent}
@@ -558,7 +554,6 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
 /** Bulk "Release all for X" buttons — only for drivers shared by ≥2 eligible students. */
 function BulkReleaseButtons({
   students,
-  pickups,
   assignmentByStudent,
   driverById,
   released,
@@ -568,7 +563,6 @@ function BulkReleaseButtons({
   onBulk,
 }: {
   students: GateLookupRow[];
-  pickups: FamilyPickup[];
   assignmentByStudent: Record<string, string>;
   driverById: Map<string, FamilyPickup>;
   released: Record<string, string>;
@@ -577,19 +571,23 @@ function BulkReleaseButtons({
   t: ReturnType<typeof gateT>;
   onBulk: (driverId: string, studentIds: string[]) => void;
 }) {
-  // Group eligible (DRIVER-transport) students by their assigned driver.
+  // Group every gate-eligible student (walking OR driver transport) by their
+  // assigned driver. Walking students temporarily assigned to a driver ARE
+  // included; bus/LEFT/unknown students are never included (buildBulkReleasePlan
+  // enforces the transport rule).
   const groups = useMemo(() => {
-    const byDriver: Record<string, string[]> = {};
+    const driverIds = new Set<string>();
     for (const s of students) {
-      if (gateEligibility(s.transport) !== 'driver') continue;
-      const driverId = assignmentByStudent[s.id];
-      if (!driverId) continue;
-      if (released[s.id]) continue; // already released this session
-      (byDriver[driverId] ??= []).push(s.id);
+      const id = assignmentByStudent[s.id];
+      if (id) driverIds.add(id);
     }
-    return Object.entries(byDriver)
-      .filter(([, ids]) => ids.length >= 2)
-      .map(([driverId, ids]) => ({ driverId, ids }));
+    const result: Array<{ driverId: string; ids: string[] }> = [];
+    for (const driverId of driverIds) {
+      const ids = buildBulkReleasePlan(students, assignmentByStudent, driverId)
+        .filter(id => !released[id]); // not already released this session
+      if (ids.length >= 2) result.push({ driverId, ids });
+    }
+    return result;
   }, [students, assignmentByStudent, released]);
 
   if (groups.length === 0) return null;

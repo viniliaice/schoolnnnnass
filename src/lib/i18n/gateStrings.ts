@@ -42,7 +42,7 @@ export interface GateStrings {
   released: string;
   releaseFailed: string;
   releasedAt: string;
-  // Authorized pickup people ("drivers") — Add Driver at the gate.
+  // Authorized pickup people ("drivers") — Assign driver at the gate.
   authorizedTitle: string;
   noDrivers: string;
   addDriver: string;
@@ -74,6 +74,7 @@ export interface GateStrings {
   driverNotAssigned: string;
   changeDriver: string;
   removeDriver: string;
+  driverPickup: string;
   searchDriver: string;
   assignDriver: string;
   noDriversMatch: string;
@@ -118,7 +119,7 @@ const SO: GateStrings = {
   releasedAt: 'Waqtiga la siiyay',
   authorizedTitle: 'Dareewalada la oggol yahay',
   noDrivers: 'Wali ma jiraan dareewallo la ogolaaday',
-  addDriver: 'Ku dar dareewale',
+  addDriver: 'U yeel dareewale',
   driverName: 'Magac',
   driverPhone: 'Lambarka taleefanka',
   relationship: 'Xiriir / meesha uu kaxeeyo',
@@ -145,6 +146,7 @@ const SO: GateStrings = {
   driverNotAssigned: 'Dareewale looma qorin',
   changeDriver: 'Beddel dareewale',
   removeDriver: 'Ka saar dareewale',
+  driverPickup: 'Gaadiid dareewale',
   searchDriver: 'Raadi dareewale…',
   assignDriver: 'Dooro dareewale',
   noDriversMatch: 'Dareewale la raadiyay lama helin',
@@ -189,7 +191,7 @@ const EN: GateStrings = {
   releasedAt: 'Released at',
   authorizedTitle: 'Authorized pickups',
   noDrivers: 'No authorized drivers yet',
-  addDriver: 'Add driver',
+  addDriver: 'Assign driver',
   driverName: 'Name',
   driverPhone: 'Phone number',
   relationship: 'Relationship / where they take the child',
@@ -216,6 +218,7 @@ const EN: GateStrings = {
   driverNotAssigned: 'Driver not assigned',
   changeDriver: 'Change driver',
   removeDriver: 'Remove driver',
+  driverPickup: 'Driver pickup',
   searchDriver: 'Search driver…',
   assignDriver: 'Assign driver',
   noDriversMatch: 'No drivers match your search',

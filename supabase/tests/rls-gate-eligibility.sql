@@ -40,9 +40,20 @@ BEGIN
   IF position('Student is not eligible for the Dismissal Gate' in v_def) = 0 THEN
     RAISE EXCEPTION 'record_release() does not reject LEFT/unknown transports';
   END IF;
-  -- Walking release: WALKER / CAR branch (driver is not required).
-  IF position('''WALKER'', ''CAR''' in v_def) = 0 THEN
-    RAISE EXCEPTION 'record_release() lost the walking (WALKER/CAR) path';
+  -- WALKER, CAR, and DRIVER transports are all handled (a walking student may
+  -- be released to an assigned driver without changing their transport).
+  IF position('''WALKER''' in v_def) = 0 THEN
+    RAISE EXCEPTION 'record_release() lost the WALKER path';
+  END IF;
+  IF position('''CAR''' in v_def) = 0 THEN
+    RAISE EXCEPTION 'record_release() lost the CAR path';
+  END IF;
+  IF position('''DRIVER''' in v_def) = 0 THEN
+    RAISE EXCEPTION 'record_release() lost the DRIVER path';
+  END IF;
+  -- A DRIVER student must still select a driver before release.
+  IF position('A driver must be selected before releasing this student' in v_def) = 0 THEN
+    RAISE EXCEPTION 'record_release() does not require a driver for a DRIVER student';
   END IF;
   -- Driver release requires an existing, assigned registered driver.
   IF position('Driver not found' in v_def) = 0 THEN
@@ -98,6 +109,10 @@ BEGIN
   ORDER BY p.oid DESC LIMIT 1;
   IF position('DELETE FROM public.authorized_pickup_students' in v_def) = 0 THEN
     RAISE EXCEPTION 'attach_students_to_authorized_pickup() does not clear the prior assignment (a student could end up with two drivers)';
+  END IF;
+  -- Bus students are never assignable (server-side rule, not just UI).
+  IF position('Bus students cannot be assigned a driver' in v_def) = 0 THEN
+    RAISE EXCEPTION 'attach_students_to_authorized_pickup() does not reject bus students';
   END IF;
 END $$;
 

@@ -42,10 +42,13 @@ export interface BulkStudent {
 
 /**
  * Which students "Release all for driver X" covers.
- * A student is included ONLY when they are a DRIVER-transport student whose
- * assignment is exactly `driverId`. Bus students (numeric transport), walking
- * students, and students assigned to a different driver are excluded — so a
- * bulk action can never release a bus student or the wrong driver's student.
+ * A student is included ONLY when they are gate-eligible (WALKER / CAR / DRIVER
+ * transport) AND their current assignment is exactly `driverId`. Bus students
+ * (numeric transport), LEFT/unknown students, students assigned to a different
+ * driver, and unassigned students are excluded. A walking student who was
+ * temporarily assigned `driverId` IS included — so a bulk action can never
+ * release a bus student, but it does release everyone currently picked up by
+ * that driver.
  */
 export function buildBulkReleasePlan(
   students: BulkStudent[],
@@ -54,7 +57,7 @@ export function buildBulkReleasePlan(
 ): string[] {
   const eligible: string[] = [];
   for (const s of students) {
-    if (gateEligibility(s.transport) !== 'driver') continue;
+    if (gateEligibility(s.transport) === 'excluded') continue; // bus / LEFT / unknown
     if (assignmentByStudent[s.id] !== driverId) continue;
     eligible.push(s.id);
   }

@@ -1,8 +1,8 @@
 // "New driver" dialog for the management screen — create a driver without a
-// gate lookup first. Same required fields and validation as the gate's
-// AddDriverPanel (name, phone, photo, and at least one student), minus the
-// family context: students are picked with a school-wide search instead of a
-// fixed family's checkbox list.
+// gate lookup first. This is the ONLY place a driver is created (the gate's
+// AssignDriverPanel searches and assigns, never creates). Required fields:
+// name, phone, photo, and at least one student; students are picked with a
+// school-wide search instead of a fixed family's checkbox list.
 //
 // De-dupe: when the phone matches an existing driver (normalized), staff are
 // offered "attach to existing" instead of creating a duplicate. Attaching

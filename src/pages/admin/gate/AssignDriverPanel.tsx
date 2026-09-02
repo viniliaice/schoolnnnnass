@@ -1,11 +1,13 @@
-// "Add driver" / "Change driver" picker at the dismissal gate.
+// "Assign driver" / "Change driver" picker at the dismissal gate.
 //
 // The driver record is the source of truth: staff SEARCH the registered drivers
-// (authorized_pickups) and SELECT one. This never creates a driver and never
-// accepts an arbitrary name — a student is assigned an existing driver via
-// attach_students_to_authorized_pickup(), which has REPLACE semantics (one
-// driver per student). Drivers themselves are registered on the /admin/drivers
-// management screen (admin + office).
+// (authorized_pickups) and SELECT one. This never creates or registers a driver
+// and never accepts an arbitrary name — a student is assigned an existing driver
+// via attach_students_to_authorized_pickup(), which has REPLACE semantics (one
+// driver per student) and rejects bus students. Walking students may be assigned
+// a driver for a temporary pickup; their permanent transport is not overwritten.
+// Drivers themselves are registered on the /admin/drivers management screen
+// (admin + office).
 
 import { useEffect, useState } from 'react';
 import { Loader2, Search } from 'lucide-react';
@@ -15,7 +17,7 @@ import { attachStudentsToAuthorizedPickup, searchAuthorizedPickups, type Authori
 import type { GateLookupRow } from '../../../lib/db/gate';
 import type { GateLang, GateStrings } from '../../../lib/i18n/gateStrings';
 
-export function AddDriverPanel({
+export function AssignDriverPanel({
   open,
   onClose,
   student,
@@ -24,7 +26,7 @@ export function AddDriverPanel({
 }: {
   open: boolean;
   onClose: () => void;
-  /** The single DRIVER-transport student being assigned a driver. */
+  /** The single eligible student (walking or driver transport) being assigned. */
   student: GateLookupRow | null;
   t: GateStrings;
   lang?: GateLang;

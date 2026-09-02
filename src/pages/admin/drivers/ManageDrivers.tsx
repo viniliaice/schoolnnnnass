@@ -1,10 +1,11 @@
 // Manage Drivers — a driver-management surface independent of the gate.
 //
-// The gate's AddDriverPanel can only authorize a driver for the ONE family a
-// lookup resolved. Here an admin/office user manages the whole driver list:
-// see every authorized pickup person with how many students/families they are
-// authorized for, open one to see (and remove) their linked students grouped
-// by family, and attach students from any family via a school-wide search.
+// The gate's AssignDriverPanel only SEARCHES registered drivers and assigns one
+// to a single student (it never registers a driver). Here an admin/office user
+// manages the whole driver list: see every authorized pickup person with how
+// many students/families they are authorized for, open one to see (and remove)
+// their linked students grouped by family, and attach students from any family
+// via a school-wide search.
 //
 // Role gate (admin + office) lives in ROUTE_ACCESS + the SQL role checks —
 // this page is the back-office surface, so supervisor is excluded (their

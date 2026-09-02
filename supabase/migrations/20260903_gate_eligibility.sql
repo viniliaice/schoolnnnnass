@@ -1,10 +1,16 @@
 -- Dismissal Gate transport eligibility + driver assignment + fast release.
 --
--- The gate is NOT for every student. Transport now classifies eligibility:
---   WALKER / CAR / unset  -> WALKING release (one click, no driver)
---   DRIVER                -> DRIVER release (requires an assigned registered driver)
---   numeric (bus)         -> EXCLUDED (no release; the server rejects the call)
---   LEFT / unrecognized   -> EXCLUDED
+-- The gate is NOT for every student. Transport (the student's PERMANENT/default
+-- classification) decides gate eligibility; the CURRENT pickup arrangement is a
+-- separate concept stored in authorized_pickup_students:
+--
+--   WALKER / CAR / unset  -> eligible. Released one-click with NO driver, OR to a
+--                            driver the office assigns (a temporary pickup — the
+--                            student's permanent transport is NOT overwritten).
+--   DRIVER                -> eligible. Release REQUIRES an assigned registered driver.
+--   numeric (bus)         -> EXCLUDED: never released AND never assigned a driver
+--                            (the server rejects both).
+--   LEFT / unrecognized   -> EXCLUDED.
 --
 -- Drivers stay in authorized_pickups (registered centrally, admin+office) linked
 -- to students via authorized_pickup_students. ONE driver -> MANY students ->
@@ -15,14 +21,16 @@
 -- Changes here:
 --   1. students_transport_check gains 'DRIVER'.
 --   2. set_student_transport() accepts 'DRIVER' (admin+office, unchanged scope).
---   3. record_release() branches on transport: walking (no driver) vs driver
---      (required + must be assigned) vs bus/LEFT/unknown (rejected). Adds a
---      double-release guard (one release per student per UTC day).
+--   3. record_release() branches on transport: a WALKER/CAR student may be
+--      released walking (no driver) OR to an assigned driver (temporary pickup);
+--      a DRIVER student requires an assigned driver; bus/LEFT/unknown are
+--      rejected. Adds a double-release guard (one release per student per UTC day).
 --   4. release_log gains a UNIQUE index on (studentId, UTC date) — the
 --      race-condition guard: concurrent releases of the same student -> one wins,
 --      the other gets unique_violation.
 --   5. attach_students_to_authorized_pickup() becomes a REPLACE (delete-then-insert
---      per student) so a student has exactly ONE assigned driver.
+--      per student) so a student has exactly ONE assigned driver, and rejects
+--      bus students (they can never be assigned a gate driver).
 --   6. remove_student_driver() clears a student's assignment(s) without touching
 --      the registered driver.
 --   7. search_authorized_pickups() returns driver IDENTITY only (no student/family
@@ -115,6 +123,7 @@ DECLARE
   v_norm_family TEXT := public.normalize_family_id(p_family_id);
   v_student RECORD;
   v_transport TEXT;
+  v_mode TEXT;
   v_release_id BIGINT;
 BEGIN
   IF v_actor_id IS NULL OR v_role NOT IN ('admin', 'supervisor', 'office') THEN
@@ -140,7 +149,9 @@ BEGIN
       USING ERRCODE = 'integrity_constraint_violation';
   END IF;
 
-  -- Unset transport means WALKER (the system-wide business rule).
+  -- Unset transport means WALKER (the system-wide business rule). This is the
+  -- student's PERMANENT/default classification; the pickup arrangement for
+  -- this release is decided below from p_pickup_person_id.
   v_transport := COALESCE(v_student."transport", 'WALKER');
 
   -- Bus students are never released through the Dismissal Gate.
@@ -149,12 +160,26 @@ BEGIN
       USING ERRCODE = 'invalid_parameter_value';
   END IF;
 
-  IF v_transport = 'DRIVER' THEN
-    -- A specific, registered, assigned driver is required.
-    IF p_pickup_person_id IS NULL OR p_pickup_person_id = '' THEN
+  -- LEFT or an unrecognized transport value is never eligible.
+  IF v_transport NOT IN ('WALKER', 'CAR', 'DRIVER') THEN
+    RAISE EXCEPTION 'Student is not eligible for the Dismissal Gate.'
+      USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  -- Decide walking release vs driver pickup:
+  --   no driver   -> a plain walking release. Only WALKER/CAR qualify — a DRIVER
+  --                  student must select an assigned driver first.
+  --   with driver -> a driver pickup. WALKER, CAR, and DRIVER all qualify; the
+  --                  student's permanent transport stays unchanged, so a walking
+  --                  student with a temporary pickup keeps transport = WALKER.
+  IF p_pickup_person_id IS NULL OR p_pickup_person_id = '' THEN
+    IF v_transport = 'DRIVER' THEN
       RAISE EXCEPTION 'A driver must be selected before releasing this student.'
         USING ERRCODE = 'invalid_parameter_value';
     END IF;
+    p_pickup_person_id := NULL;
+    v_mode := 'walking';
+  ELSE
     IF NOT EXISTS (
       SELECT 1 FROM public.authorized_pickups ap WHERE ap.id = p_pickup_person_id
     ) THEN
@@ -168,13 +193,7 @@ BEGIN
       RAISE EXCEPTION 'Driver is not assigned to this student.'
         USING ERRCODE = 'integrity_constraint_violation';
     END IF;
-  ELSIF v_transport IN ('WALKER', 'CAR') THEN
-    -- Walking / car pickup: released without a driver; any passed id is ignored.
-    p_pickup_person_id := NULL;
-  ELSE
-    -- LEFT or an unrecognized transport value.
-    RAISE EXCEPTION 'Student is not eligible for the Dismissal Gate.'
-      USING ERRCODE = 'invalid_parameter_value';
+    v_mode := 'driver';
   END IF;
 
   -- Insert with a double-release guard. The UNIQUE index on (studentId, UTC day)
@@ -198,8 +217,8 @@ BEGIN
       'studentId', p_student_id,
       'familyId', v_student."familyId",
       'staffId', v_actor_id,
-      'mode', CASE WHEN v_transport = 'DRIVER' THEN 'driver' ELSE 'walking' END,
-      'transport', v_transport,
+      'mode', v_mode,              -- 'driver' pickup vs 'walking' release
+      'transport', v_transport,    -- the student's PERMANENT/default transport
       'driverId', p_pickup_person_id
     ),
     NOW()
@@ -211,7 +230,7 @@ BEGIN
     'familyId', v_student."familyId",
     'staffId', v_actor_id,
     'pickupPersonId', p_pickup_person_id,
-    'mode', CASE WHEN v_transport = 'DRIVER' THEN 'driver' ELSE 'walking' END,
+    'mode', v_mode,
     'createdAt', NOW()
   );
 END;
@@ -246,8 +265,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uniq_release_log_student_day
 
 -- ─── 5. attach_students_to_authorized_pickup(): REPLACE per student ─────────
 -- One assigned driver per student. Re-linking a student first clears their prior
--- assignment, so "Add driver" / "Change driver" never stack two drivers on one
--- student. Idempotent: attaching the same driver twice is a no-op.
+-- assignment, so "Assign driver" / "Change driver" never stack two drivers on one
+-- student. Walking and DRIVER students are assignable; LEFT and bus students are
+-- rejected. Idempotent: attaching the same driver twice is a no-op.
 CREATE OR REPLACE FUNCTION public.attach_students_to_authorized_pickup(
   p_pickup_id TEXT,
   p_student_ids TEXT[]
@@ -262,6 +282,7 @@ DECLARE
   v_role TEXT := public.current_profile_role();
   v_person RECORD;
   v_student_id TEXT;
+  v_transport TEXT;
 BEGIN
   IF v_actor_id IS NULL OR v_role NOT IN ('admin', 'supervisor', 'office') THEN
     RAISE EXCEPTION 'Only gate staff may manage pickup people.'
@@ -287,13 +308,24 @@ BEGIN
 
   FOREACH v_student_id IN ARRAY p_student_ids
   LOOP
-    -- Only real, enrolled students may be linked.
-    IF NOT EXISTS (
-      SELECT 1 FROM public.students s
-      WHERE s.id = v_student_id AND COALESCE(s."transport", '') <> 'LEFT'
-    ) THEN
-      RAISE EXCEPTION 'Student not found or has left the school: %', v_student_id
+    SELECT "transport" INTO v_transport
+    FROM public.students s
+    WHERE s.id = v_student_id;
+
+    IF NOT FOUND THEN
+      RAISE EXCEPTION 'Student not found: %', v_student_id
         USING ERRCODE = 'no_data_found';
+    END IF;
+
+    IF v_transport = 'LEFT' THEN
+      RAISE EXCEPTION 'Student has left the school: %', v_student_id
+        USING ERRCODE = 'no_data_found';
+    END IF;
+
+    -- Bus students are never assigned a gate driver (server-side, not just UI).
+    IF v_transport ~ '^\d+$' THEN
+      RAISE EXCEPTION 'Bus students cannot be assigned a driver.'
+        USING ERRCODE = 'invalid_parameter_value';
     END IF;
 
     -- Replace: a student has exactly one assigned driver.
