@@ -2,13 +2,26 @@ import { AIReview, PlanStatus } from '../../types';
 import { Loader2, Sparkles, AlertTriangle, RotateCcw, Clock } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { useI18n } from '../../lib/i18n/AppLanguageContext';
+import { scoreBand } from '../../lib/lessonReview/reviewQueue';
 
+/**
+ * Colour classes for a score. Bands come from scoreBand() so the colour can
+ * never disagree with the label shown beside it. Colour alone is not a
+ * sufficient indicator — always render the band label/glyph too.
+ */
 export function scoreTone(pct: number): string {
-  if (pct >= 90) return 'bg-emerald-100 text-emerald-700';
-  if (pct >= 80) return 'bg-blue-100 text-blue-700';
-  if (pct >= 70) return 'bg-amber-100 text-amber-700';
-  if (pct >= 60) return 'bg-orange-100 text-orange-700';
-  return 'bg-rose-100 text-rose-700';
+  return scoreBand(pct).chip;
+}
+
+/**
+ * A plan decided with a comment but no AI run gets a synthetic ai_reviews row
+ * from decide_lesson_plan_review(): every category 0, percentage 0,
+ * performance_level 'Manual review'. Banding that as "0% · Weak" would tell the
+ * supervisor the AI judged a plan it never saw, so it is detected and labelled.
+ */
+export function isManualReview(review: Pick<AIReview, 'performance_level' | 'additional_data'>): boolean {
+  const additional = review.additional_data as { manual?: boolean } | null | undefined;
+  return additional?.manual === true || review.performance_level === 'Manual review';
 }
 
 /** Minutes since the given timestamp (0 when unknown). */
@@ -81,7 +94,7 @@ export function AiReviewPanel({
             type="button"
             onClick={onRetry}
             disabled={retrying}
-            className="w-full sm:w-auto flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-medium text-sm hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+            className="w-full sm:w-auto flex min-h-[44px] items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-indigo-600 text-white font-medium text-sm hover:bg-indigo-700 disabled:opacity-50 transition-colors"
           >
             {retrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
             {retrying ? t('aiReview.retrying') : t('aiReview.retry')}
@@ -134,7 +147,7 @@ export function AiReviewPanel({
             type="button"
             onClick={onRetry}
             disabled={retrying}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
+            className="flex min-h-[44px] items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-sm font-medium hover:bg-indigo-700 disabled:opacity-50 transition-colors"
           >
             {retrying ? <Loader2 className="w-4 h-4 animate-spin" /> : <RotateCcw className="w-4 h-4" />}
             {retrying ? t('aiReview.retrying') : t('aiReview.retry')}
@@ -157,15 +170,25 @@ export function AiReviewPanel({
             type="button"
             onClick={onRetry}
             disabled={retrying}
-            className="flex min-h-9 items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 text-xs font-bold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
+            className="flex min-h-[44px] items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-3 text-xs font-bold text-indigo-700 transition-colors hover:bg-indigo-100 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {retrying ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
             {retrying ? t('lessonReview.redoing') : t('lessonReview.redo')}
           </button>
         )}
-        <span className={cn('rounded-full px-3 py-1 text-xs font-bold sm:ml-auto', scoreTone(review.percentage))}>
-          {review.percentage}% · {review.performance_level}
-        </span>
+        {isManualReview(review) ? (
+          <span className="review-chip review-chip-neutral px-3 py-1 sm:ml-auto">
+            ○ Manual review — no AI score
+          </span>
+        ) : (
+          <span
+            className={cn('px-3 py-1 sm:ml-auto', scoreTone(review.percentage))}
+            /* Glyph + label carry the meaning; colour is redundant reinforcement. */
+          >
+            <span aria-hidden="true">{scoreBand(review.percentage).glyph}</span>{' '}
+            {review.percentage}% · {scoreBand(review.percentage).label}
+          </span>
+        )}
       </div>
 
       <p className="text-sm text-slate-600 leading-relaxed">{review.executive_summary}</p>

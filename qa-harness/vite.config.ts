@@ -23,7 +23,9 @@ export default defineConfig({
         if (!/(^|\/)(\.\.\/)*supabase$/.test(source) && !source.endsWith('/lib/supabase')) return null;
         const resolved = path.resolve(path.dirname(importer), source);
         if (resolved === path.resolve(__dirname, '../src/lib/supabase')) {
-          return path.resolve(__dirname, 'mockSupabase.ts');
+          // Two harnesses share this config; pick the mock matching the entry.
+          const mock = process.env.QA_MOCK === 'review' ? 'mockReviewSupabase.ts' : 'mockSupabase.ts';
+          return path.resolve(__dirname, mock);
         }
         return null;
       },
@@ -35,6 +37,6 @@ export default defineConfig({
     alias: [{ find: '@', replacement: path.resolve(__dirname, '../src') }],
   },
   // Only the harness entry — don't let the scanner crawl the app's index.html.
-  optimizeDeps: { entries: ['qa-harness/index.html'] },
+  optimizeDeps: { entries: ['qa-harness/index.html', 'qa-harness/review.html'] },
   server: { host: '0.0.0.0', port: 5199, allowedHosts: true, open: false },
 });

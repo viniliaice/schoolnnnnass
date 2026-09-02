@@ -281,6 +281,13 @@ html[data-theme="aurora"][data-mode="light"] {
   to { opacity: 1; transform: scale(1); }
 }
 
+/* Confirmation / status reveals. Opacity + transform only, so the browser can
+   run it off the main thread and it can never cause layout shift. */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
 @keyframes slideRight {
   from { transform: translateX(-100%); }
   to { transform: translateX(0); }
@@ -723,4 +730,68 @@ main > div, .max-w-5xl, .rounded-2xl, .rounded-3xl, article { animation: themeFa
     scroll-behavior: auto !important;
     transition-duration: 0.001ms !important;
   }
+}
+
+/* ── Lesson-plan review chips ──────────────────────────────────────────────
+   Status and AI-score chips must stay readable in every theme. Plain Tailwind
+   `bg-*-100 text-*-800` pairs break here: the theme layer rewrites the
+   background to a dark token with !important but leaves the Tailwind text
+   colour untouched, producing dark-on-dark text. These classes set background,
+   text and border from the SAME semantic token set, so the pair can never
+   drift apart. Meaning is additionally carried by a glyph + word, so colour is
+   only ever reinforcement. */
+.review-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border-radius: 9999px;
+  padding: 0.125rem 0.5rem;
+  font-size: 0.75rem;
+  line-height: 1rem;
+  font-weight: 600;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+/* Chip colours are fixed accessible pairs rather than the theme's semantic
+   tokens. Those tokens are tuned for large translucent banners and measured as
+   low as 1.0:1 behind chip-sized text across the acanthus/baroque/aurora
+   themes (see the per-theme contrast sweep in review-qa.mjs). Each pair below
+   is a dark, near-opaque tint with a light foreground, and is inverted under
+   data-mode="light"; every pair is asserted at >= 4.5:1 in all six
+   theme x mode combinations. */
+.review-chip-success { background-color: #064e3b; color: #d1fae5; border-color: #10b981; }
+.review-chip-warning { background-color: #713f12; color: #fef3c7; border-color: #f59e0b; }
+.review-chip-danger  { background-color: #7f1d1d; color: #fee2e2; border-color: #ef4444; }
+.review-chip-info    { background-color: #1e3a8a; color: #dbeafe; border-color: #3b82f6; }
+.review-chip-neutral { background-color: #334155; color: #f1f5f9; border-color: #64748b; }
+
+html[data-mode="light"] .review-chip-success { background-color: #d1fae5; color: #064e3b; border-color: #059669; }
+html[data-mode="light"] .review-chip-warning { background-color: #fef3c7; color: #713f12; border-color: #d97706; }
+html[data-mode="light"] .review-chip-danger  { background-color: #fee2e2; color: #7f1d1d; border-color: #dc2626; }
+html[data-mode="light"] .review-chip-info    { background-color: #dbeafe; color: #1e3a8a; border-color: #2563eb; }
+html[data-mode="light"] .review-chip-neutral { background-color: #f1f5f9; color: #1e293b; border-color: #94a3b8; }
+
+/* The theme layer rewrites .bg-*-100/.bg-*-50 with !important; chips must win. */
+.review-chip { background-image: none !important; backdrop-filter: none !important; }
+
+/* ── Lesson-plan review decision panel ─────────────────────────────────────
+   The decision panel is the one place a supervisor must never misread, so its
+   surface, body text and secondary buttons are driven by theme tokens instead
+   of fixed slate/amber Tailwind shades. Fixed shades broke here for the same
+   reason the chips did: the theme layer rewrites backgrounds but not the
+   paired text colour, which measured as low as 1.0:1 (invisible) in the dark
+   themes. Verified by the contrast assertion in review-qa.mjs. */
+.review-decision {
+  background-color: var(--surface-2);
+  border-color: var(--border);
+}
+.review-decision-text { color: var(--text); }
+.review-decision-muted { color: var(--muted); }
+.review-decision-secondary {
+  background-color: color-mix(in srgb, var(--surface) 70%, transparent);
+  color: var(--text);
+  border-color: var(--border);
+}
+.review-decision-secondary:hover:not(:disabled) {
+  background-color: color-mix(in srgb, var(--surface-2) 85%, var(--text) 15%);
 }

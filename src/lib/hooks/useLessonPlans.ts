@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query';
 import {
   fetchPlansByTeacher,
   fetchPlansBySupervisor,
@@ -21,7 +21,7 @@ import {
 import { fetchPeriodAiReviews, regeneratePeriodAiReviews } from '../db/lessonPeriodAiReviews';
 import { addGeneratedQuizToBank, fetchLessonPlanQuizPreviews, generateLessonPlanQuizzes } from '../db/lessonPlanQuizzes';
 import { supabase } from '../supabase';
-import type { LessonPlan, LessonPlanPeriod, AIReview, SavePeriodsPayload } from '../../types';
+import type { LessonPlan, LessonPlanPeriod, AIReview, SavePeriodsPayload, PlanStatus } from '../../types';
 
 const DAY_ORDER: Record<string, number> = {
   Monday: 1,
@@ -37,6 +37,34 @@ function sortPeriods(periods: LessonPlanPeriod[]): LessonPlanPeriod[] {
   return [...periods].sort((a, b) => {
     const dayDiff = (DAY_ORDER[a.day] ?? 99) - (DAY_ORDER[b.day] ?? 99);
     return dayDiff || a.period_number - b.period_number;
+  });
+}
+
+/**
+ * Patch ONE plan's status into every cached list + its detail entry, without
+ * refetching. The supervisor queue holds ~40 plans (each with a joined teacher
+ * profile); invalidating the whole list after every decision re-ran that query
+ * on each approve/reject/revision, which is both slow and makes the queue jump
+ * under the supervisor's cursor. The decision RPCs are authoritative and the
+ * realtime channel still delivers the row, so a targeted patch is sufficient.
+ */
+export function patchPlanStatusInCache(
+  qc: QueryClient,
+  planId: string,
+  status: PlanStatus,
+  extra: Partial<LessonPlan> = {},
+): void {
+  const patch = { status, ...extra } as Partial<LessonPlan>;
+  qc.setQueryData<{ plan: LessonPlan; periods: LessonPlanPeriod[] } | null>(
+    ['lessonPlan', planId],
+    (current) => (current ? { ...current, plan: { ...current.plan, ...patch } } : current),
+  );
+  qc.setQueriesData({ queryKey: ['lessonPlans'] }, (plans) => {
+    if (!Array.isArray(plans)) return plans;
+    return plans.map((entry) => {
+      const item = entry as LessonPlan;
+      return item.id === planId ? { ...item, ...patch } : item;
+    });
   });
 }
 
@@ -212,8 +240,12 @@ export function useRequestRevision() {
   return useMutation({
     mutationFn: ({ planId, note }: { planId: string; note?: string }) => requestPlanRevision(planId, note),
     onSuccess: (_d, variables) => {
-      qc.invalidateQueries({ queryKey: ['lessonPlan', variables.planId] });
-      qc.invalidateQueries({ queryKey: ['lessonPlans'] });
+      // revision_note is what re-enables teacher editing on their side, so it
+      // is patched in alongside the status rather than refetched.
+      patchPlanStatusInCache(qc, variables.planId, 'revision_requested', {
+        revision_note: variables.note ?? null,
+        revision_requested_at: new Date().toISOString(),
+      } as Partial<LessonPlan>);
     },
   });
 }
@@ -394,9 +426,11 @@ export function useApprovePlan() {
       await approvePlan(planId, comment);
     },
     onSuccess: (_data, variables) => {
-      qc.invalidateQueries({ queryKey: ['lessonPlan', variables.planId] });
+      // Server confirmed. Patch the known outcome in place and refresh only the
+      // review row (the RPC writes supervisor_comment there). The 40-plan queue
+      // is NOT refetched — see patchPlanStatusInCache.
+      patchPlanStatusInCache(qc, variables.planId, 'approved');
       qc.invalidateQueries({ queryKey: ['aiReview', variables.planId] });
-      qc.invalidateQueries({ queryKey: ['lessonPlans'] });
     },
   });
 }
@@ -417,9 +451,8 @@ export function useRejectPlan() {
       await rejectPlan(planId, comment);
     },
     onSuccess: (_data, variables) => {
-      qc.invalidateQueries({ queryKey: ['lessonPlan', variables.planId] });
+      patchPlanStatusInCache(qc, variables.planId, 'rejected');
       qc.invalidateQueries({ queryKey: ['aiReview', variables.planId] });
-      qc.invalidateQueries({ queryKey: ['lessonPlans'] });
     },
   });
 }

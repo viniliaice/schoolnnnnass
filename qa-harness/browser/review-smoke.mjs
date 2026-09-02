@@ -1,0 +1,13 @@
+import puppeteer from 'puppeteer-core';
+import { LAUNCH } from './smoke.mjs';
+const URL = process.env.QA_URL || 'http://localhost:5200/qa-harness/review.html?n=40';
+const b = await puppeteer.launch(LAUNCH);
+const p = await b.newPage();
+p.on('console', m => { if (m.type()==='error') console.log('CONSOLE ERR:', m.text().slice(0,300)); });
+p.on('pageerror', e => console.log('PAGE ERR:', String(e).slice(0,300)));
+await p.setViewport({ width: 1400, height: 1000 });
+await p.goto(URL, { waitUntil: 'load', timeout: 60000 });
+await new Promise(r => setTimeout(r, 2500));
+console.log('TEXT:', (await p.evaluate(()=>document.body.innerText)).slice(0,600).replace(/\n/g,' | '));
+await p.screenshot({ path: '/tmp/review.png', fullPage: false });
+await b.close();

@@ -1,11 +1,11 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   useSupervisorPlans, usePlanWithPeriods, useReview, usePeriodAiReviews, useLessonPlanQuizPreviews,
   useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout, useRegeneratePeriodAiReviews, useGenerateLessonPlanQuizzes, useAddGeneratedQuizToBank,
 } from '../../lib/hooks/useLessonPlans';
 import { LessonPlanPeriod, PlanStatus } from '../../types';
-import { ClipboardCheck, ChevronRight, Filter, AlertTriangle, Loader2, Unlock, CalendarRange, RotateCcw, HelpCircle } from 'lucide-react';
+import { ClipboardCheck, ChevronRight, Filter, AlertTriangle, Loader2, CalendarRange, RotateCcw, HelpCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
 import { ExportLessonPlanPdfButton } from '../../components/lesson-planner/ExportLessonPlanPdfButton';
@@ -17,6 +17,12 @@ import { getCurrentAcademicYear } from '../../lib/db/academic';
 import { getSubjects } from '../../lib/db/subjects';
 import { useI18n } from '../../lib/i18n/AppLanguageContext';
 import { useToast } from '../../context/ToastContext';
+import { DecisionPanel } from '../../components/lesson-planner/DecisionPanel';
+import {
+  IDLE, filterQueue, formatWaited, nextPlanAfter, queueCounts, queuePosition, scoreBand,
+  sortQueue, statusInfo, type DecisionKind, type DecisionPhase, type QueueFilter,
+} from '../../lib/lessonReview/reviewQueue';
+import { DecisionRunner } from '../../lib/lessonReview/decisionRunner';
 
 function toReadPeriods(periods: LessonPlanPeriod[]): ReadPeriod[] {
   return periods.map((p) => ({
@@ -32,20 +38,13 @@ function toReadPeriods(periods: LessonPlanPeriod[]): ReadPeriod[] {
   }));
 }
 
-const STATUS_CHIP: Record<PlanStatus, string> = {
-  draft: 'bg-slate-100 text-slate-600',
-  submitted: 'bg-blue-100 text-blue-700',
-  in_review: 'bg-amber-100 text-amber-700',
-  approved: 'bg-emerald-100 text-emerald-700',
-  rejected: 'bg-rose-100 text-rose-700',
-  ai_failed: 'bg-orange-100 text-orange-700',
-  revision_requested: 'bg-amber-100 text-amber-700',
-};
 
 export function LessonPlanReview() {
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [comment, setComment] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | PlanStatus>('all');
+  // Default to the work that needs doing rather than the full archive.
+  const [statusFilter, setStatusFilter] = useState<QueueFilter>('awaiting');
+  const [phase, setPhase] = useState<DecisionPhase>(IDLE);
   const [quizzesOpen, setQuizzesOpen] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
   const { t } = useI18n();
@@ -85,28 +84,70 @@ export function LessonPlanReview() {
     () => toReadPeriods(planWithPeriods?.periods ?? []),
     [planWithPeriods?.periods]
   );
+  // Sort once (awaiting first, oldest first) then filter, so the visible order
+  // is exactly the order the supervisor will be walked through by "next".
+  const sortedPlans = useMemo(() => sortQueue(plans ?? []), [plans]);
   const filteredPlans = useMemo(
-    () => plans?.filter((p) => statusFilter === 'all' || p.status === statusFilter) ?? [],
-    [plans, statusFilter]
+    () => filterQueue(sortedPlans, statusFilter),
+    [sortedPlans, statusFilter]
   );
+  const counts = useMemo(() => queueCounts(sortedPlans), [sortedPlans]);
+  const nextPlan = useMemo(
+    () => nextPlanAfter(filteredPlans, selectedPlanId),
+    [filteredPlans, selectedPlanId]
+  );
+  const position = queuePosition(filteredPlans, selectedPlanId);
 
-  const handleRequestRevision = useCallback(async () => {
-    if (!selectedPlanId) return;
-    await revisionMut.mutateAsync({ planId: selectedPlanId, note: comment || undefined });
+  /**
+   * Switch plans. The comment is per-plan working state: carrying it across
+   * would risk attaching one teacher's feedback to another teacher's plan, so
+   * it and the decision phase are always reset together with the id.
+   */
+  const selectPlan = useCallback((planId: string | null) => {
+    setSelectedPlanId(planId);
+    // Comment is per-plan working state: carrying it over would risk attaching
+    // one teacher's feedback to another teacher's plan.
     setComment('');
-  }, [comment, revisionMut, selectedPlanId]);
+    // Disown any in-flight response so it cannot paint onto the new plan.
+    runnerRef.current?.detach();
+    setPhase(IDLE);
+    setQuizError(null);
+  }, []);
 
-  const handleApprove = useCallback(async () => {
-    if (!selectedPlanId) return;
-    await approveMut.mutateAsync({ planId: selectedPlanId, reviewId: review?.id, comment });
-    setComment('');
-  }, [approveMut, comment, review?.id, selectedPlanId]);
+  const goToNextPlan = useCallback(() => {
+    selectPlan(nextPlan ? nextPlan.id : null);
+  }, [nextPlan, selectPlan]);
 
-  const handleReject = useCallback(async () => {
-    if (!selectedPlanId) return;
-    await rejectMut.mutateAsync({ planId: selectedPlanId, reviewId: review?.id, comment });
-    setComment('');
-  }, [comment, rejectMut, review?.id, selectedPlanId]);
+  // Keep the latest mutation closures in a ref so the runner (created once)
+  // always submits with current values without being recreated per keystroke.
+  const submitRef = useRef<(kind: DecisionKind, planId: string) => Promise<unknown>>(
+    async () => undefined,
+  );
+  submitRef.current = async (kind, planId) => {
+    if (kind === 'approve') return approveMut.mutateAsync({ planId, reviewId: review?.id, comment });
+    if (kind === 'reject') return rejectMut.mutateAsync({ planId, reviewId: review?.id, comment });
+    return revisionMut.mutateAsync({ planId, note: comment || undefined });
+  };
+
+  // Single runner instance owns duplicate-click and stale-response protection.
+  // See DecisionRunner + lesson-review-runner.test.ts.
+  const runnerRef = useRef<DecisionRunner | null>(null);
+  if (!runnerRef.current) {
+    runnerRef.current = new DecisionRunner({
+      submit: (kind, planId) => submitRef.current(kind, planId),
+      setPhase: (next) => setPhase(next),
+      onError: (_kind, message) =>
+        addToast({ type: 'error', title: 'Decision was not saved', description: message.slice(0, 300) }),
+    });
+  }
+
+  const runDecision = useCallback((kind: DecisionKind) => {
+    void runnerRef.current?.run(kind, selectedPlanId);
+  }, [selectedPlanId]);
+
+  const retryDecision = useCallback(() => {
+    if (phase.phase === 'error') runDecision(phase.kind);
+  }, [phase, runDecision]);
 
   const handleRetryReview = useCallback(async () => {
     if (!selectedPlanId || !planWithPeriods) return;
@@ -177,55 +218,118 @@ export function LessonPlanReview() {
       <div className="flex min-w-0 flex-col gap-5 xl:flex-row xl:gap-6">
         {/* Left: plan list */}
         <div className="w-full xl:w-80 shrink-0">
-          <div className="flex items-center gap-2 mb-3">
-            <Filter className="w-4 h-4 text-slate-400" />
+          <div className="mb-3 flex items-center gap-2">
+            <Filter className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+            <label htmlFor="queue-filter" className="sr-only">Filter plans by status</label>
             <select
+              id="queue-filter"
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as 'all' | PlanStatus)}
-              className="min-h-10 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+              onChange={(e) => setStatusFilter(e.target.value as QueueFilter)}
+              className="min-h-[44px] flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
             >
-              <option value="all">All Statuses</option>
+              <option value="awaiting">Awaiting decision ({counts.awaiting})</option>
+              <option value="all">All statuses ({counts.total})</option>
               <option value="submitted">Submitted (pending AI)</option>
-              <option value="in_review">In Review</option>
+              <option value="in_review">In review</option>
               <option value="approved">Approved</option>
               <option value="rejected">Rejected</option>
-              <option value="ai_failed">AI Failed</option>
+              <option value="revision_requested">Revision requested</option>
+              <option value="ai_failed">AI failed</option>
             </select>
           </div>
-          <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
-            {(!plans || plans.length === 0) && (
-              <div className="p-8 text-center text-sm text-slate-500">No submitted plans</div>
+
+          <p className="mb-2 text-xs font-semibold text-slate-500" aria-live="polite">
+            {counts.awaiting === 0
+              ? 'No plans awaiting a decision'
+              : `${counts.awaiting} awaiting decision`}
+            {position > 0 && ` · viewing ${position} of ${filteredPlans.length}`}
+          </p>
+
+          <div className="overflow-hidden rounded-2xl border border-slate-200 bg-white">
+            {/* Skeleton matches real row geometry (same paddings + three text
+                lines + chip) so the list does not resize when data lands. */}
+            {!plans && (
+              <ul className="divide-y divide-slate-100" aria-hidden="true">
+                {[0, 1, 2, 3, 4].map((i) => (
+                  <li key={i} className="p-3">
+                    <div className="h-4 w-3/4 rounded bg-slate-200" />
+                    <div className="mt-1.5 h-3 w-1/2 rounded bg-slate-100" />
+                    <div className="mt-1.5 h-3 w-2/5 rounded bg-slate-100" />
+                    <div className="mt-2 h-5 w-24 rounded-full bg-slate-100" />
+                  </li>
+                ))}
+              </ul>
             )}
-            {filteredPlans.map((p) => (
-              <button
-                key={p.id}
-                onClick={() => setSelectedPlanId(p.id)}
-                className={cn(
-                  'w-full flex items-center gap-3 p-4 text-left hover:bg-slate-50 transition-colors sm:p-4',
-                  selectedPlanId === p.id && 'bg-indigo-50'
-                )}
+
+            {plans && filteredPlans.length === 0 && (
+              <div className="p-8 text-center">
+                <p className="text-sm font-semibold text-slate-700">
+                  {counts.awaiting === 0 ? '✓ All caught up' : 'Nothing matches this filter'}
+                </p>
+                <p className="mt-1 text-xs text-slate-500">
+                  {counts.awaiting === 0
+                    ? 'Every submitted lesson plan has been decided.'
+                    : 'Try “Awaiting decision” or “All statuses”.'}
+                </p>
+              </div>
+            )}
+
+            {plans && filteredPlans.length > 0 && (
+              <ul
+                className="max-h-[70vh] divide-y divide-slate-100 overflow-y-auto overscroll-contain"
+                /* Capped height + scroll keeps the queue usable at 80+ plans
+                   without the page itself becoming metres long. Rows are cheap
+                   (no per-row query), so plain scrolling beats virtualization
+                   at this scale and keeps Ctrl+F working. */
               >
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-medium text-slate-900 truncate">{p.title}</p>
-                  <p className="text-xs text-slate-500">{p.teacher_name || 'Unknown'} · {p.class_name}</p>
-                  <p className="text-xs text-slate-500 flex items-center gap-1 mt-0.5">
-                    <CalendarRange className="w-3 h-3" />
-                    {describePlanWeek(p.week_label, yearStart)}
-                  </p>
-                  <span className={cn('flex items-center gap-1 mt-1.5 px-2 py-0.5 rounded-full text-xs font-medium w-fit', STATUS_CHIP[p.status])}>
-                    {p.status === 'ai_failed' && <AlertTriangle className="w-3 h-3" />}
-                    {p.status === 'submitted' ? 'AI review pending' : p.status === 'ai_failed' ? 'AI failed' : p.status.replace('_', ' ')}
-                  </span>
-                </div>
-                <ChevronRight className="w-4 h-4 text-slate-400" />
-              </button>
-            ))}
+                {filteredPlans.map((p) => {
+                  const info = statusInfo(p.status);
+                  const selected = selectedPlanId === p.id;
+                  return (
+                    <li key={p.id}>
+                      <button
+                        type="button"
+                        onClick={() => selectPlan(p.id)}
+                        aria-current={selected ? 'true' : undefined}
+                        className={cn(
+                          'flex w-full items-center gap-2 p-3 text-left transition-colors duration-150',
+                          'hover:bg-slate-50 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-indigo-600',
+                          selected && 'bg-indigo-50',
+                        )}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-slate-900">{p.title}</p>
+                          <p className="truncate text-xs text-slate-600">
+                            {p.teacher_name || 'Unknown teacher'} · {p.class_name}
+                          </p>
+                          <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-slate-500">
+                            <CalendarRange className="h-3 w-3 shrink-0" aria-hidden="true" />
+                            {describePlanWeek(p.week_label, yearStart)}
+                          </p>
+                          <span className={cn('mt-1.5 w-fit', info.chip)}>
+                            <span aria-hidden="true">{info.glyph}</span> {info.label}
+                          </span>
+                        </div>
+                        <ChevronRight className="h-4 w-4 shrink-0 text-slate-400" aria-hidden="true" />
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
         </div>
 
         {/* Right: detail */}
         {selectedPlanId && planWithPeriods && plan && (
-          <div className="flex-1 space-y-6 min-w-0">
+          <div
+            className="flex-1 space-y-6 min-w-0"
+            data-testid="plan-detail"
+            /* Re-keyed per plan so React remounts the pane on switch. Without
+               this, scroll position and collapsed/expanded period state leak
+               from one teacher's plan to the next. */
+            key={plan.id}
+          >
             {/* AI health banner — answers "how do I know the AI didn't work?" */}
             {(aiFailed || aiLikelyStuck) && (
               <div className="no-print rounded-2xl border-2 border-orange-300 bg-orange-50 p-4 flex items-start gap-3">
@@ -234,7 +338,7 @@ export function LessonPlanReview() {
                   <p className="text-sm font-bold text-orange-900">
                     {aiFailed
                       ? 'No AI review for this plan — the AI failed'
-                      : `No AI review after ${waitedMinutes} minutes — the AI probably failed`}
+                      : `No AI review after ${formatWaited(waitedMinutes)} — the AI probably failed`}
                   </p>
                   <p className="text-sm text-orange-800 mt-1">
                     You are not blocked. Read the plan below and approve or request revisions manually, or retry the AI
@@ -262,9 +366,16 @@ export function LessonPlanReview() {
                     </p>
                   </div>
                   <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-                    <span className={cn('w-fit rounded-full px-3 py-1.5 text-xs font-semibold', STATUS_CHIP[plan.status])}>
-                      {waitingOnAi ? 'AI review pending' : plan.status === 'ai_failed' ? 'AI failed' : plan.status.replace('_', ' ')}
+                    <span className={cn('w-fit px-3 py-1.5', statusInfo(plan.status).chip)}>
+                      <span aria-hidden="true">{statusInfo(plan.status).glyph}</span>
+                      {statusInfo(plan.status).label}
                     </span>
+                    {review && !waitingOnAi && (
+                      <span className={cn('w-fit px-3 py-1.5', scoreBand(review.percentage).chip)}>
+                        <span aria-hidden="true">{scoreBand(review.percentage).glyph}</span>
+                        AI {review.percentage}% · {scoreBand(review.percentage).label}
+                      </span>
+                    )}
                     {!waitingOnAi && <button
                       type="button"
                       onClick={handleRegeneratePeriodReview}
@@ -333,7 +444,7 @@ export function LessonPlanReview() {
                           type="button"
                           onClick={handleGenerateQuizzes}
                           disabled={generateQuizzesMut.isPending}
-                          className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70"
+                          className="inline-flex min-h-[44px] items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70"
                         >
                           {generateQuizzesMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                           {generateQuizzesMut.isPending ? t('lessonReview.generatingQuizzes') : t('lessonReview.generateQuizzes')}
@@ -349,7 +460,7 @@ export function LessonPlanReview() {
                             type="button"
                             onClick={handleGenerateQuizzes}
                             disabled={generateQuizzesMut.isPending}
-                            className="inline-flex min-h-10 shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70"
+                            className="inline-flex min-h-[44px] shrink-0 items-center justify-center gap-2 rounded-xl bg-indigo-600 px-4 py-2 text-sm font-semibold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-70"
                           >
                             {generateQuizzesMut.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
                             {generateQuizzesMut.isPending ? 'Generating new set…' : 'Redo quiz set'}
@@ -420,89 +531,59 @@ export function LessonPlanReview() {
               />
             </div>
 
-            {/* Decision panel — always usable */}
-            <div className="no-print z-10 space-y-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm sm:p-6 lg:sticky lg:bottom-4 lg:rounded-2xl lg:shadow-[0_-4px_12px_rgba(0,0,0,0.05)]">
-              <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:gap-3">
-                <h2 className="text-lg font-bold text-slate-900">{t('lessonReview.supervisorDecision')}</h2>
-                {waitingOnAi && !aiLikelyStuck && (
-                  <span className="flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-blue-100 text-blue-700">
-                    <Loader2 className="w-3 h-3 animate-spin" /> AI review pending
-                  </span>
-                )}
-                {aiFailed && (
-                  <span className="px-3 py-1 rounded-full text-xs font-bold bg-orange-100 text-orange-700">
-                    Deciding without an AI score
-                  </span>
-                )}
-              </div>
-
-              <p className="text-sm text-slate-600">
-                {review
-                  ? 'The AI review above is advisory — the final decision is yours.'
-                  : 'No AI score is available for this plan. You can still approve it or send it back for revisions.'}
-              </p>
-
-              <textarea
-                value={comment}
-                onChange={(e) => setComment(e.target.value)}
-                placeholder={t('lessonReview.commentPlaceholder')}
-                rows={3}
-                className="w-full resize-none rounded-xl border border-slate-300 px-3 py-3 text-sm leading-6 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200"
-              />
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <button
-                  onClick={handleApprove}
-                  disabled={pending}
-                  className="min-h-12 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-emerald-700 disabled:opacity-50"
-                >
-                  {approveMut.isPending ? 'Approving…' : t('lessonReview.approve')}
-                </button>
-                <button
-                  onClick={handleReject}
-                  disabled={pending}
-                  className="min-h-12 rounded-xl bg-rose-600 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-rose-700 disabled:opacity-50"
-                >
-                  {rejectMut.isPending ? 'Sending…' : t('lessonReview.reject')}
-                </button>
-              </div>
-
-              {/* Unlocking (#1): the only way a submitted plan becomes editable */}
-              <div className="pt-3 border-t border-slate-100">
-                <button
-                  onClick={handleRequestRevision}
-                  disabled={pending || plan.status === 'revision_requested'}
-                  className="flex min-h-12 w-full items-center justify-center gap-2 rounded-xl bg-amber-500 px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-amber-600 disabled:opacity-50"
-                >
-                  <Unlock className="w-4 h-4" />
-                  {plan.status === 'revision_requested'
-                    ? 'Already unlocked for editing'
-                    : revisionMut.isPending
-                      ? 'Unlocking…'
-                      : t('lessonReview.requestRevisions')}
-                </button>
-                <p className="text-xs text-slate-500 mt-2">
-                  Sends the plan back to the teacher and re-enables their edit controls. Any comment above is
-                  passed along as your revision note.
-                </p>
-              </div>
-
-              {(approveMut.isError || rejectMut.isError) && (
-                <p className="text-sm text-rose-600 bg-rose-50 border border-rose-100 rounded-xl p-3">
-                  Could not save the decision: {((approveMut.error || rejectMut.error) as Error)?.message || 'Unknown error'}
-                </p>
-              )}
-            </div>
+            <DecisionPanel
+              phase={phase}
+              comment={comment}
+              onCommentChange={setComment}
+              onDecide={runDecision}
+              onRetry={retryDecision}
+              onNext={nextPlan ? goToNextPlan : null}
+              remaining={nextPlan ? counts.awaiting - 1 : 0}
+              hasAiScore={!!review}
+              waitingOnAi={waitingOnAi}
+              aiFailed={aiFailed}
+              alreadyRevision={plan.status === 'revision_requested'}
+              commentPlaceholder={t('lessonReview.commentPlaceholder')}
+              labels={{
+                heading: t('lessonReview.supervisorDecision'),
+                approve: t('lessonReview.approve'),
+                reject: t('lessonReview.reject'),
+                requestRevisions: t('lessonReview.requestRevisions'),
+              }}
+            />
           </div>
         )}
 
         {!selectedPlanId && (
-          <div className="flex-1 bg-white rounded-2xl border border-dashed border-slate-200 p-16 text-center">
-            <ClipboardCheck className="w-10 h-10 mx-auto text-slate-300 mb-3" />
-            <p className="font-medium text-slate-600">Select a plan to review</p>
-            <p className="text-sm text-slate-400 mt-1">Plans flagged “AI failed” need a manual decision.</p>
+          <div className="flex-1 rounded-2xl border border-dashed border-slate-300 bg-white p-10 text-center">
+            <ClipboardCheck className="mx-auto mb-3 h-10 w-10 text-slate-300" aria-hidden="true" />
+            {counts.awaiting === 0 ? (
+              <>
+                <p className="font-semibold text-slate-700">✓ All caught up</p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Every submitted lesson plan has been decided. New submissions will appear here.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="font-semibold text-slate-700">
+                  {counts.awaiting} lesson {counts.awaiting === 1 ? 'plan is' : 'plans are'} waiting for you
+                </p>
+                <p className="mt-1 text-sm text-slate-500">
+                  Pick one from the queue, or start with the one that has waited longest.
+                </p>
+                <button
+                  type="button"
+                  onClick={goToNextPlan}
+                  className="mt-4 inline-flex min-h-[44px] items-center gap-2 rounded-xl bg-indigo-600 px-5 text-sm font-semibold text-white transition-colors duration-150 hover:bg-indigo-700 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-700"
+                >
+                  Start reviewing <ChevronRight className="h-4 w-4" aria-hidden="true" />
+                </button>
+              </>
+            )}
           </div>
         )}
+
       </div>
     </div>
   );

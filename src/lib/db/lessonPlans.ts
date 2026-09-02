@@ -33,7 +33,10 @@ export async function fetchPlansBySupervisor(): Promise<(LessonPlan & { teacher_
   const { data, error } = await supabase
     .from('lesson_plans')
     .select('*, profiles!lesson_plans_teacher_id_fkey(name)')
-    .in('status', ['submitted', 'in_review', 'approved', 'rejected', 'ai_failed'])
+    // 'revision_requested' is included so a supervisor can see the plans they
+    // sent back (previously these vanished from the queue entirely the moment
+    // revisions were requested, with no way to confirm the action landed).
+    .in('status', ['submitted', 'in_review', 'approved', 'rejected', 'ai_failed', 'revision_requested'])
     .order('created_at', { ascending: false });
   if (error) throw error;
   return (data || []).map((p: any) => ({
