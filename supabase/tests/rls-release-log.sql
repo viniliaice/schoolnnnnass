@@ -95,7 +95,7 @@ DECLARE
   v_def TEXT;
   v_granted BOOLEAN;
 BEGIN
-  SELECT pg_get_functiondef('public.record_release(text,text)'::regprocedure) INTO v_def;
+  SELECT pg_get_functiondef('public.record_release(text,text,text)'::regprocedure) INTO v_def;
   IF v_def IS NULL THEN
     RAISE EXCEPTION 'record_release() does not exist';
   END IF;
@@ -122,9 +122,17 @@ DO $$
 DECLARE
   v_def TEXT;
 BEGIN
-  SELECT pg_get_functiondef('public.record_release(text,text)'::regprocedure) INTO v_def;
+  SELECT pg_get_functiondef('public.record_release(text,text,text)'::regprocedure) INTO v_def;
   IF position('integrity_constraint_violation' in v_def) = 0 THEN
     RAISE EXCEPTION 'record_release() lacks the student-belongs-to-family integrity check';
+  END IF;
+  -- A driver release must be to a driver actually assigned to this student.
+  IF position('authorized_pickup_students' in v_def) = 0 THEN
+    RAISE EXCEPTION 'record_release() lacks the driver-is-assigned-for-student check';
+  END IF;
+  -- A DRIVER student must not release without a specific selected driver.
+  IF position('A driver must be selected before releasing this student' in v_def) = 0 THEN
+    RAISE EXCEPTION 'record_release() does not require a selected driver';
   END IF;
 END $$;
 

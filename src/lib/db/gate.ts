@@ -48,18 +48,33 @@ export interface ReleaseRecord {
   studentId: string;
   familyId: string;
   staffId: string;
+  /** The assigned driver who received the child — NULL for a walking release. */
+  pickupPersonId: string | null;
+  /** 'driver' when released to a driver, 'walking' otherwise. */
+  mode: 'driver' | 'walking';
   createdAt: string;
 }
 
 /**
- * Record a successful handoff (gate staff tap "release"). The RPC verifies
- * the student actually belongs to the family and that the caller is a gate
- * role (admin/supervisor/office) — see supabase/migrations/20260802_release_log.sql.
+ * Record a successful handoff. The RPC decides driver-vs-walking from the
+ * arguments:
+ *  - pass `null`        → a walking release (WALKER/CAR only; a DRIVER student
+ *                         is rejected and must pick a driver first).
+ *  - pass a driver id   → a driver pickup; allowed for WALKER, CAR, and DRIVER
+ *                         students whose current assignment IS that driver. A
+ *                         walking student's permanent transport stays unchanged.
+ *  - bus/left/unknown   → the RPC rejects the release outright.
+ * The RPC also refuses a second release of the same student on the same day.
  */
-export async function recordRelease(studentId: string, familyId: string): Promise<ReleaseRecord> {
+export async function recordRelease(
+  studentId: string,
+  familyId: string,
+  pickupPersonId: string | null,
+): Promise<ReleaseRecord> {
   const { data, error } = await supabase.rpc('record_release', {
     p_student_id: studentId,
     p_family_id: familyId,
+    p_pickup_person_id: pickupPersonId ?? null,
   });
   if (error) throw error;
   return data as ReleaseRecord;

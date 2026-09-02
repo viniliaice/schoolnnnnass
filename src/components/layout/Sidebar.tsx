@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   FileSpreadsheet, Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard
+  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -41,6 +41,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'AI Review Logs', icon: Activity, path: '/admin/ai-logs' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/admin/exam-reports' },
     { label: 'Family IDs', icon: CreditCard, path: '/admin/family-ids' },
+    { label: 'Manage Drivers', icon: CarFront, path: '/admin/drivers' },
   ],
   teacher: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
@@ -90,6 +91,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'Dismissal Gate', icon: ShieldCheck, path: '/gate' },
     { label: 'Family IDs', icon: CreditCard, path: '/admin/family-ids' },
+    { label: 'Manage Drivers', icon: CarFront, path: '/admin/drivers' },
     { label: 'Student Directory', icon: Users, path: '/directory' },
     { label: 'Messages', icon: Mail, path: '/messages' },
     { label: 'Streams', icon: Activity, path: '/streams' },

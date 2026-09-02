@@ -1,5 +1,5 @@
-// Soomaali-first string map for the /gate screen (design review: Soomaali
-// UI with English toggle; safety screen in the staff's language).
+// English-first string map for the /gate screen (design review: English UI
+// with Soomaali toggle; safety screen in the staff's language).
 //
 // NOTE: strings were drafted from the school's bilingual docs. A native
 // speaker pass was explicitly skipped in the eng review (TODOS.md records the
@@ -42,6 +42,46 @@ export interface GateStrings {
   released: string;
   releaseFailed: string;
   releasedAt: string;
+  // Authorized pickup people ("drivers") — Assign driver at the gate.
+  authorizedTitle: string;
+  noDrivers: string;
+  addDriver: string;
+  driverName: string;
+  driverPhone: string;
+  relationship: string;
+  relationshipPlaceholder: string;
+  studentsForDriver: string;
+  takePhoto: string;
+  retakePhoto: string;
+  saveDriver: string;
+  saving: string;
+  cancel: string;
+  photoRequired: string;
+  selectStudentError: string;
+  driverFieldsRequired: string;
+  noDriver: string;
+  selectDriver: string;
+  releaseTo: string;
+  saveDriverFailed: string;
+  driverSavedFor: string;
+  // De-dupe: this phone already belongs to an existing driver.
+  existingDriver: string;
+  attachHint: string;
+  attachToExisting: string;
+  createSeparateDriver: string;
+  // Transport eligibility (walking / driver / bus) at the gate.
+  notEligible: string;
+  driverNotAssigned: string;
+  changeDriver: string;
+  removeDriver: string;
+  driverPickup: string;
+  searchDriver: string;
+  assignDriver: string;
+  noDriversMatch: string;
+  releaseAllFor: string;
+  studentsAssigned: string;
+  bulkReleased: string;
+  releaseFailedBulk: string;
 }
 
 const SO: GateStrings = {
@@ -77,6 +117,43 @@ const SO: GateStrings = {
   released: 'Waa la siiyay',
   releaseFailed: 'Cilad — mar kale isku day',
   releasedAt: 'Waqtiga la siiyay',
+  authorizedTitle: 'Dareewalada la oggol yahay',
+  noDrivers: 'Wali ma jiraan dareewallo la ogolaaday',
+  addDriver: 'U yeel dareewale',
+  driverName: 'Magac',
+  driverPhone: 'Lambarka taleefanka',
+  relationship: 'Xiriir / meesha uu kaxeeyo',
+  relationshipPlaceholder: 'Tusaale: Awoowe — guriga buu kaxeeyaa',
+  studentsForDriver: 'Kee ayuu qaadanayaa?',
+  takePhoto: 'Sawir qaado',
+  retakePhoto: 'Mar kale qaado',
+  saveDriver: 'Kaydi dareewalaha',
+  saving: 'Kaydinta…',
+  cancel: 'Ka noqo',
+  photoRequired: 'Sawir ayaa lagama maarmaan ah',
+  selectStudentError: 'Ugu yaraan hal arday dooro',
+  driverFieldsRequired: 'Magac iyo taleefan ayaa lagama maarmaan ah',
+  noDriver: 'Dareewale ma jiro',
+  selectDriver: 'Dooro dareewalaha',
+  releaseTo: 'Ku sii day',
+  saveDriverFailed: 'Kaydinta dareewalaha ayaa fashilantay',
+  driverSavedFor: 'Lagu daray qoyska',
+  existingDriver: 'Lambarkan waxaa hore u leh dareewale jira',
+  attachHint: 'Ardayda la doortay ku dar dareewalahan hore u jira, halkii aad mid cusub abuuri lahayd',
+  attachToExisting: 'Ku dar',
+  createSeparateDriver: 'Abuur dareewale cusub',
+  notEligible: 'Kuma jiro Iridda Dugsiga',
+  driverNotAssigned: 'Dareewale looma qorin',
+  changeDriver: 'Beddel dareewale',
+  removeDriver: 'Ka saar dareewale',
+  driverPickup: 'Gaadiid dareewale',
+  searchDriver: 'Raadi dareewale…',
+  assignDriver: 'Dooro dareewale',
+  noDriversMatch: 'Dareewale la raadiyay lama helin',
+  releaseAllFor: 'Ku sii day dhammaan',
+  studentsAssigned: 'arday ayaa loo qoray',
+  bulkReleased: 'waa la siiyay',
+  releaseFailedBulk: 'waa fashilantay',
 };
 
 const EN: GateStrings = {
@@ -112,6 +189,43 @@ const EN: GateStrings = {
   released: 'Released',
   releaseFailed: 'Failed — try again',
   releasedAt: 'Released at',
+  authorizedTitle: 'Authorized pickups',
+  noDrivers: 'No authorized drivers yet',
+  addDriver: 'Assign driver',
+  driverName: 'Name',
+  driverPhone: 'Phone number',
+  relationship: 'Relationship / where they take the child',
+  relationshipPlaceholder: 'e.g. Grandfather — takes to home',
+  studentsForDriver: 'Who are they picking up?',
+  takePhoto: 'Take photo',
+  retakePhoto: 'Retake',
+  saveDriver: 'Save driver',
+  saving: 'Saving…',
+  cancel: 'Cancel',
+  photoRequired: 'Photo is required',
+  selectStudentError: 'Select at least one student',
+  driverFieldsRequired: 'Name and phone number are required',
+  noDriver: 'No driver',
+  selectDriver: 'Select driver',
+  releaseTo: 'Release to',
+  saveDriverFailed: 'Could not save driver',
+  driverSavedFor: 'Added to family',
+  existingDriver: 'This phone already belongs to an existing driver',
+  attachHint: 'Attach the selected students to this driver instead of creating a duplicate',
+  attachToExisting: 'Attach to',
+  createSeparateDriver: 'Create separate driver',
+  notEligible: 'Not eligible for Dismissal Gate',
+  driverNotAssigned: 'Driver not assigned',
+  changeDriver: 'Change driver',
+  removeDriver: 'Remove driver',
+  driverPickup: 'Driver pickup',
+  searchDriver: 'Search driver…',
+  assignDriver: 'Assign driver',
+  noDriversMatch: 'No drivers match your search',
+  releaseAllFor: 'Release all for',
+  studentsAssigned: 'students assigned',
+  bulkReleased: 'released',
+  releaseFailedBulk: 'release failed',
 };
 
 export const GATE_STRINGS: Record<GateLang, GateStrings> = { so: SO, en: EN };
@@ -120,13 +234,14 @@ export function gateT(lang: GateLang): GateStrings {
   return GATE_STRINGS[lang];
 }
 
-/** Localized transport badge: 'WALKER' → 'Lug'/'Walker', '9' → 'Bas 9'/'Bus 9'. */
+/** Localized transport badge: 'WALKER' → 'Lug'/'Walker', 'DRIVER' → 'Dareewale'/'Driver', '9' → 'Bas 9'/'Bus 9'. */
 export function gateTransportLabel(lang: GateLang, transport: string | null | undefined): string {
   // Empty transport is WALKER at the gate too, so dismissal never shows '—'
   // for a child who simply walks home.
   const value = normalizeTransport(transport);
   if (value === 'WALKER') return lang === 'so' ? 'Lug' : 'Walker';
   if (value === 'CAR') return lang === 'so' ? 'Gaari' : 'Car';
+  if (value === 'DRIVER') return lang === 'so' ? 'Dareewale' : 'Driver';
   if (/^\d+$/.test(value)) return lang === 'so' ? `Bas ${value}` : `Bus ${value}`;
   return value;
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   displayFamilyId, formatGradeLabel, mapSheetClassCode, normalizeName, normalizePhone,
-  parseTransportCell, transportLabel,
+  parseTransportCell, toStoredTransport, transportChoiceOf, transportLabel,
 } from '../transport';
 
 describe('parseTransportCell', () => {
@@ -71,6 +71,13 @@ describe('display helpers', () => {
     // dash. (Was '—' before empty-means-WALKER was made system-wide.)
     expect(transportLabel(null)).toBe('WALKER');
     expect(transportLabel('')).toBe('WALKER');
+  });
+
+  it('labels the DRIVER transport (dismissal-gate class)', () => {
+    expect(transportLabel('DRIVER')).toBe('Driver');
+    expect(transportChoiceOf('DRIVER')).toBe('DRIVER');
+    expect(toStoredTransport('DRIVER', '')).toBe('DRIVER');
+    expect(transportChoiceOf('driver')).toBe('DRIVER');
   });
 });
 

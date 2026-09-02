@@ -17,6 +17,12 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   // Family-ID browse/print page — office may VIEW + print + lookup.
   '/admin/family-ids': ['admin', 'supervisor', 'office'],
 
+  // Driver management (back-office): admin + office manage the authorized
+  // pickup list. supervisor is deliberately excluded — a whole-school
+  // driver→student→family browse would leak mappings beyond their
+  // class-scoped students RLS; their dismissal-oversight view is /gate.
+  '/admin/drivers': ['admin', 'office'],
+
   // Setup: import the transport sheet + generate IDs. Admin only, enforced
   // here, in the App route switch, AND in SQL (the RPCs re-check the role).
   '/admin/family-ids/setup': ['admin'],

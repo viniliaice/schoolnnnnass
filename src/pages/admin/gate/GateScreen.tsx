@@ -5,17 +5,28 @@
 //   States: idle / checking / found (green + beep) / NOT FOUND (full red
 //   screen + buzz + audit) / error / camera (starting/on/denied).
 //   A11y: ≥44px touch targets (keys ~64px), numerals ≥32px, not color-only
-//   (✓/✕ + tone), Soomaali-first with EN toggle.
+//   (✓/✕ + tone), English-first with Soomaali toggle.
 //   Hardware barcode scanners type into the focused display input + Enter —
 //   same path as the keypad (no extra code).
+//
+// Transport eligibility (2026-09-03): the gate is NOT for every student.
+//   walking  (WALKER / CAR / unset) → one-click release, AND may be assigned a
+//                                      registered driver for a temporary pickup
+//                                      (permanent transport is left unchanged).
+//   driver   (DRIVER)               → release requires an assigned registered driver.
+//   bus      (numeric)              → never released or assigned (no buttons;
+//                                      the server rejects both).
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { lookupGateFamily, recordRelease, type GateLookupResult, type GateLookupRow } from '../../../lib/db/gate';
-import { formatGateDigits, gateCanCheck, normalizeGateInput } from '../../../lib/gate/gate-utils';
+import { getFamilyPickups, removeStudentDriver, resolvePickupPhotoUrls, type FamilyPickup } from '../../../lib/db/authorizedPickups';
+import { buildBulkReleasePlan, formatGateDigits, gateCanCheck, gateEligibility, normalizeGateInput, summarizeBulk, type BulkSummary } from '../../../lib/gate/gate-utils';
 import { errorBuzz, successBeep } from '../../../lib/gate/beep';
 import { gateT, gateTransportLabel, type GateLang } from '../../../lib/i18n/gateStrings';
 import { displayFamilyId } from '../../../lib/transport';
+import { useToast } from '../../../context/ToastContext';
+import { AssignDriverPanel } from './AssignDriverPanel';
 
 type GateStatus = 'idle' | 'checking' | 'found' | 'not-found' | 'error';
 type CameraState = 'off' | 'starting' | 'on' | 'denied';
@@ -27,8 +38,9 @@ const KEYPAD_ROWS: string[][] = [
 ];
 
 export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
-  const [lang, setLang] = useState<GateLang>('so');
+  const [lang, setLang] = useState<GateLang>('en');
   const t = gateT(lang);
+  const { addToast } = useToast();
 
   const [digits, setDigits] = useState('');
   const [status, setStatus] = useState<GateStatus>('idle');
@@ -41,6 +53,16 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
   const [releasing, setReleasing] = useState<Record<string, boolean>>({});
   // studentId → last release attempt failed (surfaces an inline retry)
   const [releaseErrors, setReleaseErrors] = useState<Record<string, boolean>>({});
+  // Authorized pickup people for the matched family (loaded after "found").
+  const [pickups, setPickups] = useState<FamilyPickup[] | null>(null);
+  const [pickupsLoading, setPickupsLoading] = useState(false);
+  // personId -> signed photo URL (private bucket; resolved per render).
+  const [photoUrls, setPhotoUrls] = useState<Map<string, string>>(new Map());
+  // The eligible student (walking or driver transport) currently being assigned
+  // a registered driver.
+  const [pickerStudent, setPickerStudent] = useState<GateLookupRow | null>(null);
+  // Result of the last "Release all for X" (partial-failure aware).
+  const [bulkSummary, setBulkSummary] = useState<BulkSummary | null>(null);
 
   const inputRef = useRef<HTMLInputElement>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -53,15 +75,52 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
     setReleased({});
     setReleasing({});
     setReleaseErrors({});
+    setPickups(null);
+    setPickupsLoading(false);
+    setPhotoUrls(new Map());
+    setPickerStudent(null);
+    setBulkSummary(null);
     inputRef.current?.focus();
   }, []);
 
-  // Record a successful handoff in the release log (student, family, staff, time).
-  const handleRelease = useCallback(async (student: GateLookupRow, familyId: string) => {
+  const loadPickups = useCallback(async (familyId: string) => {
+    setPickups(null);
+    setPickupsLoading(true);
+    try {
+      const list = await getFamilyPickups(familyId);
+      setPickups(list);
+      // Sign the private-bucket photos in parallel; a signing failure just
+      // falls back to the initial avatar — it never blocks the list or a release.
+      resolvePickupPhotoUrls(list)
+        .then(setPhotoUrls)
+        .catch(() => setPhotoUrls(new Map()));
+    } catch {
+      // The assigned list is advisory; a failure here must not block a release.
+      setPickups([]);
+    } finally {
+      setPickupsLoading(false);
+    }
+  }, []);
+
+  // studentId → their assigned driver id (first wins; the RPC enforces one).
+  const assignmentByStudent = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const p of pickups ?? []) {
+      for (const sid of p.studentIds) if (!map[sid]) map[sid] = p.id;
+    }
+    return map;
+  }, [pickups]);
+
+  const driverById = useMemo(() => new Map((pickups ?? []).map(p => [p.id, p])), [pickups]);
+
+  // Record one handoff. driverId null = a plain walking release; a driver id =
+  // a driver pickup (walking or DRIVER transport). Bus/LEFT/unknown are rejected
+  // by the RPC, and a DRIVER student without an assignment cannot release.
+  const handleRelease = useCallback(async (student: GateLookupRow, familyId: string, driverId: string | null) => {
     setReleasing(prev => ({ ...prev, [student.id]: true }));
     setReleaseErrors(prev => ({ ...prev, [student.id]: false }));
     try {
-      const record = await recordRelease(student.id, familyId);
+      const record = await recordRelease(student.id, familyId, driverId);
       setReleased(prev => ({ ...prev, [student.id]: record.createdAt }));
       successBeep();
     } catch {
@@ -71,6 +130,41 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
       setReleasing(prev => ({ ...prev, [student.id]: false }));
     }
   }, []);
+
+  // Bulk release: N individual recordRelease calls — each student is validated
+  // and audited separately, and partial failures are reported per student.
+  const handleBulkRelease = useCallback(async (driverId: string, studentIds: string[], familyId: string) => {
+    const outcomes: Array<{ studentId: string; ok: boolean }> = [];
+    for (const sid of studentIds) {
+      setReleasing(prev => ({ ...prev, [sid]: true }));
+      setReleaseErrors(prev => ({ ...prev, [sid]: false }));
+      try {
+        const record = await recordRelease(sid, familyId, driverId);
+        setReleased(prev => ({ ...prev, [sid]: record.createdAt }));
+        outcomes.push({ studentId: sid, ok: true });
+      } catch {
+        setReleaseErrors(prev => ({ ...prev, [sid]: true }));
+        outcomes.push({ studentId: sid, ok: false });
+      } finally {
+        setReleasing(prev => ({ ...prev, [sid]: false }));
+      }
+    }
+    const summary = summarizeBulk(outcomes);
+    setBulkSummary(summary);
+    if (summary.ok > 0) successBeep();
+    else errorBuzz();
+  }, []);
+
+  const handleRemoveDriver = useCallback(async (student: GateLookupRow, familyId: string) => {
+    try {
+      await removeStudentDriver(student.id);
+      addToast({ type: 'success', title: t.removeDriver, description: student.name });
+      await loadPickups(familyId);
+    } catch {
+      errorBuzz();
+      addToast({ type: 'error', title: t.releaseFailed });
+    }
+  }, [addToast, loadPickups, t.removeDriver, t.releaseFailed]);
 
   const doCheck = useCallback(async (rawInput?: string) => {
     const normalized = normalizeGateInput(rawInput ?? digitsRef.current);
@@ -82,6 +176,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
       if (res.found) {
         successBeep();
         setStatus('found');
+        void loadPickups(normalized);
       } else {
         errorBuzz();
         setStatus('not-found');
@@ -90,7 +185,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
       errorBuzz();
       setStatus('error');
     }
-  }, []);
+  }, [loadPickups]);
 
   // ─── Camera (html5-qrcode) ──────────────────────────────────────────────
   const stopCamera = useCallback(async () => {
@@ -222,8 +317,6 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
         </div>
 
         {/* 2 · Input: keypad OR camera */}
-        {/* Scanner element is ALWAYS in the DOM (hidden when off) so
-            Html5Qrcode.start() can find it without racing React's render. */}
         <div id="gate-scanner" className={camera === 'off' ? 'hidden' : 'mx-auto mb-4 aspect-square w-full max-w-xs overflow-hidden rounded-2xl bg-black'} />
         {camera === 'off' ? (
           <div className="mb-4">
@@ -293,41 +386,114 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
               <span aria-hidden className="text-3xl">✓</span>
               {t.found} · {displayFamilyId(result.familyId)}
             </div>
+
+            {/* "Release all for X" — bulk release for a driver shared by ≥2 students */}
+            {pickupsLoading ? null : (
+              <BulkReleaseButtons
+                students={result.students}
+                assignmentByStudent={assignmentByStudent}
+                driverById={driverById}
+                released={released}
+                releasing={releasing}
+                bulkSummary={bulkSummary}
+                t={t}
+                onBulk={(driverId, ids) => void handleBulkRelease(driverId, ids, result.familyId)}
+              />
+            )}
+
+            {/* Students, classified by transport */}
             {result.students.map(s => {
+              const eligibility = gateEligibility(s.transport);
               const releasedAt = released[s.id];
-              return (
-                <div key={s.id} className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white p-3">
-                  <div className="min-w-0">
-                    <div className="text-lg font-bold">{s.name}</div>
-                    <div className="text-sm text-slate-500">{s.className} · {gateTransportLabel(lang, s.transport)}</div>
-                    {releasedAt && (
-                      <div className="text-xs font-semibold text-emerald-700">
-                        {t.releasedAt}: {new Date(releasedAt).toLocaleTimeString()}
+              const driver = driverById.get(assignmentByStudent[s.id]);
+
+              if (eligibility === 'excluded') {
+                const isBus = /^\d+$/.test((s.transport ?? '').trim());
+                return (
+                  <div key={s.id} className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3">
+                    <div className="min-w-0">
+                      <div className="text-lg font-bold text-slate-700">{s.name}</div>
+                      <div className="text-sm text-slate-500">{s.className}</div>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <div className="text-sm font-semibold text-slate-600">
+                        {isBus ? '🚌 ' : ''}{gateTransportLabel(lang, s.transport)}
                       </div>
-                    )}
-                    {releaseErrors[s.id] && (
-                      <div className="text-xs font-semibold text-red-600">{t.releaseFailed}</div>
-                    )}
+                      <div className="text-xs font-semibold text-amber-700">{t.notEligible}</div>
+                    </div>
                   </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
-                    <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-black text-emerald-800">
-                      {gateTransportLabel(lang, s.transport)}
-                    </span>
-                    {releasedAt ? (
-                      <span className="rounded-full bg-emerald-700 px-3 py-1 text-xs font-black text-white">✓ {t.released}</span>
-                    ) : (
-                      <button
-                        onClick={() => void handleRelease(s, result.familyId)}
-                        disabled={!!releasing[s.id]}
-                        className="min-h-[44px] rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50"
-                      >
-                        {releasing[s.id] ? t.releasing : `✓ ${t.release}`}
-                      </button>
-                    )}
+                );
+              }
+
+              // Eligible: walking (WALKER/CAR) or driver (DRIVER) transport.
+              // `driver` is the student's CURRENT pickup assignment — it may be
+              // set on a walking student for a temporary pickup, and the
+              // student's permanent transport is never overwritten.
+              const isWalking = eligibility === 'walking';
+              const badge = driver
+                ? `🚗 ${isWalking ? t.driverPickup : gateTransportLabel(lang, s.transport)}`
+                : `${isWalking ? '🚶' : '🚗'} ${gateTransportLabel(lang, s.transport)}`;
+              const canRelease = isWalking || Boolean(driver);
+
+              return (
+                <div key={s.id} className="mt-2 rounded-xl border border-emerald-200 bg-white p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="text-lg font-bold">{s.name}</div>
+                      <div className="text-sm text-slate-500">{s.className} · {badge}</div>
+                      <div className="mt-0.5 text-sm font-semibold text-slate-700">
+                        {driver ? `${driver.name} · ${driver.phoneNumber}` : t.driverNotAssigned}
+                      </div>
+                      {releasedAt && (
+                        <div className="text-xs font-semibold text-emerald-700">{t.releasedAt}: {new Date(releasedAt).toLocaleTimeString()}</div>
+                      )}
+                      {releaseErrors[s.id] && <div className="text-xs font-semibold text-red-600">{t.releaseFailed}</div>}
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-1.5">
+                      {releasedAt ? (
+                        <span className="rounded-full bg-emerald-700 px-3 py-1 text-xs font-black text-white">✓ {t.released}</span>
+                      ) : (
+                        <>
+                          {canRelease && (
+                            <button
+                              onClick={() => void handleRelease(s, result.familyId, driver?.id ?? null)}
+                              disabled={!!releasing[s.id]}
+                              className="min-h-[44px] shrink-0 rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50"
+                            >
+                              {releasing[s.id] ? t.releasing : `✓ ${t.release}`}
+                            </button>
+                          )}
+                          {driver ? (
+                            <button
+                              onClick={() => setPickerStudent(s)}
+                              className="min-h-[36px] shrink-0 rounded-lg border border-slate-300 bg-white px-3 text-xs font-bold text-slate-600 transition hover:bg-slate-50"
+                            >
+                              {t.changeDriver}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => setPickerStudent(s)}
+                              className="min-h-[44px] shrink-0 rounded-xl bg-amber-500 px-4 text-sm font-black text-white shadow-sm transition active:scale-95"
+                            >
+                              + {t.addDriver}
+                            </button>
+                          )}
+                          {driver && (
+                            <button
+                              onClick={() => void handleRemoveDriver(s, result.familyId)}
+                              className="min-h-[36px] shrink-0 rounded-lg border border-rose-300 bg-white px-3 text-xs font-bold text-rose-700 transition hover:bg-rose-50"
+                            >
+                              {t.removeDriver}
+                            </button>
+                          )}
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
             })}
+
             <div className="mt-3 text-sm text-slate-700">
               📞 {t.phone}: <b>{result.students.find(s => s.parentPhone)?.parentPhone ?? '—'}</b>
             </div>
@@ -371,6 +537,92 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
           </button>
         </div>
       )}
+
+      {/* Assign a REGISTERED driver to one eligible student (walking or driver). */}
+      <AssignDriverPanel
+        open={pickerStudent !== null}
+        onClose={() => setPickerStudent(null)}
+        student={pickerStudent}
+        t={t}
+        lang={lang}
+        onAssigned={() => { if (result) void loadPickups(result.familyId); }}
+      />
+    </div>
+  );
+}
+
+/** Bulk "Release all for X" buttons — only for drivers shared by ≥2 eligible students. */
+function BulkReleaseButtons({
+  students,
+  assignmentByStudent,
+  driverById,
+  released,
+  releasing,
+  bulkSummary,
+  t,
+  onBulk,
+}: {
+  students: GateLookupRow[];
+  assignmentByStudent: Record<string, string>;
+  driverById: Map<string, FamilyPickup>;
+  released: Record<string, string>;
+  releasing: Record<string, boolean>;
+  bulkSummary: BulkSummary | null;
+  t: ReturnType<typeof gateT>;
+  onBulk: (driverId: string, studentIds: string[]) => void;
+}) {
+  // Group every gate-eligible student (walking OR driver transport) by their
+  // assigned driver. Walking students temporarily assigned to a driver ARE
+  // included; bus/LEFT/unknown students are never included (buildBulkReleasePlan
+  // enforces the transport rule).
+  const groups = useMemo(() => {
+    const driverIds = new Set<string>();
+    for (const s of students) {
+      const id = assignmentByStudent[s.id];
+      if (id) driverIds.add(id);
+    }
+    const result: Array<{ driverId: string; ids: string[] }> = [];
+    for (const driverId of driverIds) {
+      const ids = buildBulkReleasePlan(students, assignmentByStudent, driverId)
+        .filter(id => !released[id]); // not already released this session
+      if (ids.length >= 2) result.push({ driverId, ids });
+    }
+    return result;
+  }, [students, assignmentByStudent, released]);
+
+  if (groups.length === 0) return null;
+
+  return (
+    <div className="mt-3 space-y-2">
+      {groups.map(({ driverId, ids }) => {
+        const driver = driverById.get(driverId);
+        const busy = ids.some(id => releasing[id]);
+        return (
+          <div key={driverId} className="rounded-xl border border-emerald-300 bg-white p-3">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="text-sm font-bold text-slate-800">
+                  {driver ? `${driver.name} · ${driver.phoneNumber}` : driverId}
+                </div>
+                <div className="text-xs text-slate-500">{ids.length} {t.studentsAssigned}</div>
+              </div>
+              <button
+                onClick={() => onBulk(driverId, ids)}
+                disabled={busy}
+                className="min-h-[44px] shrink-0 rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50"
+              >
+                {busy ? t.releasing : `${t.releaseAllFor} ${driver?.name ?? ''}`}
+              </button>
+            </div>
+            {bulkSummary && bulkSummary.total > 0 && (
+              <p className="mt-2 text-xs font-semibold text-slate-600">
+                {bulkSummary.ok} / {bulkSummary.total} {t.bulkReleased}
+                {bulkSummary.failed > 0 ? ` · ${bulkSummary.failed} ${t.releaseFailedBulk}` : ''}
+              </p>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
