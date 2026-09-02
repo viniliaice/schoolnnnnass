@@ -51,7 +51,7 @@ const b = await puppeteer.launch(LAUNCH);
   await selectPlan(p, 1); // an in_review plan with an AI score
   const before = await text(p);
   rec('1a approve: AI advisory notice is present',
-      /advisory — the final decision is yours/.test(before));
+      /AI review is advisory\. The decision is yours\./.test(before));
   rec('1b approve: AI score shows band label not just colour',
       /(Excellent|Strong|Needs attention|Weak)/.test(before));
 
@@ -120,13 +120,13 @@ const b = await puppeteer.launch(LAUNCH);
   await selectPlan(p, 1);
   const pre = await text(p);
   rec('3a revisions: explains that teacher editing is re-enabled',
-      /re-enables the teacher's edit controls/i.test(pre));
-  rec('3b revisions: single shared comment field doubles as the revision note',
-      /Comment \/ revision note/.test(pre) && /this is the revision note the teacher sees/i.test(pre)
+      /unlocks the plan so the teacher can edit and resubmit/i.test(pre));
+  rec('3b revisions: ONE shared field, labelled as the teacher-facing note',
+      /Note for the teacher/i.test(pre)
       && (await p.evaluate(()=>document.querySelectorAll('textarea').length))===1);
 
   await p.type('textarea', 'Please add differentiation for the lower group.');
-  await clickBtn(p, /Request Revisions|Send back/i);
+  await clickBtn(p, /^Send back$/);
   await sleep(150);
   rec('3c revisions: shows "Sending back…" immediately', /Sending back…/.test(await text(p)));
   await sleep(1400);
@@ -135,6 +135,14 @@ const b = await puppeteer.launch(LAUNCH);
       /Sent back for revisions\. Teacher editing has been re-enabled\./.test(after));
   rec('3e revisions: status updates in place to Revision requested',
       await p.evaluate(()=>document.body.innerText.includes('Revision requested')));
+  rec('3g revisions: panel never states the AI situation twice',
+      await p.evaluate(()=>{
+        const t=document.querySelector('[aria-labelledby="decision-heading"]');
+        if(!t) return true;
+        const txt=t.innerText;
+        const noScore=(txt.match(/No AI score/g)||[]).length;
+        return noScore <= 1;
+      }));
   rec('3f no page errors during revision flow', p.__errs.length===0, p.__errs.slice(0,2).join(' | '));
   await p.close();
 }

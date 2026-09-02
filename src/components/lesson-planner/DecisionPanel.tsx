@@ -76,13 +76,17 @@ export function DecisionPanel({
         )}
       </div>
 
-      {/* AI is advisory: stated plainly, in body-text weight, never as a banner
-          that competes with the plan or the decision buttons. */}
-      <p className="review-decision-muted mt-1.5 text-sm leading-6">
-        {hasAiScore
-          ? 'The AI review above is advisory — the final decision is yours.'
-          : 'No AI score is available for this plan. You can still decide using the lesson plan above.'}
-      </p>
+      {/* AI is advisory. Small, secondary, one line — present so the point is
+          on record, but never competing with the plan or the buttons.
+          Suppressed when a chip above already says the same thing, so the
+          panel never states the AI situation twice in a row. */}
+      {(hasAiScore || !(aiFailed || waitingOnAi)) && (
+        <p className="review-decision-muted mt-1 text-xs leading-5">
+          {hasAiScore
+            ? 'AI review is advisory. The decision is yours.'
+            : 'No AI score — decide from the plan above.'}
+        </p>
+      )}
 
       {/* Live region: announces in-flight, success and failure to screen readers.
           Reserved as a block so its appearance never shifts the buttons. */}
@@ -151,24 +155,24 @@ export function DecisionPanel({
       ) : (
         <>
           <label htmlFor="decision-comment" className="review-decision-text mt-3 block text-xs font-semibold">
-            Comment / revision note
+            Note for the teacher <span className="review-decision-muted font-normal">(optional)</span>
           </label>
+          {/* rows=2 keeps the buttons above the fold on a laptop; the field is
+              resize-y for the rare long note. */}
           <textarea
             id="decision-comment"
             value={comment}
             onChange={(e) => onCommentChange(e.target.value)}
             placeholder={commentPlaceholder}
-            rows={3}
+            rows={2}
             disabled={busy}
             className="mt-1 w-full resize-y rounded-xl border border-slate-300 bg-white px-3 py-2.5 text-sm leading-6 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-200 disabled:bg-slate-100"
           />
-          <p className="review-decision-muted mt-1 text-xs">
-            Shared by all three actions — if you send the plan back, this is the revision note the teacher sees.
-          </p>
 
           <div className="mt-3 grid gap-2 sm:grid-cols-2">
-            {/* Approve is the primary action: solid fill, first in DOM and
-                visual order. Reject is deliberately not a loud red block. */}
+            {/* Approve is primary: solid fill, full width, first in DOM and
+                reading order. Send back / Reject are quiet outlines sharing the
+                row below — same weight as each other, clearly subordinate. */}
             <button
               type="button"
               onClick={() => onDecide('approve')}
@@ -204,7 +208,7 @@ export function DecisionPanel({
           </div>
 
           <p className="review-decision-muted mt-2 text-xs">
-            Sending back re-enables the teacher's edit controls so they can revise and resubmit.
+            Sending back unlocks the plan so the teacher can edit and resubmit.
           </p>
         </>
       )}
