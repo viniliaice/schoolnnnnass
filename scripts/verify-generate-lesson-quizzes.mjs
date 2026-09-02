@@ -18,7 +18,7 @@ import http from 'node:http';
 import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const require = createRequire(import.meta.url);
 const ts = require('typescript');
@@ -60,7 +60,8 @@ let js = ts.transpileModule(raw, {
 const workDir = path.join(root, '.verify-tmp');
 rmSync(workDir, { recursive: true, force: true });
 mkdirSync(workDir, { recursive: true });
-const shimUrl = new URL('file://' + path.join(workDir, 'serve-shim.mjs')).href;
+// Windows absolute paths (C:\...) are not valid URL schemes: go through pathToFileURL.
+const shimUrl = pathToFileURL(path.join(workDir, 'serve-shim.mjs')).href;
 js = js.replace('https://deno.land/std@0.224.0/http/server.ts', shimUrl);
 // Point the provider at the local stub (verification-only patch of the copy).
 js = js.replace(
@@ -96,7 +97,7 @@ export function serve(handler) {
 writeFileSync(path.join(workDir, 'function.mjs'), js);
 
 globalThis.Deno = { env: { get: (name) => name === 'GEMINI_API_KEY' ? 'stub-key' : undefined } };
-await import(path.join(workDir, 'function.mjs'));
+await import(pathToFileURL(path.join(workDir, 'function.mjs')).href);
 
 // Wait for serve() to bind.
 const functionPort = await new Promise((resolve, reject) => {
