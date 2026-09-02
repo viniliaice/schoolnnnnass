@@ -42,6 +42,28 @@ export interface GateStrings {
   released: string;
   releaseFailed: string;
   releasedAt: string;
+  // Authorized pickup people ("drivers") — Add Driver at the gate.
+  authorizedTitle: string;
+  noDrivers: string;
+  addDriver: string;
+  driverName: string;
+  driverPhone: string;
+  relationship: string;
+  relationshipPlaceholder: string;
+  studentsForDriver: string;
+  takePhoto: string;
+  retakePhoto: string;
+  saveDriver: string;
+  saving: string;
+  cancel: string;
+  photoRequired: string;
+  selectStudentError: string;
+  driverFieldsRequired: string;
+  noDriver: string;
+  selectDriver: string;
+  releaseTo: string;
+  saveDriverFailed: string;
+  driverSavedFor: string;
 }
 
 const SO: GateStrings = {
@@ -77,6 +99,27 @@ const SO: GateStrings = {
   released: 'Waa la siiyay',
   releaseFailed: 'Cilad — mar kale isku day',
   releasedAt: 'Waqtiga la siiyay',
+  authorizedTitle: 'Dareewalada la oggol yahay',
+  noDrivers: 'Wali ma jiraan dareewallo la ogolaaday',
+  addDriver: 'Ku dar dareewale',
+  driverName: 'Magac',
+  driverPhone: 'Lambarka taleefanka',
+  relationship: 'Xiriir / meesha uu kaxeeyo',
+  relationshipPlaceholder: 'Tusaale: Awoowe — guriga buu kaxeeyaa',
+  studentsForDriver: 'Kee ayuu qaadanayaa?',
+  takePhoto: 'Sawir qaado',
+  retakePhoto: 'Mar kale qaado',
+  saveDriver: 'Kaydi dareewalaha',
+  saving: 'Kaydinta…',
+  cancel: 'Ka noqo',
+  photoRequired: 'Sawir ayaa lagama maarmaan ah',
+  selectStudentError: 'Ugu yaraan hal arday dooro',
+  driverFieldsRequired: 'Magac iyo taleefan ayaa lagama maarmaan ah',
+  noDriver: 'Dareewale ma jiro',
+  selectDriver: 'Dooro dareewalaha',
+  releaseTo: 'Ku sii day',
+  saveDriverFailed: 'Kaydinta dareewalaha ayaa fashilantay',
+  driverSavedFor: 'Lagu daray qoyska',
 };
 
 const EN: GateStrings = {
@@ -112,6 +155,27 @@ const EN: GateStrings = {
   released: 'Released',
   releaseFailed: 'Failed — try again',
   releasedAt: 'Released at',
+  authorizedTitle: 'Authorized pickups',
+  noDrivers: 'No authorized drivers yet',
+  addDriver: 'Add driver',
+  driverName: 'Name',
+  driverPhone: 'Phone number',
+  relationship: 'Relationship / where they take the child',
+  relationshipPlaceholder: 'e.g. Grandfather — takes to home',
+  studentsForDriver: 'Who are they picking up?',
+  takePhoto: 'Take photo',
+  retakePhoto: 'Retake',
+  saveDriver: 'Save driver',
+  saving: 'Saving…',
+  cancel: 'Cancel',
+  photoRequired: 'Photo is required',
+  selectStudentError: 'Select at least one student',
+  driverFieldsRequired: 'Name and phone number are required',
+  noDriver: 'No driver',
+  selectDriver: 'Select driver',
+  releaseTo: 'Release to',
+  saveDriverFailed: 'Could not save driver',
+  driverSavedFor: 'Added to family',
 };
 
 export const GATE_STRINGS: Record<GateLang, GateStrings> = { so: SO, en: EN };

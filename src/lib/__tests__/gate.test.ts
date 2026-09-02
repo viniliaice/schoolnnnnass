@@ -51,18 +51,29 @@ describe('lookupGateFamily', () => {
 });
 
 describe('recordRelease', () => {
-  it('records a successful handoff with student/family/staff/timestamp', async () => {
+  it('records a successful handoff with the selected driver, staff, and timestamp', async () => {
     rpc.mockResolvedValue({
-      data: { id: 7, studentId: 's1', familyId: '0421', staffId: 'office-umal', createdAt: '2026-08-02T14:00:00Z' },
+      data: { id: 7, studentId: 's1', familyId: '0421', staffId: 'office-umal', pickupPersonId: 'pickup-1', createdAt: '2026-08-02T14:00:00Z' },
       error: null,
     });
-    const record = await recordRelease('s1', '0421');
-    expect(record).toMatchObject({ studentId: 's1', familyId: '0421', staffId: 'office-umal' });
-    expect(rpc).toHaveBeenCalledWith('record_release', { p_student_id: 's1', p_family_id: '0421' });
+    const record = await recordRelease('s1', '0421', 'pickup-1');
+    expect(record).toMatchObject({ studentId: 's1', familyId: '0421', staffId: 'office-umal', pickupPersonId: 'pickup-1' });
+    expect(rpc).toHaveBeenCalledWith('record_release', { p_student_id: 's1', p_family_id: '0421', p_pickup_person_id: 'pickup-1' });
+  });
+
+  it('refuses to release with no driver selected (never calls the RPC)', async () => {
+    await expect(recordRelease('s1', '0421', '')).rejects.toThrow(/driver must be selected/);
+    await expect(recordRelease('s1', '0421', '' as unknown as string)).rejects.toThrow(/driver must be selected/);
+    expect(rpc).not.toHaveBeenCalled();
   });
 
   it('throws when the RPC rejects the release (e.g. student not in family)', async () => {
     rpc.mockResolvedValue({ data: null, error: { message: 'Student does not belong to the given family.' } });
-    await expect(recordRelease('s1', '9999')).rejects.toThrow(/does not belong/);
+    await expect(recordRelease('s1', '9999', 'pickup-1')).rejects.toThrow(/does not belong/);
+  });
+
+  it('throws when the driver is not authorized for the student', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'Driver is not authorized to pick up this student.' } });
+    await expect(recordRelease('s1', '0421', 'pickup-9')).rejects.toThrow(/not authorized/);
   });
 });

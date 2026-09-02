@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatGateDigits, gateCanCheck, normalizeGateInput } from '../gate/gate-utils';
+import { formatGateDigits, gateCanCheck, normalizeGateInput, releaseDriverForStudent } from '../gate/gate-utils';
 
 describe('normalizeGateInput', () => {
   it('strips the MBK- prefix', () => {
@@ -33,5 +33,23 @@ describe('formatGateDigits', () => {
     expect(formatGateDigits('0421')).toBe('0421');
     expect(formatGateDigits('04215')).toBe('0421 5');
     expect(formatGateDigits('042156')).toBe('0421 56');
+  });
+});
+
+describe('releaseDriverForStudent', () => {
+  const authorized = ['pickup-1', 'pickup-2'];
+
+  it('blocks when no driver is selected', () => {
+    expect(releaseDriverForStudent(undefined, authorized)).toBeNull();
+    expect(releaseDriverForStudent('', authorized)).toBeNull();
+    expect(releaseDriverForStudent(null, authorized)).toBeNull();
+  });
+
+  it('blocks when the selected driver is not authorized for this student', () => {
+    expect(releaseDriverForStudent('pickup-9', authorized)).toBeNull();
+  });
+
+  it('allows only a driver authorized for this specific student', () => {
+    expect(releaseDriverForStudent('pickup-2', authorized)).toBe('pickup-2');
   });
 });

@@ -15,3 +15,18 @@ export function gateCanCheck(digits: string): boolean {
 export function formatGateDigits(digits: string): string {
   return digits.length > 4 ? `${digits.slice(0, 4)} ${digits.slice(4)}` : digits;
 }
+
+/**
+ * Resolve the driver a staff member selected for a student's release.
+ * Returns the selected driver id ONLY when it is one of the student's
+ * authorized drivers; otherwise null (release must stay blocked). This is the
+ * single source of truth for the "cannot release without a valid, matching
+ * driver" rule — the RPC re-checks the same condition server-side.
+ */
+export function releaseDriverForStudent(
+  selected: string | null | undefined,
+  authorizedDriverIds: string[],
+): string | null {
+  if (!selected) return null;
+  return authorizedDriverIds.includes(selected) ? selected : null;
+}

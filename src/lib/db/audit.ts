@@ -18,15 +18,15 @@ export type AuditEntry = {
 };
 
 export async function createAuditLog(action: AuditAction, details: Record<string, unknown>): Promise<void> {
+  // audit_logs has no open INSERT policy: writes go through the SECURITY
+  // DEFINER create_audit_log() RPC (staff-gated server-side), so a parent or
+  // teacher can never forge an audit row. See
+  // supabase/migrations/20260902_lockdown_audit_logs.sql.
   try {
-    const { error } = await supabase.from('audit_logs').insert({
-      action,
-      details,
-      createdAt: new Date().toISOString(),
-    });
-    if (error) console.warn('audit_logs insert failed (table may not exist):', error.message);
+    const { error } = await supabase.rpc('create_audit_log', { p_action: action, p_details: details });
+    if (error) console.warn('create_audit_log failed:', error.message);
   } catch {
-    // audit_logs table may not exist yet — fail silently
+    // audit logging is non-critical — never let it break the caller's flow
   }
 }
 

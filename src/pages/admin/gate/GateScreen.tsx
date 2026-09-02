@@ -12,10 +12,12 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Html5Qrcode } from 'html5-qrcode';
 import { lookupGateFamily, recordRelease, type GateLookupResult, type GateLookupRow } from '../../../lib/db/gate';
-import { formatGateDigits, gateCanCheck, normalizeGateInput } from '../../../lib/gate/gate-utils';
+import { getFamilyPickups, resolvePickupPhotoUrls, type FamilyPickup } from '../../../lib/db/authorizedPickups';
+import { formatGateDigits, gateCanCheck, normalizeGateInput, releaseDriverForStudent } from '../../../lib/gate/gate-utils';
 import { errorBuzz, successBeep } from '../../../lib/gate/beep';
 import { gateT, gateTransportLabel, type GateLang } from '../../../lib/i18n/gateStrings';
 import { displayFamilyId } from '../../../lib/transport';
+import { AddDriverPanel } from './AddDriverPanel';
 
 type GateStatus = 'idle' | 'checking' | 'found' | 'not-found' | 'error';
 type CameraState = 'off' | 'starting' | 'on' | 'denied';
@@ -41,6 +43,14 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
   const [releasing, setReleasing] = useState<Record<string, boolean>>({});
   // studentId → last release attempt failed (surfaces an inline retry)
   const [releaseErrors, setReleaseErrors] = useState<Record<string, boolean>>({});
+  // Authorized pickup people for the matched family (loaded after "found").
+  const [pickups, setPickups] = useState<FamilyPickup[] | null>(null);
+  const [pickupsLoading, setPickupsLoading] = useState(false);
+  // personId -> signed photo URL (private bucket; resolved per render).
+  const [photoUrls, setPhotoUrls] = useState<Map<string, string>>(new Map());
+  const [showAddDriver, setShowAddDriver] = useState(false);
+  // studentId → selected authorized driver to record on release ('' = none).
+  const [releaseTo, setReleaseTo] = useState<Record<string, string>>({});
 
   const inputRef = useRef<HTMLInputElement>(null);
   const scannerRef = useRef<Html5Qrcode | null>(null);
@@ -53,15 +63,45 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
     setReleased({});
     setReleasing({});
     setReleaseErrors({});
+    setPickups(null);
+    setPickupsLoading(false);
+    setPhotoUrls(new Map());
+    setReleaseTo({});
+    setShowAddDriver(false);
     inputRef.current?.focus();
   }, []);
 
-  // Record a successful handoff in the release log (student, family, staff, time).
+  const loadPickups = useCallback(async (familyId: string) => {
+    setPickups(null);
+    setPickupsLoading(true);
+    try {
+      const list = await getFamilyPickups(familyId);
+      setPickups(list);
+      // Sign the private-bucket photos in parallel; a signing failure just
+      // falls back to the initial avatar — it never blocks the list or a release.
+      resolvePickupPhotoUrls(list)
+        .then(setPhotoUrls)
+        .catch(() => setPhotoUrls(new Map()));
+    } catch {
+      // The authorized list is advisory; a failure here must not block a release.
+      setPickups([]);
+    } finally {
+      setPickupsLoading(false);
+    }
+  }, []);
+
+  // Record a successful handoff. A driver is REQUIRED: the button is disabled
+  // without one, and recordRelease() + the RPC both reject a missing/wrong driver.
   const handleRelease = useCallback(async (student: GateLookupRow, familyId: string) => {
+    const driverId = releaseTo[student.id];
+    if (!driverId) {
+      errorBuzz();
+      return;
+    }
     setReleasing(prev => ({ ...prev, [student.id]: true }));
     setReleaseErrors(prev => ({ ...prev, [student.id]: false }));
     try {
-      const record = await recordRelease(student.id, familyId);
+      const record = await recordRelease(student.id, familyId, driverId);
       setReleased(prev => ({ ...prev, [student.id]: record.createdAt }));
       successBeep();
     } catch {
@@ -70,7 +110,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
     } finally {
       setReleasing(prev => ({ ...prev, [student.id]: false }));
     }
-  }, []);
+  }, [releaseTo]);
 
   const doCheck = useCallback(async (rawInput?: string) => {
     const normalized = normalizeGateInput(rawInput ?? digitsRef.current);
@@ -82,6 +122,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
       if (res.found) {
         successBeep();
         setStatus('found');
+        void loadPickups(normalized);
       } else {
         errorBuzz();
         setStatus('not-found');
@@ -90,7 +131,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
       errorBuzz();
       setStatus('error');
     }
-  }, []);
+  }, [loadPickups]);
 
   // ─── Camera (html5-qrcode) ──────────────────────────────────────────────
   const stopCamera = useCallback(async () => {
@@ -293,8 +334,62 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
               <span aria-hidden className="text-3xl">✓</span>
               {t.found} · {displayFamilyId(result.familyId)}
             </div>
+
+            {/* Authorized pickup people ("drivers") for this family */}
+            <div className="mt-3">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-black uppercase tracking-wide text-emerald-900">
+                  {t.authorizedTitle}
+                </span>
+                <button
+                  onClick={() => setShowAddDriver(true)}
+                  className="min-h-[40px] rounded-xl bg-emerald-800 px-3 py-1.5 text-sm font-black text-white transition active:scale-95"
+                >
+                  + {t.addDriver}
+                </button>
+              </div>
+              {pickupsLoading ? (
+                <p className="mt-1 text-xs text-slate-500">…</p>
+              ) : pickups && pickups.length > 0 ? (
+                <div className="mt-2 space-y-2">
+                  {pickups.map(p => (
+                    <div key={p.id} className="flex items-center gap-3 rounded-xl border border-emerald-200 bg-white p-2">
+                      {photoUrls.get(p.id) ? (
+                        <img
+                          src={photoUrls.get(p.id)}
+                          alt={p.name}
+                          className="h-11 w-11 shrink-0 rounded-full border border-slate-200 object-cover"
+                        />
+                      ) : (
+                        <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-lg font-black text-emerald-800">
+                          {p.name.trim()[0]?.toUpperCase() ?? '?'}
+                        </span>
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="text-sm font-bold text-slate-800">{p.name}</div>
+                        <div className="text-xs text-slate-500">{p.relationship}</div>
+                        <div className="text-xs font-semibold text-slate-600">{p.phoneNumber}</div>
+                      </div>
+                      <div className="flex max-w-[40%] shrink-0 flex-wrap justify-end gap-1">
+                        {p.studentIds.map(id => (
+                          <span key={id} className="rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-800">
+                            {result.students.find(s => s.id === id)?.name ?? id}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="mt-1 text-xs text-slate-500">{t.noDrivers}</p>
+              )}
+            </div>
+
             {result.students.map(s => {
               const releasedAt = released[s.id];
+              const studentDrivers = (pickups ?? []).filter(p => p.studentIds.includes(s.id));
+              const selectedDriver = releaseDriverForStudent(releaseTo[s.id], studentDrivers.map(p => p.id));
+              const releaseDisabled = !!releasing[s.id] || !selectedDriver;
               return (
                 <div key={s.id} className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white p-3">
                   <div className="min-w-0">
@@ -316,13 +411,27 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
                     {releasedAt ? (
                       <span className="rounded-full bg-emerald-700 px-3 py-1 text-xs font-black text-white">✓ {t.released}</span>
                     ) : (
-                      <button
-                        onClick={() => void handleRelease(s, result.familyId)}
-                        disabled={!!releasing[s.id]}
-                        className="min-h-[44px] rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50"
-                      >
-                        {releasing[s.id] ? t.releasing : `✓ ${t.release}`}
-                      </button>
+                      <>
+                        <select
+                          value={releaseTo[s.id] ?? ''}
+                          onChange={e => setReleaseTo(prev => ({ ...prev, [s.id]: e.target.value }))}
+                          aria-label={`${t.releaseTo}: ${s.name}`}
+                          className="w-40 rounded-lg border border-emerald-300 bg-white px-2 py-1 text-xs font-semibold text-slate-700 outline-none"
+                        >
+                          <option value="">— {t.selectDriver} —</option>
+                          {studentDrivers.map(p => (
+                            <option key={p.id} value={p.id}>{p.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          onClick={() => void handleRelease(s, result.familyId)}
+                          disabled={releaseDisabled}
+                          title={selectedDriver ? undefined : t.selectDriver}
+                          className="min-h-[44px] rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50"
+                        >
+                          {releasing[s.id] ? t.releasing : `✓ ${t.release}`}
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -371,6 +480,16 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
           </button>
         </div>
       )}
+
+      {/* Add a driver on the spot — required photo, saved once, usable now. */}
+      <AddDriverPanel
+        open={showAddDriver && !!result}
+        onClose={() => setShowAddDriver(false)}
+        familyId={result?.familyId ?? ''}
+        students={result?.students ?? []}
+        t={t}
+        onAdded={() => { if (result) void loadPickups(result.familyId); }}
+      />
     </div>
   );
 }

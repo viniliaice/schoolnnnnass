@@ -48,18 +48,30 @@ export interface ReleaseRecord {
   studentId: string;
   familyId: string;
   staffId: string;
+  /** The authorized pickup person who received the child (always set). */
+  pickupPersonId: string;
   createdAt: string;
 }
 
 /**
- * Record a successful handoff (gate staff tap "release"). The RPC verifies
- * the student actually belongs to the family and that the caller is a gate
- * role (admin/supervisor/office) — see supabase/migrations/20260802_release_log.sql.
+ * Record a successful handoff. A specific, staff-selected driver is REQUIRED:
+ * the wrapper refuses an empty selection, and the RPC independently rejects a
+ * missing driver and verifies the driver is actually authorized for this
+ * student (see supabase/migrations/20260901_authorized_pickups.sql). There is
+ * no fallback path that releases without a driver on record.
  */
-export async function recordRelease(studentId: string, familyId: string): Promise<ReleaseRecord> {
+export async function recordRelease(
+  studentId: string,
+  familyId: string,
+  pickupPersonId: string,
+): Promise<ReleaseRecord> {
+  if (!pickupPersonId) {
+    throw new Error('A driver must be selected before releasing a student.');
+  }
   const { data, error } = await supabase.rpc('record_release', {
     p_student_id: studentId,
     p_family_id: familyId,
+    p_pickup_person_id: pickupPersonId,
   });
   if (error) throw error;
   return data as ReleaseRecord;
