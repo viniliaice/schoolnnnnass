@@ -218,9 +218,29 @@ END;
 $$;
 
 -- ─── 4. double-release guard: one release per student per UTC day ───────────
--- NOTE for live apply: if release_log already contains two releases for the same
--- student on the same UTC day, this CREATE UNIQUE INDEX fails. Review those rows
--- manually, then re-run.
+-- Before the UNIQUE index can exist, collapse any pre-existing same-day
+-- duplicates (they violate the new invariant and are exactly what this guard
+-- prevents). Keep the FIRST release per (student, UTC day) — the row with the
+-- lowest id — and delete the later ones. The release EVENT is not lost: every
+-- release also wrote a family_ids.release row into audit_logs, which is left
+-- untouched. Idempotent: with no duplicates it deletes nothing.
+DELETE FROM public.release_log
+WHERE id IN (
+  SELECT id
+  FROM (
+    SELECT id,
+           ROW_NUMBER() OVER (
+             PARTITION BY "studentId", ("createdAt" AT TIME ZONE 'UTC')::date
+             ORDER BY id
+           ) AS rn
+    FROM public.release_log
+  ) ranked
+  WHERE rn > 1
+);
+
+-- The race-condition backstop: concurrent releases of the same student -> one
+-- wins, the other gets unique_violation (surfaced by record_release as
+-- 'Student has already been released today.').
 CREATE UNIQUE INDEX IF NOT EXISTS uniq_release_log_student_day
   ON public.release_log ("studentId", (("createdAt" AT TIME ZONE 'UTC')::date));
 
