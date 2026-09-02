@@ -1,5 +1,5 @@
-// Soomaali-first string map for the /gate screen (design review: Soomaali
-// UI with English toggle; safety screen in the staff's language).
+// English-first string map for the /gate screen (design review: English UI
+// with Soomaali toggle; safety screen in the staff's language).
 //
 // NOTE: strings were drafted from the school's bilingual docs. A native
 // speaker pass was explicitly skipped in the eng review (TODOS.md records the

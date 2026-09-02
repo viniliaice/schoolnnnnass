@@ -5,7 +5,7 @@
 //   States: idle / checking / found (green + beep) / NOT FOUND (full red
 //   screen + buzz + audit) / error / camera (starting/on/denied).
 //   A11y: ≥44px touch targets (keys ~64px), numerals ≥32px, not color-only
-//   (✓/✕ + tone), Soomaali-first with EN toggle.
+//   (✓/✕ + tone), English-first with Soomaali toggle.
 //   Hardware barcode scanners type into the focused display input + Enter —
 //   same path as the keypad (no extra code).
 //
@@ -38,7 +38,7 @@ const KEYPAD_ROWS: string[][] = [
 ];
 
 export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
-  const [lang, setLang] = useState<GateLang>('so');
+  const [lang, setLang] = useState<GateLang>('en');
   const t = gateT(lang);
   const { addToast } = useToast();
 
