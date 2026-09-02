@@ -40,7 +40,7 @@ describe('authorized pickup data access', () => {
   it('reads pickup people through the gate-role RPC', async () => {
     rpc.mockResolvedValue({
       data: [{
-        person_id: 'person-1', family_id: '0042', name: 'Aamina Ali',
+        person_id: 'person-1', family_id: '0042', student_ids: ['student-1'], student_names: ['Aamina Ali'], name: 'Aamina Ali',
         phone_number: '0630000000', relationship: 'Grandfather',
         photo_url: 'https://storage/photo.jpg', added_by_staff_id: 'staff-1',
         added_at: '2026-09-01T10:00:00Z',
@@ -57,8 +57,8 @@ describe('authorized pickup data access', () => {
     getPublicUrl.mockReturnValue({ data: { publicUrl: 'https://storage/0042/person-1.jpg' } });
     rpc.mockResolvedValue({
       data: {
-        personId: 'person-1', familyId: '0042', name: 'Aamina Ali', phoneNumber: '0630000000',
-        relationship: null, photoUrl: 'https://storage/0042/person-1.jpg',
+      personId: 'person-1', familyId: '0042', studentIds: ['student-1'], name: 'Aamina Ali', phoneNumber: '0630000000',
+      relationship: null, photoUrl: 'https://storage/0042/person-1.jpg',
         addedByStaffId: 'staff-1', addedAt: '2026-09-01T10:00:00Z',
       },
       error: null,
@@ -70,11 +70,11 @@ describe('authorized pickup data access', () => {
     expect(upload).toHaveBeenCalledWith('0042/person-1.jpg', blob, expect.objectContaining({ contentType: 'image/jpeg', upsert: false }));
 
     await createAuthorizedPickup({
-      personId: 'person-1', familyId: '0042', name: 'Aamina Ali',
+      personId: 'person-1', familyId: '0042', studentIds: ['student-1'], name: 'Aamina Ali',
       phoneNumber: '0630000000', relationship: '', photoUrl,
     });
     expect(rpc).toHaveBeenCalledWith('create_authorized_pickup', expect.objectContaining({
-      p_person_id: 'person-1', p_phone_number: '0630000000', p_photo_url: photoUrl,
+      p_person_id: 'person-1', p_student_ids: ['student-1'], p_phone_number: '0630000000', p_photo_url: photoUrl,
     }));
   });
 });

@@ -1,22 +1,24 @@
 import { supabase } from '../supabase';
 
-/** A person a family has authorized to collect one of its students. */
+/** A driver authorized for a selected set of students in one family. */
 export interface AuthorizedPickup {
   personId: string;
   familyId: string;
+  /** Authorization is per student, not blanket access to every sibling. */
+  studentIds: string[];
+  studentNames: string[];
   name: string;
   phoneNumber: string;
   relationship: string | null;
   photoUrl: string;
   addedByStaffId: string;
   addedAt: string;
-  studentName?: string | null;
-  studentClassName?: string | null;
 }
 
 export interface CreateAuthorizedPickupInput {
   personId: string;
   familyId: string;
+  studentIds: string[];
   name: string;
   phoneNumber: string;
   relationship?: string;
@@ -27,18 +29,24 @@ export function canonicalFamilyId(familyId: string): string {
   return (familyId ?? '').replace(/\D/g, '').padStart(4, '0');
 }
 
+function asStringArray(value: unknown): string[] {
+  return Array.isArray(value) ? value.map(String) : [];
+}
+
 function mapPickup(row: any): AuthorizedPickup {
+  const studentNames = asStringArray(row.studentNames ?? row.student_names);
+  const studentIds = asStringArray(row.studentIds ?? row.student_ids);
   return {
     personId: String(row.personId ?? row.person_id ?? row.id),
     familyId: String(row.familyId ?? row.family_id ?? ''),
+    studentIds,
+    studentNames,
     name: String(row.name ?? ''),
     phoneNumber: String(row.phoneNumber ?? row.phone_number ?? row.phone ?? ''),
     relationship: row.relationship ?? null,
     photoUrl: String(row.photoUrl ?? row.photo_url ?? ''),
     addedByStaffId: String(row.addedByStaffId ?? row.added_by_staff_id ?? ''),
     addedAt: String(row.addedAt ?? row.added_at ?? ''),
-    studentName: row.studentName ?? row.student_name ?? null,
-    studentClassName: row.studentClassName ?? row.student_class_name ?? null,
   };
 }
 
@@ -88,6 +96,7 @@ export async function createAuthorizedPickup(input: CreateAuthorizedPickupInput)
   const { data, error } = await supabase.rpc('create_authorized_pickup', {
     p_person_id: input.personId,
     p_family_id: input.familyId,
+    p_student_ids: [...new Set(input.studentIds)],
     p_name: input.name.trim(),
     p_phone_number: input.phoneNumber.trim(),
     p_relationship: input.relationship?.trim() || null,

@@ -57,11 +57,17 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
     }
   }, []);
 
+  const pickupForStudent = useCallback((studentId: string): AuthorizedPickup | null => {
+    return pickups.find(pickup => pickup.personId === selectedPickupId && pickup.studentIds.includes(studentId))
+      ?? pickups.find(pickup => pickup.studentIds.includes(studentId))
+      ?? null;
+  }, [pickups, selectedPickupId]);
+
   const handleRelease = useCallback(async (student: GateLookupRow, familyId: string) => {
     setReleasing(previous => ({ ...previous, [student.id]: true }));
     setReleaseErrors(previous => ({ ...previous, [student.id]: false }));
     try {
-      const record = await recordRelease(student.id, familyId, selectedPickupId ?? undefined);
+      const record = await recordRelease(student.id, familyId, pickupForStudent(student.id)?.personId);
       setReleased(previous => ({ ...previous, [student.id]: record.createdAt }));
       successBeep();
     } catch {
@@ -70,7 +76,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
     } finally {
       setReleasing(previous => ({ ...previous, [student.id]: false }));
     }
-  }, [selectedPickupId]);
+  }, [pickupForStudent]);
 
   const selectedPickup = pickups.find(pickup => pickup.personId === selectedPickupId) ?? null;
 
@@ -139,6 +145,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
                         <span className="block truncate text-sm font-black text-slate-900">{pickup.name}</span>
                         <span className="mt-0.5 flex items-center gap-1 text-xs text-slate-600"><Phone className="h-3 w-3" /> {pickup.phoneNumber}</span>
                         {pickup.relationship && <span className="mt-0.5 flex items-center gap-1 text-xs text-slate-500"><HeartHandshake className="h-3 w-3" /> {pickup.relationship}</span>}
+                        {pickup.studentNames.length > 0 && <span className="mt-0.5 block truncate text-[11px] font-semibold text-emerald-700">For: {pickup.studentNames.join(', ')}</span>}
                       </span>
                       <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${selected ? 'bg-emerald-700 text-white' : 'bg-slate-100 text-transparent'}`}><Check className="h-4 w-4" /></span>
                     </button>
@@ -149,14 +156,15 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
 
             {selectedPickup && (
               <div className="mt-3 flex items-center gap-2 rounded-xl bg-emerald-100 px-3 py-2 text-xs font-bold text-emerald-900">
-                <UserRound className="h-4 w-4" /> Release with {selectedPickup.name}
-                <span className="ml-auto rounded-full bg-emerald-700 px-2 py-0.5 text-[10px] font-black text-white">Selected</span>
+                <UserRound className="h-4 w-4" /> {selectedPickup.name}
+                <span className="ml-auto rounded-full bg-emerald-700 px-2 py-0.5 text-[10px] font-black text-white">Selected driver</span>
               </div>
             )}
 
             <div className="mt-3 space-y-2">
               {result.students.map(student => {
                 const releasedAt = released[student.id];
+                const releasePickup = pickupForStudent(student.id);
                 return (
                   <div key={student.id} className="flex items-center justify-between gap-3 rounded-xl border border-emerald-200 bg-white p-3">
                     <div className="min-w-0">
@@ -170,9 +178,12 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
                       {releasedAt ? (
                         <span className="rounded-full bg-emerald-700 px-3 py-1 text-xs font-black text-white">✓ {t.released}</span>
                       ) : (
-                        <button onClick={() => void handleRelease(student, result.familyId)} disabled={!!releasing[student.id]} className="min-h-[44px] rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50">
-                          {releasing[student.id] ? t.releasing : `✓ ${t.release}`}
-                        </button>
+                        <>
+                          {releasePickup && <span className="max-w-[112px] text-right text-[10px] font-bold text-emerald-700">with {releasePickup.name}</span>}
+                          <button onClick={() => void handleRelease(student, result.familyId)} disabled={!!releasing[student.id]} className="min-h-[44px] rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50">
+                            {releasing[student.id] ? t.releasing : `✓ ${t.release}`}
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -187,6 +198,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
       <DriverFormDialog
         open={driverFormOpen}
         familyId={result?.familyId ?? ''}
+        students={result?.students ?? []}
         onClose={() => setDriverFormOpen(false)}
         onSaved={pickup => {
           setPickups(previous => [pickup, ...previous]);

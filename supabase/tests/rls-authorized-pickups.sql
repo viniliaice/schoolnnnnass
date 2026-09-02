@@ -9,9 +9,9 @@ BEGIN
   SELECT count(*) INTO v_count
   FROM information_schema.columns
   WHERE table_schema = 'public' AND table_name = 'authorized_pickups'
-    AND column_name IN ('person_id', 'family_id', 'name', 'phone_number',
+    AND column_name IN ('person_id', 'family_id', 'student_ids', 'name', 'phone_number',
                         'relationship', 'photo_url', 'added_by_staff_id', 'added_at');
-  IF v_count <> 8 THEN
+  IF v_count <> 9 THEN
     RAISE EXCEPTION 'authorized_pickups is missing required columns (found %)', v_count;
   END IF;
 END $$;
@@ -50,7 +50,7 @@ DECLARE
   v_granted BOOLEAN;
 BEGIN
   SELECT pg_get_functiondef(
-    'public.create_authorized_pickup(uuid,text,text,text,text,text)'::regprocedure
+    'public.create_authorized_pickup(uuid,text,text,text,text,text,text[])'::regprocedure
   ) INTO v_def;
   IF v_def IS NULL
      OR position('current_profile_id()' in v_def) = 0
@@ -58,8 +58,9 @@ BEGIN
      OR position('''supervisor''' in v_def) = 0
      OR position('''admin''' in v_def) = 0
      OR position('photo_url' in v_def) = 0
+     OR position('student_ids' in v_def) = 0
      OR position('photoCaptured' in v_def) = 0 THEN
-    RAISE EXCEPTION 'create_authorized_pickup() is missing the actor/photo/audit safeguards';
+    RAISE EXCEPTION 'create_authorized_pickup() is missing the actor/student/photo/audit safeguards';
   END IF;
 
   SELECT EXISTS (
