@@ -640,6 +640,82 @@ html[data-mode="light"] .theme-button-primary { color: #fff !important; }
 
 main > div, .max-w-5xl, .rounded-2xl, .rounded-3xl, article { animation: themeFade 420ms ease both; }
 
+/* ── School Gate motion system (2026-09-02) ───────────────────────────────
+   The global themeFade above re-animates EVERY rounded container, which made
+   gate result cards flicker and re-run a 420ms fade on each state change.
+   The gate opts out entirely and uses three deliberate durations instead:
+     fast     100-150ms  button/press feedback
+     standard 150-250ms  content transitions (results, driver crossfade)
+     slow     250-350ms  major state changes only
+   Everything is opacity/transform only — never width/height/margin — so no
+   animation can cause layout shift.                                        */
+.gate-screen, .gate-screen * { animation: none; }
+
+.gate-screen {
+  --gate-fast: 130ms;
+  --gate-standard: 200ms;
+  --gate-slow: 300ms;
+  --gate-ease: cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+
+@keyframes gateEnter {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes gateFade {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+@keyframes gateScanSweep {
+  0%   { transform: translateY(-100%); }
+  100% { transform: translateY(320%); }
+}
+
+@keyframes gateShimmer {
+  from { transform: translateX(-100%); }
+  to   { transform: translateX(100%); }
+}
+
+@keyframes gatePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.45; transform: scale(0.85); }
+}
+
+.gate-screen .gate-enter {
+  animation: gateEnter var(--gate-standard) var(--gate-ease) both;
+  animation-delay: var(--gate-stagger, 0ms);
+}
+
+.gate-screen .gate-fade { animation: gateFade var(--gate-standard) var(--gate-ease) both; }
+
+.gate-screen .gate-scanline {
+  animation: gateScanSweep 1.1s cubic-bezier(0.45, 0, 0.55, 1) infinite;
+}
+
+.gate-screen .gate-skeleton { position: relative; overflow: hidden; }
+.gate-screen .gate-skeleton::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.65), transparent);
+  animation: gateShimmer 1.25s linear infinite;
+}
+
+.gate-screen .gate-dot { animation: gatePulse 1.4s ease-in-out infinite; }
+
+/* Reduced motion: keep meaning, drop movement. No transforms, no loops —
+   only a very short opacity fade so state changes stay perceivable. */
+@media (prefers-reduced-motion: reduce) {
+  .gate-screen .gate-enter,
+  .gate-screen .gate-fade { animation: gateFade 1ms linear both; transform: none; }
+  .gate-screen .gate-scanline,
+  .gate-screen .gate-dot { animation: none; }
+  .gate-screen .gate-skeleton::after { animation: none; opacity: 0.35; }
+  .gate-screen .gate-press:active { transform: none; }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.001ms !important;

@@ -54,11 +54,15 @@ export function AssignDriverPanel({
     if (!open) return;
     let cancelled = false;
     setLoading(true);
-    searchAuthorizedPickups(query)
-      .then(list => { if (!cancelled) setResults(list); })
-      .catch(() => { if (!cancelled) setResults([]); })
-      .finally(() => { if (!cancelled) setLoading(false); });
-    return () => { cancelled = true; };
+    // Debounced + cancelled-safe: typing no longer fires one RPC per keystroke,
+    // and a slow earlier response can never overwrite a newer result set.
+    const timer = setTimeout(() => {
+      searchAuthorizedPickups(query)
+        .then(list => { if (!cancelled) setResults(list); })
+        .catch(() => { if (!cancelled) setResults([]); })
+        .finally(() => { if (!cancelled) setLoading(false); });
+    }, query ? 180 : 0);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [open, query]);
 
   const assign = async (driver: AuthorizedPickup) => {
@@ -102,10 +106,23 @@ export function AssignDriverPanel({
           />
         </div>
 
+        {/* Fixed-height list region: the skeleton, the empty state, and the
+            real results all live in the same 18rem box, so the dialog never
+            resizes while a search is in flight. */}
         {loading ? (
-          <p className="py-6 text-center text-sm text-slate-400">…</p>
+          <div aria-busy="true" className="max-h-72 space-y-1.5 overflow-hidden">
+            {[0, 1, 2].map(i => (
+              <div key={i} className="flex items-center gap-3 rounded-xl border border-slate-200 bg-white px-3 py-2">
+                <span className="gate-skeleton h-9 w-9 shrink-0 rounded-full bg-slate-200/80" />
+                <span className="min-w-0 flex-1 space-y-1.5">
+                  <span className="gate-skeleton block h-3.5 w-32 rounded bg-slate-200/80" />
+                  <span className="gate-skeleton block h-3 w-20 rounded bg-slate-200/80" />
+                </span>
+              </div>
+            ))}
+          </div>
         ) : results.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">
+          <p className="flex min-h-[9rem] items-center justify-center rounded-xl border border-dashed border-slate-300 bg-slate-50 px-3 text-center text-sm text-slate-500">
             {t.noDriversMatch}
           </p>
         ) : (

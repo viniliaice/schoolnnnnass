@@ -82,6 +82,19 @@ export interface GateStrings {
   studentsAssigned: string;
   bulkReleased: string;
   releaseFailedBulk: string;
+  // Operational status + results chrome (2026-09-02 gate redesign).
+  ready: string;
+  readyToScan: string;
+  scanning: string;
+  loadingFamily: string;
+  results: string;
+  familyFound: string;
+  noResultsYet: string;
+  driver: string;
+  driverLoadFailed: string;
+  eligibility: string;
+  eligible: string;
+  newScan: string;
 }
 
 const SO: GateStrings = {
@@ -154,6 +167,18 @@ const SO: GateStrings = {
   studentsAssigned: 'arday ayaa loo qoray',
   bulkReleased: 'waa la siiyay',
   releaseFailedBulk: 'waa fashilantay',
+  ready: 'Diyaar',
+  readyToScan: 'Diyaar u ah xeroorka',
+  scanning: 'Xeroorka…',
+  loadingFamily: 'Soo raadinta qoyska…',
+  results: 'Natiijada',
+  familyFound: 'Qoyska waa la helay',
+  noResultsYet: 'Xeroor ama ku qor lambarka qoyska si aad u bilowdo',
+  driver: 'Dareewale',
+  driverLoadFailed: 'Xogta dareewalaha lama soo helin',
+  eligibility: 'Xaalad',
+  eligible: 'Waa la sii dayn karaa',
+  newScan: 'Xeroor cusub',
 };
 
 const EN: GateStrings = {
@@ -226,6 +251,18 @@ const EN: GateStrings = {
   studentsAssigned: 'students assigned',
   bulkReleased: 'released',
   releaseFailedBulk: 'release failed',
+  ready: 'Ready',
+  readyToScan: 'Ready to scan',
+  scanning: 'Scanning…',
+  loadingFamily: 'Loading family…',
+  results: 'Results',
+  familyFound: 'Family found',
+  noResultsYet: 'Scan or type a Family ID to begin',
+  driver: 'Driver',
+  driverLoadFailed: 'Driver data unavailable',
+  eligibility: 'Status',
+  eligible: 'Ready to release',
+  newScan: 'New scan',
 };
 
 export const GATE_STRINGS: Record<GateLang, GateStrings> = { so: SO, en: EN };
