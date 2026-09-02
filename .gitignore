@@ -17,3 +17,4 @@ github_pat_*
 
 # QA-only gate harness build output
 qa-harness/dist
+qa-harness/*.png

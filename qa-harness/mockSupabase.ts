@@ -70,3 +70,7 @@ export const supabase = {
   storage: { from: () => ({ createSignedUrl: async () => ({ data: null, error: true }) }) },
 };
 export const supabaseWithToken = () => supabase;
+
+/** Unused by the gate, but src/lib/db/profiles.ts imports it — keep the mock's
+ *  export surface identical to the real module so the scanner resolves. */
+export const createAuthedClient = () => supabase;

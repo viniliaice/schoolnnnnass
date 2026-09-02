@@ -169,6 +169,28 @@ describe('scan flow', () => {
     expect(text()).toContain('Driver data unavailable');
   });
 
+  it('still commits results after a REMOUNT (StrictMode double-invoke)', async () => {
+    // Regression: the `mounted` ref was cleared on unmount but never re-armed
+    // on mount, so after StrictMode's simulated remount every async setState
+    // was dropped and the screen froze on "Loading family…" forever. Found by
+    // the real-browser QA run, which renders under <StrictMode>.
+    act(() => root.unmount());
+    container.remove();
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+    const { StrictMode } = await import('react');
+    act(() => { root.render(<StrictMode><GateScreen navigate={() => {}} /></StrictMode>); });
+
+    lookupGateFamily.mockResolvedValue(FAM_A);
+    getFamilyPickups.mockResolvedValue([ASKO]);
+    type('0050');
+    clickCheck();
+    await flush();
+    expect(text()).toContain('RAYAAN AXMAD');
+    expect(text()).toContain('ASKO');
+  });
+
   it('shows a clean error state for a failed lookup', async () => {
     lookupGateFamily.mockRejectedValue(new Error('boom'));
     getFamilyPickups.mockResolvedValue([]);

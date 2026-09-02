@@ -1,0 +1,5 @@
+/* The sandbox has no network access to Google Fonts. Real deployments DO load
+   them, and a late webfont swap is itself a layout-shift source — so QA pins
+   metrics-stable local fallbacks rather than leaving the font undefined. */
+:root { --body-font: system-ui, sans-serif; --display-font: Georgia, serif; }
+html, body { font-family: system-ui, sans-serif; }

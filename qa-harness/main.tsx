@@ -1,6 +1,7 @@
 import { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import '../src/index.css';
+import './qa-fonts.css';
 import { ToastProvider } from '../src/context/ToastContext';
 import { GateScreen } from '../src/pages/admin/gate/GateScreen';
 
@@ -8,7 +9,10 @@ import { GateScreen } from '../src/pages/admin/gate/GateScreen';
 function ClsMeter() {
   useEffect(() => {
     let total = 0;
+    const existing = document.getElementById('cls-meter');
+    if (existing) return;
     const el = document.createElement('div');
+    el.id = 'cls-meter';
     el.style.cssText = 'position:fixed;right:8px;bottom:8px;z-index:9999;background:#0f172a;color:#fff;font:12px monospace;padding:6px 10px;border-radius:8px';
     el.textContent = 'CLS 0.0000';
     document.body.appendChild(el);

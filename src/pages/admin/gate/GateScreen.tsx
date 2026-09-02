@@ -84,7 +84,15 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
   const scanToken = useRef(0);
   /** Guards setState after unmount (camera/scan can resolve late). */
   const mounted = useRef(true);
-  useEffect(() => () => { mounted.current = false; }, []);
+  useEffect(() => {
+    // MUST re-arm on mount, not only clear on unmount: StrictMode (and any
+    // remount, e.g. navigating away from /gate and back) runs the cleanup and
+    // then re-runs the effect. Without this the ref stayed false forever and
+    // every async commit was silently dropped — the screen froze on
+    // "Loading family…". Caught by the real-browser QA run.
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
 
   const resetToIdle = useCallback(() => {
     scanToken.current += 1; // invalidate anything still in flight
@@ -317,7 +325,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
                 key={code}
                 onClick={() => setLang(code)}
                 aria-pressed={lang === code}
-                className={`min-h-[36px] rounded-md px-2.5 transition duration-150 ${lang === code ? 'bg-emerald-800 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
+                className={`min-h-[44px] min-w-[44px] rounded-md px-2.5 transition duration-150 ${lang === code ? 'bg-emerald-800 text-white' : 'text-slate-500 hover:bg-slate-100'}`}
               >
                 {code === 'so' ? 'So' : 'EN'}
               </button>
@@ -333,10 +341,13 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
           <div
             role="status"
             aria-live="polite"
-            className="flex items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600"
+            /* Fixed width: the label cycles Ready → Scanning… → Family found,
+               and an auto-width pill re-flowed on every state change (the last
+               remaining measured shift, 0.0001). Now only the text swaps. */
+            className="flex w-[9.5rem] items-center gap-2 rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-semibold text-slate-600"
           >
-            <span aria-hidden className={`gate-dot h-2 w-2 rounded-full ${statusTone}`} />
-            {statusLabel}
+            <span aria-hidden className={`gate-dot h-2 w-2 shrink-0 rounded-full ${statusTone}`} />
+            <span className="truncate">{statusLabel}</span>
           </div>
         </div>
 
@@ -435,17 +446,24 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
         </section>
 
         {/* ── Results ─────────────────────────────────────────────────────── */}
-        <div className="mt-5 flex items-center gap-3">
+        {/* Fixed-height header row with a permanently reserved action slot.
+            'New scan' used to mount only on success, which resized the divider
+            and nudged the whole results block down (browser QA: resultsDivider
+            dy 9.8px / dw 102px). The slot is now always present; the button
+            inside it just becomes visible. */}
+        <div className="mt-5 flex h-11 items-center gap-3">
           <h2 className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{t.results}</h2>
           <div aria-hidden className="h-px flex-1 bg-slate-200" />
-          {status === 'found' && (
+          <div className="flex h-11 w-[7.5rem] shrink-0 items-center justify-end">
             <button
               onClick={resetToIdle}
-              className="gate-press min-h-[36px] rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 transition duration-150 hover:bg-slate-50"
+              tabIndex={status === 'found' ? 0 : -1}
+              aria-hidden={status !== 'found'}
+              className={`gate-press min-h-[44px] rounded-lg border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-600 transition-opacity duration-150 hover:bg-slate-50 ${status === 'found' ? 'opacity-100' : 'pointer-events-none opacity-0'}`}
             >
               {t.newScan}
             </button>
-          )}
+          </div>
         </div>
 
         <div className="mt-2.5">
@@ -478,23 +496,6 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
                 </span>
               </div>
 
-              {family.pickupsFailed && (
-                <p role="alert" className="mt-2 rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800">
-                  {t.driverLoadFailed}
-                </p>
-              )}
-
-              <BulkReleaseButtons
-                students={family.students}
-                assignmentByStudent={family.assignmentByStudent}
-                driverById={driverById}
-                released={released}
-                releasing={releasing}
-                bulkSummary={bulkSummary}
-                t={t}
-                onBulk={(driverId, ids) => void handleBulkRelease(driverId, ids, family.familyId)}
-              />
-
               <ul className="mt-3 space-y-2.5">
                 {family.students.map((s, i) => (
                   <StudentCard
@@ -513,6 +514,28 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
                   />
                 ))}
               </ul>
+
+              {/* Driver-warning and bulk-release blocks live BELOW the student
+                  list. Above it they were unreserved content that mounted only
+                  for some families, pushing every card down (browser QA:
+                  card0 dy 74px with a shared driver, 36px on driver failure).
+                  Below the list they can appear without moving any card. */}
+              {family.pickupsFailed && (
+                <p role="alert" className="mt-3 rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-semibold text-amber-800">
+                  {t.driverLoadFailed}
+                </p>
+              )}
+
+              <BulkReleaseButtons
+                students={family.students}
+                assignmentByStudent={family.assignmentByStudent}
+                driverById={driverById}
+                released={released}
+                releasing={releasing}
+                bulkSummary={bulkSummary}
+                t={t}
+                onBulk={(driverId, ids) => void handleBulkRelease(driverId, ids, family.familyId)}
+              />
 
               <p className="mt-3 text-xs text-slate-600">
                 📞 {t.phone}: <b>{family.students.find(s => s.parentPhone)?.parentPhone ?? '—'}</b>
