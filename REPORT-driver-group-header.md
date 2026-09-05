@@ -50,7 +50,8 @@ The brief refers to "the initials-avatar fallback already built for `AddDriverPa
 dialog is `AssignDriverPanel.tsx`, whose avatar is initials-only at `h-9 w-9` (`:118-120`). The pattern
 I actually reused is the photo-or-initials two-branch shape from `ManageDrivers.tsx` — the only other
 place in the repo that consumes a `resolvePickupPhotoUrls` map — at its **list-row** size
-(`h-12 w-12`, `:240-249`), which fits a compact card header. `AUDIT-add-driver-gate.md` describes an
+(`:240-249`), which fits a compact card header — at **60px** rather than that row's 48px (see below).
+`AUDIT-add-driver-gate.md` describes an
 earlier `AddDriverPanel` with photo capture; the landed code is the search-and-pick `AssignDriverPanel`.
 
 ---
@@ -61,13 +62,21 @@ earlier `AddDriverPanel` with photo capture; the landed code is the search-and-p
 plus the one prop at the call site.
 
 **Row 1 — identity** (`:618-639`): `flex items-center gap-3` holding the avatar then the text.
-- Avatar 48px, `rounded-full`; photo branch `border border-slate-200 object-cover` with
-  `alt={driver?.name ?? driverId}`; fallback branch `bg-emerald-100 text-lg font-black text-emerald-800`
+- Avatar **60px** (`h-15 w-15`), `rounded-full`; photo branch `border border-slate-200 object-cover` with
+  `alt={driver?.name ?? driverId}`; fallback branch `bg-emerald-100 text-xl font-black text-emerald-800`
   showing `driver?.name.trim()[0]?.toUpperCase() ?? '?'`.
 - Text column `min-w-0 flex-1` with `truncate` on both lines (the `AssignDriverPanel` convention), so a
   long name ellipsises instead of wrapping into a third line.
 - Name · phone and count keep their exact original classes (`text-sm font-bold text-slate-800`,
   `text-xs text-slate-500`) — no new tokens.
+
+**Avatar size (+25%, revised after review).** The slot first landed at `h-12`/48px and was then bumped to
+`h-15`/60px on request. `h-15` is not in a static Tailwind scale, so it was verified against the real
+build rather than assumed: the emitted CSS is `.h-15{height:calc(var(--spacing)*15)}` with
+`--spacing:.25rem` → 3.75rem = **60px**, against `.h-12{height:calc(var(--spacing)*12)}` = 48px. Both
+branches share the one slot so the row height is identical with and without a photo, and the initials
+glyph went `text-lg` → `text-xl` to hold its proportion in the larger circle. The two size assertions in
+the test were confirmed to **fail** against the pre-bump code (2 failed / 6 passed).
 
 **Row 2 — action** (`:640-648`): the button moved out of the flex row to its own line, `mt-3 w-full`,
 keeping its original primary-action classes verbatim
@@ -141,8 +150,8 @@ Visual check: I rendered the real `BulkReleaseButtons` with `renderToStaticMarku
 styled by **this branch's own compiled Tailwind CSS** (extracted from `dist/index.html`), covering
 with-photo, initials-fallback, long-name truncation, and post-release states at both 448px and 320px.
 It is being served as a live preview on port 4173. The rendered markup confirms the intended structure,
-e.g. `<span class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-100
-text-lg font-black text-emerald-800">M</span><div class="min-w-0 flex-1"><div class="truncate text-sm
+e.g. `<span class="flex h-15 w-15 shrink-0 items-center justify-center rounded-full bg-emerald-100
+text-xl font-black text-emerald-800">M</span><div class="min-w-0 flex-1"><div class="truncate text-sm
 font-bold text-slate-800">maxmed ziyaad · 06…`.
 
 **What I could not check:** the signed URL path end-to-end against live Supabase storage is not

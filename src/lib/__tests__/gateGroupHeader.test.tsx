@@ -73,6 +73,9 @@ describe('driver-group header — row 1 identity', () => {
     expect(html).toContain('src="https://cdn.test/signed.jpg"');
     expect(html).toContain('alt="maxmed ziyaad"');
     expect(html).toContain('maxmed ziyaad · 0634218915');
+    // 60px avatar slot (h-15 = 15 * --spacing/.25rem) — 25% up from the
+    // original h-12/48px, so the photo reads clearly on the gate device.
+    expect(html).toContain('h-15 w-15');
     // The photo comes first in the DOM, then the text next to it.
     expect(html.indexOf('<img')).toBeLessThan(html.indexOf('maxmed ziyaad'));
   });
@@ -87,6 +90,9 @@ describe('driver-group header — row 1 identity', () => {
     expect(html).not.toContain('<img');
     expect(html).toContain('rounded-full bg-emerald-100');
     expect(html).toContain('>M<'); // initial of "maxmed ziyaad"
+    // Same 60px slot as the photo branch, so the row height never shifts
+    // between a driver with a photo and one without.
+    expect(html).toContain('h-15 w-15');
   });
 
   it('still renders an avatar when the driver record is missing', () => {

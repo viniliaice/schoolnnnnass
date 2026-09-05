@@ -617,16 +617,18 @@ export function BulkReleaseButtons({
           <div key={driverId} className="rounded-xl border border-emerald-300 bg-white p-3">
             {/* Row 1 — driver identity: photo, then name · phone and the count.
                 The signed URL is already resolved by the gate screen, so a
-                missing entry just means "no photo" → initials avatar. */}
+                missing entry just means "no photo" → initials avatar.
+                Both branches share the 60px slot so the row height is the same
+                with or without a photo. */}
             <div className="flex items-center gap-3">
               {photoUrls.get(driverId) ? (
                 <img
                   src={photoUrls.get(driverId)}
                   alt={driver?.name ?? driverId}
-                  className="h-12 w-12 shrink-0 rounded-full border border-slate-200 object-cover"
+                  className="h-15 w-15 shrink-0 rounded-full border border-slate-200 object-cover"
                 />
               ) : (
-                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-lg font-black text-emerald-800">
+                <span className="flex h-15 w-15 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-xl font-black text-emerald-800">
                   {driver?.name.trim()[0]?.toUpperCase() ?? '?'}
                 </span>
               )}

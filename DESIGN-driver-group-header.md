@@ -19,11 +19,18 @@ introduces a new visual token.
 
 ## D2. Avatar size
 
+> **Revised after review (2026-09-05):** `h-12`/48px was implemented first, then bumped to
+> **`h-15`/60px (+25%)** on request so the driver's photo reads clearly from the gate desk.
+> 60px sits between the two `ManageDrivers` precedents below. Confirmed emitted by the build as
+> `.h-15{height:calc(var(--spacing)*15)}` with `--spacing:.25rem` → 3.75rem = 60px. The initials
+> glyph went `text-lg` → `text-xl` to keep the same visual proportion inside the larger circle.
+
 | Option | Verdict |
 |---|---|
-| (a) `h-12 w-12` (48px) | **CHOSEN.** Verbatim `ManageDrivers.tsx:240-249`, the list-row shape, and the only place that consumes a `resolvePickupPhotoUrls` map. Right scale for a card header beside a 2-line text block, and it leaves the name line at its current `text-sm`. |
-| (b) `h-16 w-16` (64px) | Rejected — `ManageDrivers.tsx:125-134` uses that for a *page-level* header; here it would dominate a compact card and push the two text lines' optical centre down. |
-| (c) `h-9 w-9` (36px) | Rejected — that is `AssignDriverPanel.tsx:118-120`, a dense search-result row. Too small to serve as the identity anchor for a whole group. |
+| (a) `h-15 w-15` (60px) | **CHOSEN (revised).** 25% larger than the `h-12` list-row size; still smaller than the 64px page-header avatar, so it does not dominate the card. |
+| (b) `h-12 w-12` (48px) | Original pick — verbatim `ManageDrivers.tsx:240-249`, the list-row shape and the only place that consumes a `resolvePickupPhotoUrls` map. Superseded by (a) for legibility at distance. |
+| (c) `h-16 w-16` (64px) | Rejected — `ManageDrivers.tsx:125-134` uses that for a *page-level* header; here it would dominate a compact card and push the two text lines' optical centre down. |
+| (d) `h-9 w-9` (36px) | Rejected — that is `AssignDriverPanel.tsx:118-120`, a dense search-result row. Too small to serve as the identity anchor for a whole group. |
 
 ## D3. Photo + fallback
 
@@ -32,10 +39,10 @@ Reuse the two-branch shape that already exists, driven by the map the screen alr
 ```jsx
 {photoUrls.get(driverId) ? (
   <img src={photoUrls.get(driverId)} alt={driver?.name ?? driverId}
-       className="h-12 w-12 shrink-0 rounded-full border border-slate-200 object-cover" />
+       className="h-15 w-15 shrink-0 rounded-full border border-slate-200 object-cover" />
 ) : (
-  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full
-                   bg-emerald-100 text-lg font-black text-emerald-800">
+  <span className="flex h-15 w-15 shrink-0 items-center justify-center rounded-full
+                   bg-emerald-100 text-xl font-black text-emerald-800">
     {driver?.name.trim()[0]?.toUpperCase() ?? '?'}
   </span>
 )}
@@ -57,7 +64,7 @@ wrap and re-introduce a third line inside row 1.
 
 No breakpoint added. Verified the screen has **zero** `sm:`/`md:`/`lg:` utilities
 (`grep -no "\b(sm|md|lg|xl):" GateScreen.tsx` → no matches), and it is a fixed `max-w-md` fluid column.
-The layout is therefore fluid-flex at every width: `48px avatar + gap + flexible text` degrades
+The layout is therefore fluid-flex at every width: `60px avatar + gap + flexible text` degrades
 gracefully to 320px, and row 2 is full width so it never competes for horizontal space. Adding a `md:`
 variant here would be the only breakpoint on the screen and would fight its mobile-first design.
 

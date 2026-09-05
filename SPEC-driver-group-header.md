@@ -43,7 +43,7 @@ URL is already resolved and held in `photoUrls` (`:60`, set at `:94`, read nowhe
 ```
 <div card  rounded-xl border-emerald-300 bg-white p-3>            ← unchanged
   <div ROW 1  flex items-center gap-3>
-     photo | initials avatar   48px, rounded-full, left          ← NEW (existing pattern)
+     photo | initials avatar   60px, rounded-full, left          ← NEW (existing pattern)
      <div min-w-0>
         name · phone          truncate, font-bold text-slate-800 ← unchanged tokens
         N students assigned   text-xs text-slate-500             ← unchanged tokens
@@ -57,7 +57,7 @@ URL is already resolved and held in `photoUrls` (`:60`, set at `:94`, read nowhe
 ```
 
 ### Row 1 — identity
-- Avatar: `h-12 w-12 shrink-0 rounded-full` — photo branch `border border-slate-200 object-cover` with `alt={driver.name}`; fallback branch `flex items-center justify-center bg-emerald-100 text-lg font-black text-emerald-800` showing `driver.name.trim()[0]?.toUpperCase() ?? '?'`. This is the `ManageDrivers.tsx:240-249` list-row shape verbatim (the 48px size suits a compact card header; the 64px `h-16` variant there is for a full page header, and `AssignDriverPanel`'s 36px `h-9` is for search-result rows).
+- Avatar: `h-15 w-15 shrink-0 rounded-full` — photo branch `border border-slate-200 object-cover` with `alt={driver?.name ?? driverId}`; fallback branch `flex items-center justify-center bg-emerald-100 text-xl font-black text-emerald-800` showing `driver?.name.trim()[0]?.toUpperCase() ?? '?'`. The shape is `ManageDrivers.tsx:240-249` verbatim; the size is **60px** (`h-15` = 15 × `--spacing`/`.25rem` in Tailwind v4), 25% up from the 48px `h-12` first landed, so the driver's face reads clearly from behind the gate desk. Both branches share the one slot, so the row height never shifts between a driver with a photo and one without.
 - Photo lookup: `photoUrls.get(driverId)`. `undefined` (no photo, or signing failed — the resolver omits failures) → initials fallback. Not an error state.
 - Name line stays `{driver ? `${driver.name} · ${driver.phoneNumber}` : driverId}` with `driverId` as the existing degenerate fallback.
 - Count line stays `{ids.length} {t.studentsAssigned}`.
@@ -86,7 +86,7 @@ No other file changes. No dependency added.
 ## 6. Acceptance criteria
 
 1. Photo, name · phone, and count occupy row 1 with the photo immediately left of the text; the Release-all button is the only thing on row 2, full width.
-2. With no signed URL for the driver, an initials avatar renders in the same 48px slot — no layout shift, no broken `<img>`.
+2. With no signed URL for the driver, an initials avatar renders in the same 60px slot — no layout shift, no broken `<img>`.
 3. A driver whose record is missing from `driverById` still renders (raw `driverId`), and still renders an avatar (`?` initial) rather than crashing.
 4. `groups.length === 0` still renders nothing.
 5. Per-student rows byte-identical in behaviour; `recordRelease` call sites untouched.
