@@ -393,6 +393,7 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
                 students={result.students}
                 assignmentByStudent={assignmentByStudent}
                 driverById={driverById}
+                photoUrls={photoUrls}
                 released={released}
                 releasing={releasing}
                 bulkSummary={bulkSummary}
@@ -551,11 +552,24 @@ export function GateScreen({ navigate }: { navigate: (path: string) => void }) {
   );
 }
 
-/** Bulk "Release all for X" buttons — only for drivers shared by ≥2 eligible students. */
-function BulkReleaseButtons({
+/**
+ * Driver-group card — the header above a driver's assigned students, plus the
+ * "Release all for X" bulk action. Only rendered for drivers shared by ≥2
+ * eligible students.
+ *
+ * Layout (2026-09-05 fix): two distinct rows, because the identity text and the
+ * bulk button used to share one flex row and squeezed together inside the
+ * screen's max-w-md column.
+ *   Row 1 — driver photo (or initials) + name · phone + assigned count.
+ *   Row 2 — the bulk release action, full width on its own line.
+ *
+ * Exported for render tests (src/lib/__tests__/gateGroupHeader.test.tsx).
+ */
+export function BulkReleaseButtons({
   students,
   assignmentByStudent,
   driverById,
+  photoUrls,
   released,
   releasing,
   bulkSummary,
@@ -565,6 +579,8 @@ function BulkReleaseButtons({
   students: GateLookupRow[];
   assignmentByStudent: Record<string, string>;
   driverById: Map<string, FamilyPickup>;
+  /** personId → signed photo URL, already resolved by the gate screen. */
+  photoUrls: Map<string, string>;
   released: Record<string, string>;
   releasing: Record<string, boolean>;
   bulkSummary: BulkSummary | null;
@@ -599,21 +615,37 @@ function BulkReleaseButtons({
         const busy = ids.some(id => releasing[id]);
         return (
           <div key={driverId} className="rounded-xl border border-emerald-300 bg-white p-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-sm font-bold text-slate-800">
+            {/* Row 1 — driver identity: photo, then name · phone and the count.
+                The signed URL is already resolved by the gate screen, so a
+                missing entry just means "no photo" → initials avatar. */}
+            <div className="flex items-center gap-3">
+              {photoUrls.get(driverId) ? (
+                <img
+                  src={photoUrls.get(driverId)}
+                  alt={driver?.name ?? driverId}
+                  className="h-12 w-12 shrink-0 rounded-full border border-slate-200 object-cover"
+                />
+              ) : (
+                <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-emerald-100 text-lg font-black text-emerald-800">
+                  {driver?.name.trim()[0]?.toUpperCase() ?? '?'}
+                </span>
+              )}
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm font-bold text-slate-800">
                   {driver ? `${driver.name} · ${driver.phoneNumber}` : driverId}
                 </div>
-                <div className="text-xs text-slate-500">{ids.length} {t.studentsAssigned}</div>
+                <div className="truncate text-xs text-slate-500">{ids.length} {t.studentsAssigned}</div>
               </div>
-              <button
-                onClick={() => onBulk(driverId, ids)}
-                disabled={busy}
-                className="min-h-[44px] shrink-0 rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50"
-              >
-                {busy ? t.releasing : `${t.releaseAllFor} ${driver?.name ?? ''}`}
-              </button>
             </div>
+            {/* Row 2 — the bulk action, full width on its own line (same
+                convention as the screen's other primary actions). */}
+            <button
+              onClick={() => onBulk(driverId, ids)}
+              disabled={busy}
+              className="mt-3 min-h-[44px] w-full rounded-xl bg-emerald-800 px-4 text-sm font-black text-white shadow-sm transition active:scale-95 disabled:opacity-50"
+            >
+              {busy ? t.releasing : `${t.releaseAllFor} ${driver?.name ?? ''}`}
+            </button>
             {bulkSummary && bulkSummary.total > 0 && (
               <p className="mt-2 text-xs font-semibold text-slate-600">
                 {bulkSummary.ok} / {bulkSummary.total} {t.bulkReleased}
