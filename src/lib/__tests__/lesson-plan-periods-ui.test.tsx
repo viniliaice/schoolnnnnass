@@ -33,7 +33,7 @@ function renderPlanGrid(count: number): string {
 }
 
 describe('Lesson Plan Upload / editor period UI', () => {
-  it('shows a dynamic period count control instead of a fixed 5/6 select', () => {
+  it('shows a fixed 4/5/6 dropdown instead of a free-form stepper', () => {
     const markup = renderToStaticMarkup(
       <CreatePlanForm
         className="Foundation-KG"
@@ -53,13 +53,17 @@ describe('Lesson Plan Upload / editor period UI', () => {
     );
     expect(markup).toContain('Periods per day');
     expect(markup).toContain('aria-label="Periods per day"');
+    // Exactly the three allowed options, with 4 preselected.
+    expect(markup).toContain('4 periods');
+    expect(markup).toContain('5 periods');
+    expect(markup).toContain('6 periods');
     expect(markup).toContain('value="4"');
-    // The old fixed options are gone.
-    expect(markup).not.toContain('5 periods');
-    expect(markup).not.toContain('6 periods');
+    // No free-form number entry anymore.
+    expect(markup).not.toContain('type="number"');
+    expect(markup).not.toContain('7 periods');
   });
 
-  it('the config bar also uses the dynamic control', () => {
+  it('the config bar also uses the fixed dropdown', () => {
     const markup = renderToStaticMarkup(
       <PlanConfigBar
         className="Foundation-KG"
@@ -76,7 +80,11 @@ describe('Lesson Plan Upload / editor period UI', () => {
     );
     expect(markup).toContain('Periods/day');
     expect(markup).toContain('aria-label="Periods per day"');
+    expect(markup).toContain('4 periods');
+    expect(markup).toContain('5 periods');
+    expect(markup).toContain('6 periods');
     expect(markup).toContain('value="4"');
+    expect(markup).not.toContain('type="number"');
   });
 
   it('renders exactly the four period rows for a Foundation/KG plan — no period 5 or 6', () => {
@@ -99,17 +107,25 @@ describe('Lesson Plan Upload / editor period UI', () => {
     expect(markup).toContain('5 periods per day');
   });
 
-  it('renders six periods when the plan has six', () => {
+  it('renders six periods when the plan has six and never offers a seventh', () => {
     const markup = renderPlanGrid(6);
     expect(markup).toContain('>P6<');
-    expect(markup).toContain('Add Period 7');
+    expect(markup).not.toContain('>P7<');
+    expect(markup).not.toContain('Add Period 7');
+    expect(markup).toContain('Maximum of 6 periods per day');
     expect(markup).toContain('6 periods per day');
   });
 
   it('offers a remove control on the last period row so extra periods can be removed', () => {
     const markup = renderPlanGrid(6);
     expect(markup).toContain('aria-label="Remove period 6"');
-    // A four-period plan exposes the same affordance on its last row.
-    expect(renderPlanGrid(4)).toContain('aria-label="Remove period 4"');
+    // A five-period plan can still go down to 4.
+    expect(renderPlanGrid(5)).toContain('aria-label="Remove period 5"');
+  });
+
+  it('never offers to drop below the 4-period minimum', () => {
+    const markup = renderPlanGrid(4);
+    expect(markup).not.toContain('Remove period 4');
+    expect(markup).not.toContain('aria-label="Remove period');
   });
 });

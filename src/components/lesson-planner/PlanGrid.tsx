@@ -1,6 +1,7 @@
 import { DayOfWeek, DAYS_OF_WEEK, Subject } from '../../types';
 import { Plus, Trash2 } from 'lucide-react';
 import { PeriodCell } from './PeriodCell';
+import { MAX_PERIOD_COUNT, MIN_PERIOD_COUNT } from '../../lib/lessonPlanPeriods';
 
 interface PlanGridProps {
   periods: {
@@ -66,7 +67,7 @@ export function PlanGrid({
                 <td className="p-2.5 text-center align-top pt-3">
                   <div className="flex flex-col items-center gap-1">
                     <span className="font-medium text-slate-400 text-xs">P{pi + 1}</span>
-                    {pi === periodCount - 1 && onChangePeriodCount && periodCount > 1 && (
+                    {pi === periodCount - 1 && onChangePeriodCount && periodCount > MIN_PERIOD_COUNT && (
                       <button
                         type="button"
                         onClick={() => onChangePeriodCount(periodCount - 1)}
@@ -104,14 +105,18 @@ export function PlanGrid({
       </div>
       {onChangePeriodCount && (
         <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3">
-          <button
-            type="button"
-            onClick={() => onChangePeriodCount(periodCount + 1)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-dashed border-indigo-300 text-sm font-medium text-indigo-600 hover:bg-indigo-50 transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            Add Period {periodCount + 1}
-          </button>
+          {periodCount < MAX_PERIOD_COUNT ? (
+            <button
+              type="button"
+              onClick={() => onChangePeriodCount(periodCount + 1)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-dashed border-indigo-300 text-sm font-medium text-indigo-600 hover:bg-indigo-50 transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Add Period {periodCount + 1}
+            </button>
+          ) : (
+            <span className="text-xs text-slate-400">Maximum of {MAX_PERIOD_COUNT} periods per day</span>
+          )}
           <span className="text-xs text-slate-400">{periodCount} periods per day</span>
         </div>
       )}
