@@ -1,4 +1,5 @@
 import { Loader2, BookOpen, ChevronLeft, ChevronRight } from 'lucide-react';
+import { PeriodCountInput } from './PeriodCountInput';
 
 interface CreatePlanFormProps {
   className: string;
@@ -61,14 +62,10 @@ export function CreatePlanForm({
         </div>
         <div>
           <label className="block text-sm font-medium text-slate-700 mb-1">Periods per day</label>
-          <select
-            value={periodCount}
-            onChange={(e) => setPeriodCount(Number(e.target.value))}
-            className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm"
-          >
-            <option value={5}>5 periods</option>
-            <option value={6}>6 periods</option>
-          </select>
+          <PeriodCountInput value={periodCount} onChange={setPeriodCount} />
+          <p className="text-xs text-slate-400 mt-1">
+            Set the number of periods that applies to this class.
+          </p>
         </div>
       </div>
 

@@ -12,7 +12,7 @@ The Lesson Plan system lets teachers create weekly lesson plans for their classe
 
 ## Key workflows
 
-1. **Teacher creates a plan** — selects class/subject/week, fills periods (Sat-Wed, up to 6 periods/day), saves as draft.
+1. **Teacher creates a plan** — selects class/subject/week, sets the class's actual periods/day (any positive count), fills them (Sat-Wed), saves as draft.
 2. **Teacher submits for review** — plan status changes to `submitted`.
 3. **AI review edge function** — triggered on submit, scores the plan across multiple rubric dimensions, stores results in `ai_reviews`.
 4. **Supervisor reviews** — sees all submitted plans, views AI scores, adds comment, approves/rejects.

@@ -795,6 +795,12 @@ export interface UnitPlanInput {
 // Period save payload (for the atomic RPC)
 export interface SavePeriodsPayload {
   plan_id: string;
+  /**
+   * The plan's period count. Optional so existing callers keep working; when
+   * present the atomic RPC stores it on the lesson_plans row in the same
+   * transaction as the period rows.
+   */
+  period_count?: number;
   periods: {
     day: DayOfWeek;
     period_number: number;

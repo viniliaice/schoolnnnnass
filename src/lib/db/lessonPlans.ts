@@ -114,6 +114,7 @@ export async function savePeriods(payload: SavePeriodsPayload): Promise<LessonPl
   const { data, error } = await supabase.rpc('save_lesson_plan_periods', {
     p_plan_id: payload.plan_id,
     p_periods: payload.periods as any,
+    p_period_count: payload.period_count ?? null,
   });
   if (error) {
     // Surface the server-side lock as the same typed error.

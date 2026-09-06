@@ -18,7 +18,7 @@ resource: postgres://supabase/lesson_plans
 | `week_label` | TEXT | Week identifier, e.g. "2026-W30". |
 | `title` | TEXT | Human-readable plan title. |
 | `status` | TEXT | One of: `draft`, `submitted`, `in_review`, `approved`, `rejected`, `ai_failed`. |
-| `period_count` | INTEGER | Number of periods per day — constrained to 5-6. |
+| `period_count` | INTEGER | Number of periods per day — any positive integer (dynamic; no fixed 5/6 limit). |
 | `previous_score` | INTEGER | Prior AI review score (for improvement tracking). |
 | `previous_reviewed_at` | TIMESTAMPTZ | When the last review happened. |
 | `created_at` | TIMESTAMPTZ | Row creation timestamp. |
@@ -32,7 +32,7 @@ resource: postgres://supabase/lesson_plans
 ## Constraints
 
 - `status IN ('draft', 'submitted', 'in_review', 'approved', 'rejected', 'ai_failed')` — status state machine.
-- `period_count BETWEEN 5 AND 6` — enforces valid period range.
+- `period_count >= 1` — enforces a valid (dynamic) period range.
 
 ## Status state machine
 

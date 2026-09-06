@@ -13,7 +13,7 @@ timestamp: 2026-07-27T00:00:00Z
 ## Features
 
 - **Plan list** — shows existing plans grouped by week, with status badges.
-- **Plan editor** — grid layout: days (Sat-Wed) × periods (1-6), each cell has topic, objective, activities, slide number.
+- **Plan editor** — grid layout: days (Sat-Wed) × periods, each cell has topic, objective, activities, slide number. The number of periods is dynamic: teachers set it per class, add a period, or remove the last period — no fixed 5/6 slots.
 - **Draft save** — saves periods via `save_lesson_plan_periods` RPC without changing status.
 - **Submit for review** — changes status to `submitted`, triggers AI review.
 - **History** — view past plans and their AI review results.
