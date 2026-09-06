@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
 import { useTeacherPlans, useCreatePlan, useSavePeriods, useSubmitForReview, usePlanWithPeriods, useReview, useAiReviewTimeout } from '../../lib/hooks/useLessonPlans';
-import { DayOfWeek, DAYS_OF_WEEK, LessonPlanPeriod, PeriodActivity, Subject, AcademicYear, isPlanEditable } from '../../types';
+import { DayOfWeek, DAYS_OF_WEEK, PeriodActivity, Subject, AcademicYear, isPlanEditable } from '../../types';
 import { Loader2, Upload, FileSpreadsheet, Lock, Unlock } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { cn } from '../../utils/cn';
@@ -17,28 +17,14 @@ import { ReviewStep } from '../../components/lesson-planner/ReviewStep';
 import { PlanStepper, StepNav, PlanTab } from '../../components/lesson-planner/PlanStepper';
 import { PlanReadView } from '../../components/lesson-planner/PlanReadView';
 import { SubmittedPlansView } from './SubmittedPlansView';
-
-interface PeriodCell {
-  day: DayOfWeek;
-  period_number: number;
-  subject: string;
-  className: string;
-  isFree: boolean;
-  topic: string;
-  objective: string;
-  slide_number: string;
-  details: PeriodActivity[];
-}
-
-function createEmptyPeriods(periodCount: number): PeriodCell[] {
-  const cells: PeriodCell[] = [];
-  for (const day of DAYS_OF_WEEK) {
-    for (let p = 1; p <= periodCount; p++) {
-      cells.push({ day, period_number: p, subject: '', className: '', isFree: false, topic: '', objective: '', slide_number: '', details: [] });
-    }
-  }
-  return cells;
-}
+import {
+  clampPeriodCount,
+  createEmptyPeriods,
+  periodsFromDb,
+  resizePeriods,
+  emptyInstructionalPeriods,
+} from '../../lib/lessonPlanPeriods';
+import type { PeriodCell } from '../../lib/lessonPlanPeriods';
 
 function generateActivitiesText(details: PeriodActivity[]): string {
   return details
@@ -50,31 +36,6 @@ function generateActivitiesText(details: PeriodActivity[]): string {
       return s;
     })
     .join(' | ');
-}
-
-function periodsFromDb(periods: LessonPlanPeriod[], periodCount: number): PeriodCell[] {
-  const map = new Map<string, LessonPlanPeriod>();
-  for (const p of periods) {
-    map.set(`${p.day}-${p.period_number}`, p);
-  }
-  const cells: PeriodCell[] = [];
-  for (const day of DAYS_OF_WEEK) {
-    for (let p = 1; p <= periodCount; p++) {
-      const existing = map.get(`${day}-${p}`);
-      cells.push({
-        day,
-        period_number: p,
-        subject: existing?.subject || '',
-        className: existing?.class_name || '',
-        isFree: existing?.is_free || false,
-        topic: existing?.topic || '',
-        objective: existing?.objective || '',
-        slide_number: existing?.slide_number || '',
-        details: existing?.details || [],
-      });
-    }
-  }
-  return cells;
 }
 
 export function LessonPlanner() {
@@ -185,6 +146,19 @@ export function LessonPlanner() {
     });
   }, [periodCount]);
 
+  /**
+   * Dynamic period count: the teacher chooses how many periods this plan has
+   * (e.g. 4, 5, 6, or more). Changing the count resizes the grid in place so
+   * existing content is preserved and no phantom period 5/6 row ever appears.
+   */
+  const changePeriodCount = useCallback((next: number) => {
+    const count = clampPeriodCount(next);
+    if (count === periodCount) return;
+    setPeriods((prev) => resizePeriods(prev, count));
+    setPeriodCount(count);
+    setIsDirty(true);
+  }, [periodCount]);
+
   const updateCell = useCallback((day: DayOfWeek, periodNumber: number, field: string, value: any) => {
     setPeriods((prev) => prev.map((c) => {
       if (c.day !== day || c.period_number !== periodNumber) return c;
@@ -226,18 +200,22 @@ export function LessonPlanner() {
     setIsDirty(true);
   }, []);
 
-  const periodsForSave = periods.map((p) => ({
-    day: p.day,
-    period_number: p.period_number,
-    class_name: p.className || null,
-    subject: (p.isFree || p.subject === '__FREE__') ? null : (p.subject || null),
-    is_free: p.isFree || p.subject === '__FREE__',
-    topic: p.topic,
-    objective: p.objective || null,
-    activities: generateActivitiesText(p.details),
-    slide_number: p.slide_number || null,
-    details: p.details,
-  }));
+  // Only the periods that belong to the current count are saved — stale rows
+  // from a removed period are never persisted.
+  const periodsForSave = periods
+    .filter((p) => p.period_number <= periodCount)
+    .map((p) => ({
+      day: p.day,
+      period_number: p.period_number,
+      class_name: p.className || null,
+      subject: (p.isFree || p.subject === '__FREE__') ? null : (p.subject || null),
+      is_free: p.isFree || p.subject === '__FREE__',
+      topic: p.topic,
+      objective: p.objective || null,
+      activities: generateActivitiesText(p.details),
+      slide_number: p.slide_number || null,
+      details: p.details,
+    }));
 
   const doSave = useCallback(async () => {
     if (!session || !planId || isSubmittingRef.current) return;
@@ -247,7 +225,11 @@ export function LessonPlanner() {
     if (nonEmpty.length === 0) return;
     setIsDirty(false);
     try {
-      await savePeriodsMut.mutateAsync({ plan_id: planId, periods: periodsForSave });
+      await savePeriodsMut.mutateAsync({
+        plan_id: planId,
+        periods: periodsForSave,
+        period_count: periodCount,
+      });
     } catch (err: any) {
       if (err?.isLocked) {
         addToast({ type: 'error', title: 'This plan is locked', description: err.message });
@@ -255,7 +237,7 @@ export function LessonPlanner() {
       }
       addToast({ type: 'error', title: 'Failed to save', description: 'Please try again.' });
     }
-  }, [session, planId, periodsForSave, savePeriodsMut, addToast, planWithPeriods]);
+  }, [session, planId, periodsForSave, periodCount, savePeriodsMut, addToast, planWithPeriods]);
 
   useEffect(() => {
     if (!isDirty || isSubmittingRef.current) return;
@@ -313,7 +295,9 @@ export function LessonPlanner() {
       });
       return;
     }
-    const emptyCells = periods.filter((p) => !p.isFree && p.subject !== '__FREE__' && !p.topic.trim());
+    // Validation is against the periods that actually exist for this plan —
+    // a four-period plan is never rejected for missing periods 5 or 6.
+    const emptyCells = emptyInstructionalPeriods(periods);
     if (emptyCells.length > 0) {
       addToast({ type: 'error', title: 'All periods must have a topic' });
       return;
@@ -321,7 +305,11 @@ export function LessonPlanner() {
     isSubmittingRef.current = true;
     if (debounceRef.current) clearTimeout(debounceRef.current);
     try {
-      await savePeriodsMut.mutateAsync({ plan_id: planId, periods: periodsForSave });
+      await savePeriodsMut.mutateAsync({
+        plan_id: planId,
+        periods: periodsForSave,
+        period_count: periodCount,
+      });
 
       // The Edge Function resolves authoritative periods and Unit Plans after
       // this status-first submission; none of that work blocks the teacher.
@@ -345,7 +333,7 @@ export function LessonPlanner() {
     } finally {
       isSubmittingRef.current = false;
     }
-  }, [planId, periods, periodsForSave, savePeriodsMut, submitMut, addToast, className, planWithPeriods]);
+  }, [planId, periods, periodsForSave, periodCount, savePeriodsMut, submitMut, addToast, className, planWithPeriods]);
 
   const handleSelectFromHistory = useCallback((selectedPlanId: string) => {
     setPlanId(selectedPlanId);
@@ -451,7 +439,8 @@ export function LessonPlanner() {
           cellMap.set(`${cell.day}-${cell.period_number}`, cell);
         }
 
-        const maxPeriods = Math.max(5, Math.max(...uniquePeriods));
+        // The imported period set decides the count — no minimum of 5 is forced.
+        const maxPeriods = clampPeriodCount(Math.max(...uniquePeriods));
         const newPeriods: PeriodCell[] = [];
         for (const day of DAYS_OF_WEEK) {
           for (let p = 1; p <= maxPeriods; p++) {
@@ -641,6 +630,7 @@ export function LessonPlanner() {
               onUpdateActivity={updateActivity}
               onAddActivity={addActivity}
               onRemoveActivity={removeActivity}
+              onChangePeriodCount={changePeriodCount}
             />
           )}
 

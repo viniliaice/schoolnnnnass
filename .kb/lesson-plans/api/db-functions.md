@@ -8,16 +8,17 @@ timestamp: 2026-07-27T00:00:00Z
 
 # Overview
 
-`save_lesson_plan_periods(p_plan_id TEXT, p_periods JSONB) RETURNS SETOF lesson_plan_periods`
+`save_lesson_plan_periods(p_plan_id TEXT, p_periods JSONB, p_period_count INTEGER DEFAULT NULL) RETURNS SETOF lesson_plan_periods`
 
-This SECURITY DEFINER function provides atomic save semantics for lesson plan periods. The frontend sends the full set of periods; the function does a delete-all + insert-all inside a savepoint.
+This SECURITY DEFINER function provides atomic save semantics for lesson plan periods. The frontend sends the full set of periods; the function does a delete-all + insert-all inside a single transaction. The optional `p_period_count` keeps `lesson_plans.period_count` in sync with the saved period set (written in the same transaction), so the number of periods is dynamic — 4, 5, 6, or any positive count.
 
 ## Parameters
 
 | Param | Type | Description |
 |-------|------|-------------|
 | `p_plan_id` | TEXT | The `lesson_plans.id` to save periods for. |
-| `p_periods` | JSONB | Array of period objects: `[{day, period_number, topic, objective, activities, slide_number, details}]`. |
+| `p_periods` | JSONB | Array of period objects: `[{day, period_number, topic, objective, activities, slide_number, details}]` — only the periods that exist for the plan. |
+| `p_period_count` | INTEGER (optional) | The plan's dynamic period count (`>= 1`); when provided, writes `lesson_plans.period_count` atomically. |
 
 ## Return value
 

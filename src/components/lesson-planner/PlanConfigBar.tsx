@@ -1,4 +1,5 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react';
+import { PeriodCountInput } from './PeriodCountInput';
 
 interface PlanConfigBarProps {
   className: string;
@@ -42,14 +43,7 @@ export function PlanConfigBar({
       </div>
       <div className="flex items-center gap-2">
         <span className="text-xs font-semibold text-slate-700">Periods/day</span>
-        <select
-          value={periodCount}
-          onChange={(e) => setPeriodCount(Number(e.target.value))}
-          className="rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-200 bg-white w-24"
-        >
-          <option value={5}>5</option>
-          <option value={6}>6</option>
-        </select>
+        <PeriodCountInput compact value={periodCount} onChange={setPeriodCount} />
       </div>
       <div className="flex items-center gap-1 ml-auto">
         <button

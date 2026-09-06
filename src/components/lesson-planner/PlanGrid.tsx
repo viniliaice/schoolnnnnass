@@ -1,4 +1,5 @@
 import { DayOfWeek, DAYS_OF_WEEK, Subject } from '../../types';
+import { Plus, Trash2 } from 'lucide-react';
 import { PeriodCell } from './PeriodCell';
 
 interface PlanGridProps {
@@ -27,6 +28,8 @@ interface PlanGridProps {
   onUpdateActivity: (day: DayOfWeek, periodNumber: number, activityIndex: number, field: 'activity' | 'time' | 'resource' | 'place', value: string) => void;
   onAddActivity: (day: DayOfWeek, periodNumber: number) => void;
   onRemoveActivity: (day: DayOfWeek, periodNumber: number, activityIndex: number) => void;
+  /** Add/remove rows so the teacher controls the number of periods. */
+  onChangePeriodCount?: (value: number) => void;
 }
 
 export function PlanGrid({
@@ -40,6 +43,7 @@ export function PlanGrid({
   onUpdateActivity,
   onAddActivity,
   onRemoveActivity,
+  onChangePeriodCount,
 }: PlanGridProps) {
   return (
     <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
@@ -59,7 +63,22 @@ export function PlanGrid({
           <tbody>
             {Array.from({ length: periodCount }, (_, pi) => (
               <tr key={pi} className="border-b border-slate-100 last:border-0">
-                <td className="p-2.5 text-center font-medium text-slate-400 text-xs align-top pt-3">P{pi + 1}</td>
+                <td className="p-2.5 text-center align-top pt-3">
+                  <div className="flex flex-col items-center gap-1">
+                    <span className="font-medium text-slate-400 text-xs">P{pi + 1}</span>
+                    {pi === periodCount - 1 && onChangePeriodCount && periodCount > 1 && (
+                      <button
+                        type="button"
+                        onClick={() => onChangePeriodCount(periodCount - 1)}
+                        title={`Remove period ${periodCount}`}
+                        aria-label={`Remove period ${periodCount}`}
+                        className="p-1 rounded text-slate-300 hover:text-rose-500 hover:bg-rose-50 transition-colors"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </td>
                 {DAYS_OF_WEEK.map((day) => {
                   const cell = periods.find((c) => c.day === day && c.period_number === pi + 1);
                   return (
@@ -83,6 +102,19 @@ export function PlanGrid({
           </tbody>
         </table>
       </div>
+      {onChangePeriodCount && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 px-4 py-3">
+          <button
+            type="button"
+            onClick={() => onChangePeriodCount(periodCount + 1)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-dashed border-indigo-300 text-sm font-medium text-indigo-600 hover:bg-indigo-50 transition-colors"
+          >
+            <Plus className="w-4 h-4" />
+            Add Period {periodCount + 1}
+          </button>
+          <span className="text-xs text-slate-400">{periodCount} periods per day</span>
+        </div>
+      )}
     </div>
   );
 }

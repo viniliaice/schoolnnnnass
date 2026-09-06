@@ -14,7 +14,7 @@ resource: postgres://supabase/lesson_plan_periods
 | `id` | TEXT PK | ID format: `period-{plan_id}-{day}-{period_number}`. |
 | `plan_id` | TEXT FK→lesson_plans | Parent plan (CASCADE delete). |
 | `day` | day_of_week | Saturday through Wednesday. |
-| `period_number` | INTEGER | 1-6, period order within the day. |
+| `period_number` | INTEGER | 1..period_count, period order within the day (dynamic). |
 | `topic` | TEXT | Lesson topic for this period. |
 | `objective` | TEXT | Learning objective for this period. |
 | `activities` | TEXT | Description of teaching activities. |
@@ -27,7 +27,7 @@ resource: postgres://supabase/lesson_plan_periods
 ## Constraints
 
 - `UNIQUE(plan_id, day, period_number)` — prevents duplicate periods.
-- `period_number BETWEEN 1 AND 6` — valid period range.
+- `period_number >= 1` — valid period range (the plan's own `period_count` decides the actual set).
 - CASCADE delete from parent `lesson_plans`.
 
 ## Indexes
