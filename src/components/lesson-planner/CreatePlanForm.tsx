@@ -64,7 +64,7 @@ export function CreatePlanForm({
           <label className="block text-sm font-medium text-slate-700 mb-1">Periods per day</label>
           <PeriodCountInput value={periodCount} onChange={setPeriodCount} />
           <p className="text-xs text-slate-400 mt-1">
-            Set the number of periods that applies to this class.
+            Classes run 4, 5, or 6 periods each day — pick what applies to this class.
           </p>
         </div>
       </div>

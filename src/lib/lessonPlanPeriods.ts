@@ -1,13 +1,12 @@
 import { DayOfWeek, DAYS_OF_WEEK, LessonPlanPeriod, PeriodActivity } from '../types';
 
 /**
- * Dynamic lesson-plan periods.
+ * Lesson-plan periods.
  *
- * A teacher's plan may contain any positive number of periods per day (e.g.
- * 4 for Foundation/KG classes, 5, 6, or more for others). Nothing here
- * assumes a fixed 5- or 6-period day: the helper functions below build,
- * resize and read period grids from a single `periodCount` value, which the
- * teacher controls in the Lesson Plan Upload / editor UI.
+ * Classes only ever run 4, 5, or 6 periods per day, so the count is a fixed
+ * choice — never free-form. The helper functions below build, resize and read
+ * period grids from a single `periodCount` value, which the teacher picks
+ * from a dropdown in the Lesson Plan Upload / editor UI.
  */
 
 export interface PeriodCell {
@@ -22,12 +21,16 @@ export interface PeriodCell {
   details: PeriodActivity[];
 }
 
-/** Every plan must have at least one period; there is no fixed upper limit. */
-export const MIN_PERIOD_COUNT = 1;
+/** Classes run only 4, 5, or 6 periods a day — nothing outside that range. */
+export const MIN_PERIOD_COUNT = 4;
+export const MAX_PERIOD_COUNT = 6;
+export const PERIOD_COUNT_OPTIONS = [4, 5, 6] as const;
 
+/** Snap any value into the allowed 4–6 range (4 when invalid). */
 export function clampPeriodCount(value: unknown): number {
   const n = Math.floor(Number(value));
-  return Number.isFinite(n) && n >= MIN_PERIOD_COUNT ? n : MIN_PERIOD_COUNT;
+  if (!Number.isFinite(n)) return MIN_PERIOD_COUNT;
+  return Math.min(MAX_PERIOD_COUNT, Math.max(MIN_PERIOD_COUNT, n));
 }
 
 function emptyPeriod(day: DayOfWeek, periodNumber: number): PeriodCell {

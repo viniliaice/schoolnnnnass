@@ -23,6 +23,7 @@ import {
   periodsFromDb,
   resizePeriods,
   emptyInstructionalPeriods,
+  MAX_PERIOD_COUNT,
 } from '../../lib/lessonPlanPeriods';
 import type { PeriodCell } from '../../lib/lessonPlanPeriods';
 
@@ -117,7 +118,7 @@ export function LessonPlanner() {
       setSelectedWeekNumber(planWeekNum);
       return;
     }
-    setPeriodCount(planWithPeriods.plan.period_count);
+    setPeriodCount(clampPeriodCount(planWithPeriods.plan.period_count));
     setPeriods(periodsFromDb(planWithPeriods.periods, planWithPeriods.plan.period_count));
     setTitle(planWithPeriods.plan.title);
     setClassName(planWithPeriods.plan.class_name);
@@ -147,9 +148,9 @@ export function LessonPlanner() {
   }, [periodCount]);
 
   /**
-   * Dynamic period count: the teacher chooses how many periods this plan has
-   * (e.g. 4, 5, 6, or more). Changing the count resizes the grid in place so
-   * existing content is preserved and no phantom period 5/6 row ever appears.
+   * Period count: the teacher picks 4, 5, or 6 periods per day. Changing the
+   * count resizes the grid in place so existing content is preserved and no
+   * phantom period 5/6 row ever appears.
    */
   const changePeriodCount = useCallback((next: number) => {
     const count = clampPeriodCount(next);
@@ -439,8 +440,17 @@ export function LessonPlanner() {
           cellMap.set(`${cell.day}-${cell.period_number}`, cell);
         }
 
-        // The imported period set decides the count — no minimum of 5 is forced.
-        const maxPeriods = clampPeriodCount(Math.max(...uniquePeriods));
+        // Classes only run 4–6 periods a day: the import is capped at 6 and
+        // padded up to 4, so the grid always matches a real school day.
+        const importedMax = Math.max(...uniquePeriods);
+        if (importedMax > MAX_PERIOD_COUNT) {
+          addToast({
+            type: 'info',
+            title: 'Import capped at 6 periods',
+            description: 'Classes run 4, 5, or 6 periods a day — periods above 6 were ignored.',
+          });
+        }
+        const maxPeriods = clampPeriodCount(importedMax);
         const newPeriods: PeriodCell[] = [];
         for (const day of DAYS_OF_WEEK) {
           for (let p = 1; p <= maxPeriods; p++) {

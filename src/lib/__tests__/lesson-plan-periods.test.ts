@@ -59,11 +59,16 @@ describe('createEmptyPeriods — dynamic period count', () => {
     expect(perDay.map((c) => c.period_number)).toEqual([1, 2, 3, 4, 5, 6]);
   });
 
-  it('never renders a period below 1', () => {
-    expect(clampPeriodCount(0)).toBe(1);
-    expect(clampPeriodCount(-3)).toBe(1);
-    expect(clampPeriodCount(2.9)).toBe(2);
-    expect(createEmptyPeriods(0)).toHaveLength(5);
+  it('clamps counts into the allowed 4–6 range', () => {
+    expect(clampPeriodCount(0)).toBe(4);
+    expect(clampPeriodCount(-3)).toBe(4);
+    expect(clampPeriodCount(2.9)).toBe(4);
+    expect(clampPeriodCount(3)).toBe(4);
+    expect(clampPeriodCount(4.9)).toBe(4);
+    expect(clampPeriodCount(7)).toBe(6);
+    expect(clampPeriodCount(100)).toBe(6);
+    expect(clampPeriodCount(NaN)).toBe(4);
+    expect(createEmptyPeriods(0)).toHaveLength(4 * 5);
   });
 });
 
