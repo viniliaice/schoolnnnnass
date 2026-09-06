@@ -14,6 +14,7 @@ import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { ManageUsers } from './pages/admin/ManageUsers';
 import { ManageClassSubjects } from './pages/admin/ManageClassSubjects';
 import { ManageStudents } from './pages/admin/ManageStudents';
+import { ClassImport } from './pages/admin/ClassImport';
 import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
 import { FamilyIds } from './pages/admin/FamilyIds';
@@ -100,6 +101,7 @@ function AppContent() {
             case '/admin/users': return <ManageUsers />;
             case '/admin/class-subjects': return <ManageClassSubjects />;
             case '/admin/students': return <ManageStudents />;
+            case '/admin/class-import': return <ClassImport />;
             case '/admin/academic': return <ManageAcademic />;
             case '/admin/bulk': return <BulkUpload />;
             case '/admin/family-ids': return <FamilyIds mode="browse" navigate={navigate} />;

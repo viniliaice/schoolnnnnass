@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   FileSpreadsheet, Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront
+  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -23,6 +23,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'Manage Users', icon: Users, path: '/admin/users' },
     { label: 'Manage Students', icon: GraduationCap, path: '/admin/students' },
+    { label: 'Class Updates / Import', icon: ArrowLeftRight, path: '/admin/class-import' },
     { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
     { label: 'Unit Plans', icon: Layers, path: '/admin/unit-plans' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
