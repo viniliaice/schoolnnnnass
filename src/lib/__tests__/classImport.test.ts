@@ -478,3 +478,57 @@ describe('parser robustness', () => {
     expect(parsed.rows).toHaveLength(1);
   });
 });
+
+// ─── Excel numeric-ID corruption protection (remediation) ──────────────────
+describe('numeric identity cells are never silently matched', () => {
+  it('flags a numeric Gov ID (Excel number) and holds the row — never auto-creates', () => {
+    // A 17-digit gov id stored as a NUMBER loses precision in Excel.
+    const parsed = parseClassImportFile(makeWorkbook([
+      ['Gov ID', 'Student Name', 'Current Class'],
+      [22100099999999999, 'Big Gov Kid', 'Grade 5-A'],
+    ]));
+    expect(parsed.issues.some(i => i.code === 'NUMERIC_ID')).toBe(true);
+    const rows = matchClassImportRows(parsed.rows, STUDENTS, KNOWN_CLASSES);
+    expect(rows[0].status).toBe('invalid');
+    expect(rows[0].excluded).toBe(true);
+    // It must NOT be classified as a new student that would commit.
+    expect(buildCommitPayload(rows).newStudents).toHaveLength(0);
+  });
+
+  it('flags a numeric Student ID cell and does not match or create', () => {
+    const parsed = parseClassImportFile(makeWorkbook([
+      HEADER,
+      [123456, 'Some Student', 'Grade 7-B'],
+    ]));
+    expect(parsed.issues.some(i => i.code === 'NUMERIC_ID')).toBe(true);
+    const rows = matchClassImportRows(parsed.rows, STUDENTS, KNOWN_CLASSES);
+    expect(rows[0].status).toBe('invalid');
+    expect(buildCommitPayload(rows).changes).toHaveLength(0);
+    expect(buildCommitPayload(rows).newStudents).toHaveLength(0);
+  });
+
+  it('text IDs (including leading zeros) still match normally', () => {
+    const withZero = student('01001', 'Zero Lead', 'Grade 7-A');
+    const parsed = parseClassImportFile(makeWorkbook([
+      HEADER,
+      ['01001', 'Zero Lead', 'Grade 7-B'],
+    ]));
+    expect(parsed.issues.some(i => i.code === 'NUMERIC_ID')).toBe(false);
+    const rows = matchClassImportRows(parsed.rows, [...STUDENTS, withZero], KNOWN_CLASSES);
+    expect(rows[0].status).toBe('class_change');
+    expect(rows[0].matchedStudentId).toBe('01001');
+  });
+});
+
+describe('new-student payload normalizes phone numbers', () => {
+  it('stores digits-only parent phone for name+phone and new students', () => {
+    const parsed = parseClassImportFile(makeWorkbook([
+      ['Student Name', 'Current Class', 'Parent Phone'],
+      ['Brand New Child', 'Grade 5-A', '+252 612 222 222'],
+    ]));
+    const rows = matchClassImportRows(parsed.rows, STUDENTS, KNOWN_CLASSES);
+    expect(rows[0].status).toBe('new_student');
+    const payload = buildCommitPayload(rows);
+    expect(payload.newStudents[0].parentPhone).toBe('612222222');
+  });
+});

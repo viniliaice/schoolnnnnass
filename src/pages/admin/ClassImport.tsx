@@ -23,6 +23,7 @@ import { applyStudentClassImport, assertCanImportClasses, type ClassImportApplyR
 import {
   parseClassImportFile, matchClassImportRows, summarizeClassImport,
   buildCommitPayload, buildClassImportTemplate, resolveRowCandidate,
+  MAX_IMPORT_FILE_BYTES, MAX_IMPORT_ROWS,
   type ClassImportRow, type ClassImportIssue, type ClassImportSummary, type ClassImportCandidate,
 } from '../../lib/import/classImport';
 import type { AcademicYear, Student } from '../../types';
@@ -76,6 +77,8 @@ export function ClassImport() {
   const [selectedYearId, setSelectedYearId] = useState<string>('');
 
   const [fileName, setFileName] = useState<string>('');
+  const [pageSize] = useState(100);
+  const [tablePage, setTablePage] = useState(0);
   const [parsing, setParsing] = useState(false);
   const [fileIssues, setFileIssues] = useState<ClassImportIssue[]>([]);
   const [rows, setRows] = useState<ClassImportRow[]>([]);
@@ -142,6 +145,10 @@ export function ClassImport() {
       addToast({ type: 'error', title: 'Unsupported file', description: 'Please upload the Google Sheet exported as .xlsx' });
       return;
     }
+    if (file.size > MAX_IMPORT_FILE_BYTES) {
+      addToast({ type: 'error', title: 'File too large', description: `Maximum file size is ${Math.round(MAX_IMPORT_FILE_BYTES / (1024 * 1024))} MB. Split the roster or use the generated template.` });
+      return;
+    }
     setParsing(true);
     setFileName(file.name);
     setStep('preview');
@@ -149,9 +156,13 @@ export function ClassImport() {
     try {
       const buffer = await file.arrayBuffer();
       const parsed = parseClassImportFile(buffer);
+      if (parsed.rows.length > MAX_IMPORT_ROWS) {
+        addToast({ type: 'error', title: 'Too many rows', description: `This file has ${parsed.rows.length} student rows; the safe limit is ${MAX_IMPORT_ROWS} per import. Split it into smaller files.` });
+      }
       const matched = parsed.rows.length > 0
         ? matchClassImportRows(parsed.rows, students, knownClasses)
         : [];
+      setTablePage(0);
       setFileIssues(parsed.issues);
       setRows(matched);
       const firstProblem: Tab = matched.some(r => r.status === 'class_change') ? 'changes' : 'all';
@@ -437,7 +448,7 @@ export function ClassImport() {
                 {tabRows.length === 0 && (
                   <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-400">No rows in this view.</td></tr>
                 )}
-                {tabRows.slice(0, 500).map(row => (
+                {tabRows.slice(tablePage * pageSize, tablePage * pageSize + pageSize).map(row => (
                   <tr key={row.rowNumber} className={cn('border-b border-slate-100 align-top', row.excluded && 'opacity-50')}>
                     <td className="px-3 py-2 text-slate-400">{row.rowNumber}</td>
                     <td className="px-3 py-2">
@@ -485,8 +496,18 @@ export function ClassImport() {
                     </td>
                   </tr>
                 ))}
-                {tabRows.length > 500 && (
-                  <tr><td colSpan={7} className="px-3 py-2 text-center text-xs text-slate-400">Showing first 500 of {tabRows.length} rows in this view.</td></tr>
+                {tabRows.length > pageSize && (
+                  <tr><td colSpan={7} className="px-3 py-2 text-center text-xs text-slate-400">
+                    <div className="flex items-center justify-center gap-3">
+                      <button className="rounded border border-slate-300 px-2 py-1 disabled:opacity-40"
+                        disabled={tablePage === 0}
+                        onClick={() => setTablePage(p => Math.max(0, p - 1))}>Prev</button>
+                      <span>Rows {tablePage * pageSize + 1}–{Math.min((tablePage + 1) * pageSize, tabRows.length)} of {tabRows.length}</span>
+                      <button className="rounded border border-slate-300 px-2 py-1 disabled:opacity-40"
+                        disabled={(tablePage + 1) * pageSize >= tabRows.length}
+                        onClick={() => setTablePage(p => p + 1)}>Next</button>
+                    </div>
+                  </td></tr>
                 )}
               </tbody>
             </table>

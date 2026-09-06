@@ -168,14 +168,15 @@ export async function resetUserPassword(email: string): Promise<void> {
 }
 
 export async function deleteUser(id: string): Promise<boolean> {
+  // Unlink children first through the admin RPC (students has no client
+  // UPDATE policy), then remove the profile.
+  const { error: unlinkError } = await supabase.rpc('unlink_parent_students', {
+    p_parent_id: id,
+  });
+  if (unlinkError) throw new Error(unlinkError.message);
+
   const { error } = await supabase.from('profiles').delete().eq('id', id);
   if (error) throw error;
-
-  const { error: unlinkError } = await supabase
-    .from('students')
-    .update({ parentId: null })
-    .eq('parentId', id);
-  if (unlinkError) throw unlinkError;
 
   return true;
 }

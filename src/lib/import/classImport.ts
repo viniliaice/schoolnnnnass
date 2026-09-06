@@ -48,6 +48,7 @@ export type ClassImportIssueCode =
   | 'MISSING_CLASS'
   | 'STUDENT_ID_NOT_FOUND'
   | 'GOV_ID_NOT_UNIQUE'
+  | 'NUMERIC_ID'
   | 'AMBIGUOUS_MATCH'
   | 'INVALID_CLASS'
   | 'DUPLICATE_STUDENT_ID'
@@ -71,6 +72,9 @@ export interface RawClassImportRow {
   name: string;
   rawClass: string;
   parentPhone: string;
+  /** Identity cells that Excel stored as a number (digits may be lost). */
+  numericStudentId: boolean;
+  numericGovId: boolean;
 }
 
 export interface ClassImportParseResult {
@@ -167,6 +171,10 @@ function text(value: unknown): string {
   return value == null ? '' : String(value).trim();
 }
 
+/** Safety limits for the client parse and the server RPC (kept in sync with SQL). */
+export const MAX_IMPORT_FILE_BYTES = 5 * 1024 * 1024; // 5 MB
+export const MAX_IMPORT_ROWS = 7000; // SQL rejects >5,000 changes / >2,000 creates
+
 function headerKey(value: unknown): string {
   return text(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
 }
@@ -252,8 +260,17 @@ export function parseClassImportFile(input: ArrayBuffer): ClassImportParseResult
   const out: RawClassImportRow[] = [];
   for (let r = headerIndex + 1; r < rows.length; r++) {
     const raw = rows[r] || [];
-    const studentId = cols.studentId >= 0 ? text(raw[cols.studentId]) : '';
-    const govId = cols.govId >= 0 ? text(raw[cols.govId]).replace(/^"|"$/g, '') : '';
+    // Detect identity cells Excel stored as numbers. String(number) silently
+    // loses precision past 15 digits and drops leading zeros, which can turn a
+    // real student into a false "new student" — so we flag the row and require
+    // the official, text-formatted template instead of guessing.
+    const rawStudentId = cols.studentId >= 0 ? raw[cols.studentId] : '';
+    const rawGovId = cols.govId >= 0 ? raw[cols.govId] : '';
+    const numericStudentId = typeof rawStudentId === 'number' && Number.isFinite(rawStudentId);
+    const numericGovId = typeof rawGovId === 'number' && Number.isFinite(rawGovId);
+
+    const studentId = cols.studentId >= 0 ? text(rawStudentId) : '';
+    const govId = cols.govId >= 0 ? text(rawGovId).replace(/^"|"$/g, '') : '';
     const name = cols.name >= 0 ? text(raw[cols.name]) : '';
     const rawClass = cols.class >= 0 ? text(raw[cols.class]) : '';
     const parentPhone = cols.parentPhone >= 0 ? text(raw[cols.parentPhone]) : '';
@@ -262,7 +279,20 @@ export function parseClassImportFile(input: ArrayBuffer): ClassImportParseResult
     if (!studentId && !govId && !name && !rawClass && !parentPhone) continue;
     if (/^\d+\s*students?,?\s*\d*\s*free/i.test(name)) continue;
 
-    out.push({ rowNumber: r + 1, studentId, govId, name, rawClass, parentPhone });
+    if (numericStudentId) {
+      issues.push({
+        severity: 'error', code: 'NUMERIC_ID', row: r + 1,
+        message: `Row ${r + 1}: the Student ID was read as a number by Excel and may have lost digits or leading zeros. Use the app-generated "Export current students" template (IDs are text) or format the ID column as text.`,
+      });
+    }
+    if (numericGovId) {
+      issues.push({
+        severity: 'error', code: 'NUMERIC_ID', row: r + 1,
+        message: `Row ${r + 1}: the Gov ID was read as a number by Excel (Excel corrupts numbers longer than 15 digits and drops leading zeros). Format the Gov ID column as Text or use the app-generated template; this row will not be auto-processed.`,
+      });
+    }
+
+    out.push({ rowNumber: r + 1, studentId, govId, name, rawClass, parentPhone, numericStudentId, numericGovId });
   }
 
   if (out.length === 0) {
@@ -456,6 +486,19 @@ export function matchClassImportRows(
 
   for (const row of rows) {
     if (row.status === 'duplicate') continue;
+
+    // Excel stored an identity cell as a number — digits/leading zeros may be
+    // lost, so matching it would risk a wrong match or a false new student.
+    // Hold the row for correction rather than guessing.
+    if (row.numericStudentId || row.numericGovId) {
+      row.status = 'invalid';
+      row.excluded = true;
+      const which = [row.numericStudentId ? 'Student ID' : null, row.numericGovId ? 'Gov ID' : null]
+        .filter(Boolean).join(' / ');
+      issue(row, 'error', 'NUMERIC_ID',
+        `Row ${row.rowNumber}: ${which} was read as a number by Excel and may be corrupted (lost digits/leading zeros). Re-export using the app template or format the column as Text, then re-upload.`);
+      continue;
+    }
 
     // Required identifiers.
     if (!row.name.trim() && !row.studentId.trim() && !row.govId.trim()) {
@@ -678,12 +721,15 @@ export function buildCommitPayload(rows: ClassImportRow[]): ClassImportCommitPay
     if (row.status === 'class_change' && row.matchedStudentId && row.toClass) {
       changes.push({ studentId: row.matchedStudentId, toClass: row.toClass });
     } else if (row.status === 'new_student' && row.toClass && row.name.trim()) {
+      const normPhone = normalizePhone(row.parentPhone);
       newStudents.push({
         id: row.studentId.trim() || row.assignedId || generateNewStudentId(),
         name: row.name.trim(),
         className: row.toClass,
         govId: row.govId.trim() || null,
-        parentPhone: row.parentPhone.trim() || null,
+        // Normalized consistently with the rest of the app (digits, +252
+        // stripped) so future name+phone matching and family grouping work.
+        parentPhone: normPhone || null,
       });
     }
   }
