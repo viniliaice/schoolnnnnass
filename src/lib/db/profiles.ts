@@ -260,3 +260,24 @@ export async function getAllTeachers(): Promise<User[]> {
   if (error) throw error;
   return (data || []) as User[];
 }
+
+/**
+ * Every parent profile, for callers that genuinely need the COMPLETE list
+ * rather than a search (bulk import resolves an arbitrary sheet of parent
+ * names offline, and renders a full <select>; a search box cannot serve that).
+ *
+ * getUsersByRole('parent') defaults to page 1 / limit 100, so bulk import
+ * silently failed to match any parent past the 100th row — the same defect
+ * that hid parents in the Edit Student picker. Use searchParents() for
+ * interactive pickers and this only when the whole set is required.
+ */
+export async function getAllParents(limit: number = MAX_QUERY_LIMIT): Promise<User[]> {
+  const { data, error } = await applyLimit(
+    supabase.from('profiles').select('*').ilike('role', 'parent'),
+    limit,
+  );
+  if (error) throw error;
+  return ((data || []) as User[]).filter(
+    user => String(user.role || '').toLowerCase().trim() === 'parent',
+  );
+}

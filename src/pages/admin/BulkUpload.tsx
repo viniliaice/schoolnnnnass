@@ -1,5 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { getUsersByRole } from '../../lib/db/profiles';
+import { getAllParents, getUsersByRole } from '../../lib/db/profiles';
 import { bulkCreateUsers, bulkCreateStudents } from '../../lib/db/bulk';
 import { getStudents, promoteStudentsByClass } from '../../lib/db/students';
 import { User, CLASSES } from '../../types';
@@ -140,7 +140,10 @@ export function BulkUpload() {
     const loadData = async () => {
       // Parallelize independent fetches
       const [parentsData, teachersData, studentsData] = await Promise.all([
-        getUsersByRole('parent'),
+        // Full parent list, not getUsersByRole's first 100: name matching and
+        // the parent <select> below must see every parent or imports silently
+        // fail to link students to real, existing parents.
+        getAllParents(),
         getUsersByRole('teacher'),
         getStudents(),
       ]);

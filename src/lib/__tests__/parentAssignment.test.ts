@@ -26,7 +26,7 @@ vi.mock('../supabase', () => ({
 }));
 
 import { supabase } from '../supabase';
-import { searchParents } from '../db/profiles';
+import { getAllParents, searchParents } from '../db/profiles';
 import { updateStudent } from '../db/students';
 
 const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
@@ -122,6 +122,39 @@ describe('searchParents — every existing parent is reachable', () => {
       return b;
     });
     await expect(searchParents('a')).rejects.toBeTruthy();
+  });
+});
+
+// Bulk import resolves an arbitrary sheet of parent names offline and renders
+// a full <select>, so it needs the COMPLETE parent list — a search box cannot
+// serve that. It previously used getUsersByRole('parent') (page 1 / limit 100)
+// and so silently failed to link students to any parent past the 100th.
+describe('getAllParents — complete list for bulk import', () => {
+  it('fetches parents without a 100-row page window', async () => {
+    const calls = stubProfiles([parent()]);
+    await getAllParents();
+
+    expect(mockFrom).toHaveBeenCalledWith('profiles');
+    expect(calls.ilike).toContainEqual(['role', 'parent']);
+    // Far above the old 100 default, so parent #101+ is reachable.
+    expect(calls.limit).toBeGreaterThan(100);
+  });
+
+  it('excludes non-parent roles', async () => {
+    stubProfiles([parent(), parent({ id: 'x', role: 'admin' })]);
+    const res = await getAllParents();
+    expect(res.map(r => r.id)).toEqual(['parent-1']);
+  });
+
+  it('throws rather than returning an empty list on error', async () => {
+    mockFrom.mockImplementation(() => {
+      const b: any = {
+        select: () => b, ilike: () => b,
+        limit: () => Promise.resolve({ data: null, error: { message: 'nope' } }),
+      };
+      return b;
+    });
+    await expect(getAllParents()).rejects.toBeTruthy();
   });
 });
 
