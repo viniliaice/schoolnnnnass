@@ -105,54 +105,72 @@ export async function getStudentClasses(): Promise<string[]> {
   return classes as string[];
 }
 
+/**
+ * Student mutations go through admin-gated SECURITY DEFINER RPCs. There is no
+ * client INSERT/UPDATE/DELETE policy on `students` (RLS is SELECT-only); these
+ * wrappers preserve the previous call signatures while enforcing the server
+ * role check, audit trail, and enrollment-history maintenance.
+ */
 export async function createStudent(data: Omit<Student, 'id' | 'createdAt'>): Promise<Student> {
-  const timestamp = Date.now();
-  const rand = Math.random().toString(36).substring(2, 8);
-  const id = `student-${timestamp}-${rand}`;
-
-  const payload = { id, ...data, createdAt: new Date().toISOString() } as any;
-  const { data: created, error } = await supabase.from('students').insert(payload).select().single();
+  const { data: created, error } = await supabase.rpc('create_student', {
+    p_name: data.name,
+    p_class: data.className,
+    p_parent_id: data.parentId ?? null,
+    p_gov_id: data.govId ?? null,
+    p_parent_phone: data.parentPhone ?? null,
+  });
   if (error) {
     console.error('Error creating student:', error);
-    throw error;
+    throw new Error(error.message);
   }
-  return created as Student;
+  return {
+    id: (created as any)?.id,
+    name: (created as any)?.name ?? data.name,
+    className: (created as any)?.className ?? data.className,
+    parentId: data.parentId ?? null,
+    govId: data.govId ?? null,
+    parentPhone: data.parentPhone ?? null,
+    createdAt: new Date().toISOString(),
+  } as Student;
 }
 
 export async function updateStudent(id: string, data: Partial<Student>): Promise<Student | null> {
-  const { data: updated, error } = await supabase.from('students').update(data).eq('id', id).select().single();
+  const { error } = await supabase.rpc('update_student', {
+    p_student_id: id,
+    p_name: data.name ?? null,
+    p_class: data.className ?? null,
+    p_parent_id: data.parentId === undefined ? null : (data.parentId ?? null),
+    p_gov_id: data.govId === undefined ? null : (data.govId ?? null),
+    p_parent_phone: data.parentPhone === undefined ? null : (data.parentPhone ?? null),
+    p_transport: data.transport === undefined ? null : (data.transport ?? null),
+  });
   if (error) {
     console.error('Error updating student:', error);
     return null;
   }
-  return updated as Student;
+  return (await getStudentById(id)) ?? null;
 }
 
 export async function deleteStudent(id: string): Promise<boolean> {
-  const { error } = await supabase.from('students').delete().eq('id', id);
+  const { error } = await supabase.rpc('delete_student', { p_student_id: id });
   if (error) {
     console.error('Error deleting student:', error);
     return false;
   }
-  await supabase.from('exams').delete().eq('studentId', id);
+  // Grades/attendance/homework cascade via FK ON DELETE inside the transaction.
   return true;
 }
 
-export async function promoteStudentsByClass(fromClass: string, toClass: string): Promise<number> {
-  const { data: rows, error: readError } = await supabase
-    .from('students')
-    .select('id')
-    .eq('className', fromClass);
-  if (readError) throw readError;
-
-  const ids = (rows || []).map((row: { id: string }) => row.id);
-  if (ids.length === 0) return 0;
-
-  const { error: updateError } = await supabase
-    .from('students')
-    .update({ className: toClass })
-    .in('id', ids);
-  if (updateError) throw updateError;
-
-  return ids.length;
+export async function promoteStudentsByClass(
+  fromClass: string,
+  toClass: string,
+  academicYearId?: string
+): Promise<number> {
+  const { data, error } = await supabase.rpc('promote_students', {
+    from_class: fromClass,
+    to_class: toClass,
+    academic_year_id: academicYearId ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return Array.isArray(data) ? data.length : 0;
 }

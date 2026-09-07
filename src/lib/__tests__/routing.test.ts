@@ -29,8 +29,17 @@ describe('canAccessRoute — office role', () => {
 
   it('every guarded route is listed in ROUTE_ACCESS', () => {
     expect(Object.keys(ROUTE_ACCESS).sort()).toEqual([
-      '/admin/drivers', '/admin/family-ids', '/admin/family-ids/setup', '/directory', '/gate',
+      '/admin/class-import', '/admin/drivers', '/admin/family-ids', '/admin/family-ids/setup', '/directory', '/gate',
     ]);
+  });
+});
+
+describe('student class import route is admin-only', () => {
+  it('only admins may open /admin/class-import', () => {
+    expect(canAccessRoute('admin', '/admin/class-import')).toBe(true);
+    for (const role of ['supervisor', 'office', 'teacher', 'parent'] as const) {
+      expect(canAccessRoute(role, '/admin/class-import'), role).toBe(false);
+    }
   });
 });
 

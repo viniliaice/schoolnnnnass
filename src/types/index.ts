@@ -484,6 +484,12 @@ export interface StudentPromotion {
   fromClass: string;
   toClass: string;
   academicYearId?: string | null;
+  /**
+   * Origin of the move: 'promotion' (end-of-year Class Promotion feature) or
+   * 'class_import' (mid-year Student Class Update & Import). The promotion
+   * re-run guard only counts 'promotion' rows.
+   */
+  source?: 'promotion' | 'class_import';
   createdAt: string;
 }
 

@@ -25,16 +25,20 @@ export async function bulkCreateUsers(dataList: Omit<User, 'id' | 'createdAt'>[]
 }
 
 export async function bulkCreateStudents(dataList: Omit<Student, 'id' | 'createdAt'>[]): Promise<Student[]> {
-  const studentsWithTimestamps = dataList.map(data => {
-    const timestamp = Date.now();
-    const random = Math.random().toString(36).substring(2, 8);
-    const id = `student-${timestamp}-${random}`;
-    return { id, ...data, createdAt: new Date().toISOString() };
-  });
-
-  const { data, error } = await supabase.from('students').insert(studentsWithTimestamps).select();
-  if (error) throw error;
-  return data || [];
+  // Admin SECURITY DEFINER RPC (students has no client INSERT policy). Returns
+  // the created count; callers refresh roster queries rather than relying on
+  // echoed rows.
+  const payload = dataList.map(d => ({
+    name: d.name,
+    className: d.className,
+    parentId: d.parentId ?? null,
+    govId: d.govId ?? null,
+    parentPhone: d.parentPhone ?? null,
+  }));
+  const { data, error } = await supabase.rpc('bulk_create_students', { p_students: payload });
+  if (error) throw new Error(error.message);
+  void data;
+  return [] as Student[];
 }
 
 /**

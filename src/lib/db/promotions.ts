@@ -93,38 +93,14 @@ export async function promoteAllClasses(academicYearId?: string): Promise<Promot
 
 export async function undoPromotion(promotionIds: string[]): Promise<number> {
   if (promotionIds.length === 0) return 0;
-
-  const { data: rows, error: fetchError } = await supabase
-    .from('student_promotions')
-    .select('"studentId", "fromClass"')
-    .in('id', promotionIds)
-    .order('createdAt', { ascending: true });
-  if (fetchError) throw fetchError;
-  if (!rows || rows.length === 0) return 0;
-
-  // Deduplicate by studentId — keep only the earliest fromClass
-  // (prevents race condition when chained records exist for the same student)
-  const seen = new Set<string>();
-  const unique = (rows as { studentId: string; fromClass: string }[]).filter(r => {
-    if (seen.has(r.studentId)) return false;
-    seen.add(r.studentId);
-    return true;
+  // Admin SECURITY DEFINER RPC: reverts students.className, removes the
+  // promotion rows, and reconciles enrollment history atomically. Students has
+  // no client UPDATE/DELETE policy.
+  const { data, error } = await supabase.rpc('undo_promotions', {
+    p_promotion_ids: promotionIds,
   });
-
-  const updates = unique.map(r =>
-    supabase.from('students').update({ className: r.fromClass }).eq('id', r.studentId)
-  );
-  const results = await Promise.all(updates);
-  const errors = results.filter(r => r.error);
-  if (errors.length > 0) throw errors[0].error;
-
-  const { error: deleteError } = await supabase
-    .from('student_promotions')
-    .delete()
-    .in('id', promotionIds);
-  if (deleteError) throw deleteError;
-
-  return unique.length;
+  if (error) throw new Error(error.message);
+  return typeof data === 'number' ? data : 0;
 }
 
 export function usePromotionHistory(academicYearId?: string) {
