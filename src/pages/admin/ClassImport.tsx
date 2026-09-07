@@ -67,6 +67,7 @@ function reclassifyByPreflight(rows: ClassImportRow[], problems: ClassImportPref
 }
 import { transportLabel } from '../../lib/transport';
 import type { AcademicYear, Student } from '../../types';
+import { CLASSES } from '../../types';
 
 type Step = 'upload' | 'preview' | 'done';
 type Tab = 'all' | 'changes' | 'new' | 'nochange' | 'review' | 'errors';
@@ -147,7 +148,10 @@ export function ClassImport() {
         // already in (e.g. Grade 9-B, KG-B) is always valid and never reported
         // as "does not exist".
         const rosterClasses = allStudents.map(s => s.className).filter(Boolean);
-        const classes = Array.from(new Set([...rosterClasses, ...studentClasses, ...subjectClasses, 'Graduated'])).sort();
+        // Always include the authoritative class catalogue (CLASSES) so a real
+        // class with no currently-loaded student/subject (e.g. KG-A, a new
+        // section) is still valid and never reported as "does not exist".
+        const classes = Array.from(new Set([...CLASSES, ...rosterClasses, ...studentClasses, ...subjectClasses, 'Graduated'])).sort();
         setKnownClasses(classes);
         setAcademicYears(years);
         const current = years.find(y => y.isCurrent);

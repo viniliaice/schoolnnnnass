@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
 import type { Student } from '../../types';
+import { CLASSES } from '../../types';
 import {
   parseClassImportFile, matchClassImportRows, buildCommitPayload,
   resolveUploadedClassCandidates, classHasSection, classMissingSection,
@@ -16,7 +17,7 @@ function workbook(rows: (string | null)[][], header: (string|null)[]): ArrayBuff
   return XLSX.write(wb, { type: 'array', bookType: 'xlsx' }) as unknown as ArrayBuffer;
 }
 
-const CLASSES = ['Grade 3-A', 'Grade 3-C', 'Grade 9-A', 'Grade 9-B', 'KG-A', 'KG-B'];
+const LOCAL_CLASSES = ['Grade 3-A', 'Grade 3-C', 'Grade 9-A', 'Grade 9-B', 'KG-A', 'KG-B'];
 
 describe('multiple class columns: section value is used over the bare grade', () => {
   // School sheet has BOTH a bare "Grade" column ("Grade 3") and a section
@@ -30,7 +31,7 @@ describe('multiple class columns: section value is used over the bare grade', ()
       header,
     ));
     expect(parsed.rows[0].classCandidates).toEqual(['Grade 3', 'Grade 3-C']);
-    const rows = matchClassImportRows(parsed.rows, existing, CLASSES);
+    const rows = matchClassImportRows(parsed.rows, existing, LOCAL_CLASSES);
     expect(rows[0].status).toBe('class_change');
     expect(rows[0].toClass).toBe('Grade 3-C');
     expect(buildCommitPayload(rows).newStudents).toHaveLength(0);
@@ -42,7 +43,7 @@ describe('multiple class columns: section value is used over the bare grade', ()
       [['19-015310', 'Ayuub Ayaanle Xasan', 'Grade 9', 'Grade 9-B', '6']],
       header,
     ));
-    const rows = matchClassImportRows(parsed.rows, existing, CLASSES);
+    const rows = matchClassImportRows(parsed.rows, existing, LOCAL_CLASSES);
     expect(rows[0].status).toBe('class_change');
     expect(rows[0].toClass).toBe('Grade 9-B');
   });
@@ -53,7 +54,7 @@ describe('multiple class columns: section value is used over the bare grade', ()
       [['x', 'MUBAARICK maxamed maxamuud', 'Grade 1', '', '3']],
       header,
     ));
-    const rows = matchClassImportRows(parsed.rows, existing, CLASSES);
+    const rows = matchClassImportRows(parsed.rows, existing, LOCAL_CLASSES);
     expect(rows[0].status).toBe('invalid');
     const msg = rows[0].issues.find(i => i.code === 'INVALID_CLASS')?.message ?? '';
     expect(msg).toMatch(/section/i);
@@ -75,13 +76,25 @@ describe('class candidate helpers', () => {
   });
 
   it('resolveUploadedClassCandidates prefers a resolvable section value', () => {
-    const r = resolveUploadedClassCandidates(['Grade 3', 'Grade 3-C'], CLASSES);
+    const r = resolveUploadedClassCandidates(['Grade 3', 'Grade 3-C'], LOCAL_CLASSES);
     expect(r.resolved).toBe('Grade 3-C');
   });
 
   it('resolveUploadedClassCandidates returns bestRaw = section value when nothing resolves', () => {
-    const r = resolveUploadedClassCandidates(['Grade 9', 'Grade 9-Z'], CLASSES);
+    const r = resolveUploadedClassCandidates(['Grade 9', 'Grade 9-Z'], LOCAL_CLASSES);
     expect(r.resolved).toBeNull();
     expect(r.bestRaw).toBe('Grade 9-Z');
+  });
+});
+
+describe('canonical catalogue classes are valid', () => {
+  it('KG-A / KG-B / Foundation A resolve against the CLASSES catalogue even with no loaded roster class', () => {
+    // The page always unions the authoritative CLASSES catalogue into the
+    // known-class list, so a sectioned catalogue class is never "missing".
+    for (const code of ['KG-A', 'KG-B', 'Foundation A', 'Grade 12-C']) {
+      expect(resolveUploadedClassCandidates([code], CLASSES).resolved).toBe(code);
+    }
+    // A bare grade is still NOT a class even against the catalogue.
+    expect(resolveUploadedClassCandidates(['Grade 9'], CLASSES).resolved).toBeNull();
   });
 });
