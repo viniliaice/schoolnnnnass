@@ -36,6 +36,35 @@ export interface ClassImportApplyResult {
   created: CreatedStudent[];
 }
 
+export interface ClassImportResolution {
+  index: number;
+  status: 'matched' | 'ambiguous' | 'new';
+  matchMethod?: 'student_id' | 'gov_id' | 'name_phone';
+  matchedStudentId?: string;
+  matchedName?: string;
+  matchedClassName?: string;
+  reason?: string;
+  candidates?: { id: string; name: string; className: string }[];
+}
+
+/**
+ * Authoritative, READ-ONLY identity resolution against the LIVE database. The
+ * client matcher classifies against the downloaded roster; this confirms
+ * identity (Student ID → Gov ID → name+phone) server-side so an existing
+ * student — identified by their Gov ID even without an internal Student ID
+ * column — is never created as new.
+ */
+export async function resolveClassImportRows(
+  rows: { studentId: string; govId: string; name: string; parentPhone: string }[],
+): Promise<ClassImportResolution[]> {
+  const { data, error } = await supabase.rpc('resolve_class_import_rows', {
+    p_rows: rows,
+  });
+  if (error) throw new Error(error.message);
+  if (!Array.isArray(data)) throw new Error('The import service returned an invalid identity response.');
+  return data as ClassImportResolution[];
+}
+
 export interface ClassImportPreflightProblem {
   kind: string;
   message: string;

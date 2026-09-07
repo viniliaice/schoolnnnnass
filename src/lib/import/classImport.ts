@@ -431,9 +431,20 @@ function normId(value: string): string {
   return value.trim().toUpperCase();
 }
 
-/** Normalize a Gov/admission ID the same way the server's gov_id_key() does. */
+/**
+ * Robust Gov/admission ID normalization for MATCHING. The school's gov id is
+ * the authoritative external identifier (e.g. "16-005772", "23-920729") and
+ * may appear with differing spaces, quotes, or dashes across the sheet and the
+ * database. We keep only alphanumeric characters and uppercase, so
+ * "16-005772", " 16 005772 ", and "16005772" all compare equal.
+ */
+export function normalizeGovId(value: unknown): string {
+  return String(value ?? '').replace(/[^a-zA-Z0-9]/g, '').toUpperCase();
+}
+
+/** Normalize a Gov/admission ID (kept for identity-key sets). */
 function normGovId(value: string): string {
-  return value.trim().toUpperCase();
+  return normalizeGovId(value);
 }
 
 /**
@@ -457,7 +468,7 @@ export function rowIdentityKeys(row: { studentId: string; govId: string }): Clas
   const govIds: string[] = [];
   const sid = row.studentId.trim();
   if (sid && !isAppGeneratedId(sid)) studentIds.push(normId(sid));
-  const gov = normGovId(row.govId);
+  const gov = normalizeGovId(row.govId);
   if (gov) govIds.push(gov);
   return { studentIds, govIds };
 }
@@ -470,7 +481,8 @@ export function existingIdentityKeys(students: Student[]): {
   const govIds = new Set<string>();
   for (const s of students) {
     if (s.id && !isAppGeneratedId(s.id)) studentIds.add(normId(s.id));
-    if (s.govId && s.govId.trim()) govIds.add(normGovId(s.govId));
+    const g = normalizeGovId(s.govId);
+    if (g) govIds.add(g);
   }
   return { studentIds, govIds };
 }
@@ -530,8 +542,8 @@ export function matchClassImportRows(
   for (const s of students) {
     byId.set(normId(s.id), s);
     if (s.govId && s.govId.trim()) {
-      const key = s.govId.trim().toUpperCase();
-      byGovId.set(key, [...(byGovId.get(key) ?? []), s]);
+      const key = normalizeGovId(s.govId);
+      if (key) byGovId.set(key, [...(byGovId.get(key) ?? []), s]);
     }
     const nameKey = normalizeName(s.name);
     if (nameKey) byName.set(nameKey, [...(byName.get(nameKey) ?? []), s]);
@@ -676,9 +688,11 @@ export function matchClassImportRows(
       }
     }
 
-    // Priority 2 — Gov/admission ID (must be unique).
+    // Priority 2 — Gov/admission ID (must be unique). Gov ID is the school's
+    // authoritative external identifier; a missing internal Student ID column
+    // does NOT make a student new — a unique gov id matches them directly.
     if (!matched && row.govId.trim()) {
-      const list = byGovId.get(row.govId.trim().toUpperCase()) ?? [];
+      const list = byGovId.get(normalizeGovId(row.govId)) ?? [];
       if (list.length === 1) {
         matched = list[0];
         method = 'gov_id';
@@ -954,6 +968,110 @@ export function bulkResolveSingleCandidates(
   });
 
   return { rows: out, resolved, stillAmbiguous, conflicts };
+}
+
+// ─── Authoritative server identity resolution ───────────────────────────────
+
+/** Minimal shape of the read-only server resolution (kept structural). */
+export interface ServerResolution {
+  index: number;
+  status: 'matched' | 'ambiguous' | 'new';
+  matchMethod?: 'student_id' | 'gov_id' | 'name_phone';
+  matchedStudentId?: string;
+  matchedName?: string;
+  matchedClassName?: string;
+  reason?: string;
+  candidates?: { id: string; name: string; className: string }[];
+}
+
+/**
+ * Apply authoritative server identity decisions on top of the local preview.
+ * The server (full live database) wins for identity: an existing student found
+ * by Gov ID — even with NO internal Student ID column — is bound as an existing
+ * student (class_change / no_change), never created. Rows the server cannot
+ * resolve but whose NAME exists are forced to manual review. Genuinely-new rows
+ * are left as the local matcher classified them.
+ *
+ * Returns the updated rows (order preserved) plus counts for a summary toast.
+ */
+export function applyServerResolutions(
+  rows: ClassImportRow[],
+  resolutions: ServerResolution[],
+  knownClasses: readonly string[],
+): { rows: ClassImportRow[]; matched: number; toReview: number; newConfirmed: number } {
+  let matched = 0;
+  let toReview = 0;
+  let newConfirmed = 0;
+
+  // Resolutions arrive in the same order as rows; align by the server-provided
+  // index (positional), falling back to position.
+  const updated = rows.map((row, i) => {
+    const res = resolutions[i];
+    if (!res) return row;
+
+    // Server says MATCHED to a concrete existing student.
+    if (res.status === 'matched' && res.matchedStudentId) {
+      // Already bound locally to the SAME student → nothing to do.
+      if (row.matchedStudentId === res.matchedStudentId) return row;
+
+      const existing = {
+        id: res.matchedStudentId,
+        name: res.matchedName ?? row.name,
+        className: res.matchedClassName ?? '',
+      };
+      const candidate: ClassImportCandidate = {
+        id: existing.id, name: existing.name, className: existing.className,
+      };
+      const bound = resolveRowCandidate(row, candidate, existing, knownClasses);
+      // Preserve the real match method the server used (resolveRowCandidate
+      // stamps 'manual'; reflect the authoritative key instead).
+      bound.matchMethod = res.matchMethod ?? 'gov_id';
+      bound.excluded = false;
+      if (bound.status === 'class_change' || bound.status === 'no_change') {
+        matched += 1;
+        return bound;
+      }
+      // If binding produced invalid (e.g. bad class) leave as-is for review.
+      return bound;
+    }
+
+    // Server says AMBIGUOUS (name exists / gov not unique) → force manual
+    // review unless the row is already confidently bound.
+    if (res.status === 'ambiguous') {
+      if (row.matchedStudentId && (row.status === 'class_change' || row.status === 'no_change')) {
+        return row; // already confident
+      }
+      const serverCandidates = res.candidates ?? [];
+      const merged = new Map<string, ClassImportCandidate>();
+      for (const c of row.candidates) merged.set(c.id, c);
+      for (const c of serverCandidates) merged.set(c.id, c);
+      const hasIssue = row.issues.some(is => is.code === 'AMBIGUOUS_MATCH' || is.code === 'STUDENT_ID_NOT_FOUND');
+      const next: ClassImportRow = {
+        ...row,
+        status: 'ambiguous',
+        candidates: Array.from(merged.values()),
+        matchedStudentId: null,
+        excluded: false,
+        issues: hasIssue ? row.issues : [...row.issues, {
+          severity: 'error' as const,
+          code: 'AMBIGUOUS_MATCH' as const,
+          row: row.rowNumber,
+          message: `Row ${row.rowNumber}: an existing student matches this name/ID in the school database. Choose the correct student or exclude the row — a duplicate is never created.`,
+        }],
+      };
+      toReview += 1;
+      return next;
+    }
+
+    // Server says genuinely NEW → confirm the local new_student classification.
+    if (res.status === 'new') {
+      if (!row.matchedStudentId && row.status === 'new_student') newConfirmed += 1;
+      return row;
+    }
+    return row;
+  });
+
+  return { rows: updated, matched, toReview, newConfirmed };
 }
 
 // ─── Summary & commit payload ───────────────────────────────────────────────

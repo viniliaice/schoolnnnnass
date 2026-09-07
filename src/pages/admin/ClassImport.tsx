@@ -19,11 +19,11 @@ import { cn } from '../../utils/cn';
 import { getStudents, getStudentClasses } from '../../lib/db/students';
 import { getClasses } from '../../lib/db/classes';
 import { getAcademicYears } from '../../lib/db/academic';
-import { applyStudentClassImport, checkClassImportPayload, assertCanImportClasses, type ClassImportApplyResult } from '../../lib/db/classImport';
+import { applyStudentClassImport, checkClassImportPayload, resolveClassImportRows, assertCanImportClasses, type ClassImportApplyResult } from '../../lib/db/classImport';
 import {
   parseClassImportFile, matchClassImportRows, summarizeClassImport,
   buildCommitPayload, buildClassImportTemplate, resolveRowCandidate,
-  bulkResolveSingleCandidates,
+  bulkResolveSingleCandidates, applyServerResolutions,
   MAX_IMPORT_FILE_BYTES, MAX_IMPORT_ROWS,
   type ClassImportRow, type ClassImportIssue, type ClassImportSummary, type ClassImportCandidate,
 } from '../../lib/import/classImport';
@@ -202,12 +202,44 @@ export function ClassImport() {
       const matched = parsed.rows.length > 0
         ? matchClassImportRows(parsed.rows, students, knownClasses)
         : [];
+
+      // ── Authoritative server-side identity resolution ──────────────────
+      // Gov ID is the school's external identifier and the sheet may have NO
+      // internal Student ID column, so identity is confirmed against the live
+      // database (not the downloaded roster). Existing students found by Gov
+      // ID / name+phone are bound; names that exist are held for review.
+      let resolved = matched;
+      if (matched.length > 0) {
+        try {
+          const resolutions = await resolveClassImportRows(
+            matched.map(r => ({
+              studentId: r.studentId,
+              govId: r.govId,
+              name: r.name,
+              parentPhone: r.parentPhone,
+            })),
+          );
+          const applied = applyServerResolutions(matched, resolutions, knownClasses);
+          resolved = applied.rows;
+          if (applied.matched > 0 || applied.toReview > 0) {
+            addToast({
+              type: 'info',
+              title: 'Identity checked against the school database',
+              description: `${applied.matched} row(s) confirmed as existing students by their Gov ID/phone; ${applied.toReview} row(s) need a quick review.`,
+            });
+          }
+        } catch {
+          // Older DB without the resolver → rely on the local matcher + the
+          // preflight/commit-time server guards.
+        }
+      }
+
       setTablePage(0);
       setFileIssues(parsed.issues);
-      setRows(matched);
-      const firstProblem: Tab = matched.some(r => r.status === 'class_change') ? 'changes' : 'all';
+      setRows(resolved);
+      const firstProblem: Tab = resolved.some(r => r.status === 'class_change') ? 'changes' : 'all';
       setTab(firstProblem);
-      addToast({ type: 'success', title: 'File loaded', description: `${matched.length} rows detected — review the preview, nothing has been changed yet.` });
+      addToast({ type: 'success', title: 'File loaded', description: `${resolved.length} rows detected — review the preview, nothing has been changed yet.` });
     } catch (err) {
       setRows([]);
       setFileIssues([{ severity: 'error', code: 'EMPTY_WORKBOOK', message: err instanceof Error ? err.message : 'Could not read this file.', row: 0 }]);
@@ -573,6 +605,17 @@ export function ClassImport() {
                       <div className="font-medium text-slate-800">{row.name || <span className="italic text-slate-400">no name</span>}</div>
                       {row.existingName && row.existingName !== row.name && (
                         <div className="text-xs text-slate-400">record: {row.existingName}</div>
+                      )}
+                      {row.matchedStudentId && row.matchMethod && (
+                        <div className="text-[11px] font-medium text-emerald-700">
+                          Matched by {row.matchMethod === 'gov_id' ? 'Gov ID'
+                            : row.matchMethod === 'student_id' ? 'Student ID'
+                            : row.matchMethod === 'name_phone' ? 'name + phone'
+                            : 'manual review'}
+                        </div>
+                      )}
+                      {row.status === 'new_student' && (
+                        <div className="text-[11px] text-sky-700">New student — no existing record found</div>
                       )}
                       {row.issues.map((iss, i) => (
                         <div key={i} className={cn('text-xs mt-0.5', iss.severity === 'error' ? 'text-rose-600' : 'text-amber-600')}>{iss.message}</div>
