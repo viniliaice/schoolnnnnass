@@ -23,7 +23,7 @@
 
 import * as XLSX from 'xlsx';
 import type { Role, Student } from '../../types';
-import { mapSheetClassCode, normalizeName, normalizePhone } from '../transport';
+import { mapSheetClassCode, normalizeName, normalizePhone, normalizeTransport } from '../transport';
 
 /**
  * Client-side convenience guard for the import workflow. The real enforcement
@@ -49,6 +49,7 @@ export type ClassImportIssueCode =
   | 'STUDENT_ID_NOT_FOUND'
   | 'GOV_ID_NOT_UNIQUE'
   | 'NUMERIC_ID'
+  | 'INVALID_BUS'
   | 'AMBIGUOUS_MATCH'
   | 'INVALID_CLASS'
   | 'DUPLICATE_STUDENT_ID'
@@ -75,6 +76,12 @@ export interface RawClassImportRow {
   /** Identity cells that Excel stored as a number (digits may be lost). */
   numericStudentId: boolean;
   numericGovId: boolean;
+  /** Raw bus/transport cell text (e.g. '9', 'NB', 'WALKER', 'CAR'). */
+  rawBus: string;
+  /** Canonical transport parsed from the bus cell (bus number | WALKER | CAR | DRIVER); null when the cell was blank. */
+  parsedTransport: string | null;
+  /** True when the bus cell contains text that is not a valid transport value. */
+  invalidBus: boolean;
 }
 
 export interface ClassImportParseResult {
@@ -112,6 +119,10 @@ export interface ClassImportRow extends RawClassImportRow {
   fromClass: string | null;
   /** Resolved canonical target class, or null when unresolvable. */
   toClass: string | null;
+  /** Existing student's stored transport (normalized; WALKER when unset). */
+  fromTransport: string | null;
+  /** Target transport from the sheet (normalized), or null when the bus cell was blank. */
+  toTransport: string | null;
   /** For new students without a sheet ID: the generated stable ID. */
   assignedId: string | null;
   /** Admin toggle in the preview: keep this row out of the commit. */
@@ -139,6 +150,8 @@ export interface ClassImportSummary {
 export interface ClassChangeCommit {
   studentId: string;
   toClass: string;
+  /** Present only when the sheet provides a bus value that differs from the stored one. */
+  transport?: string | null;
 }
 
 export interface NewStudentCommit {
@@ -147,6 +160,8 @@ export interface NewStudentCommit {
   className: string;
   govId: string | null;
   parentPhone: string | null;
+  /** Canonical transport (bus number | WALKER | CAR); undefined/null defaults to walker on create. */
+  transport?: string | null;
 }
 
 export interface ClassImportCommitPayload {
@@ -156,7 +171,7 @@ export interface ClassImportCommitPayload {
 
 // ─── Header mapping ─────────────────────────────────────────────────────────
 
-const HEADER_ALIASES: Record<'studentId' | 'govId' | 'name' | 'class' | 'parentPhone', string[]> = {
+const HEADER_ALIASES: Record<'studentId' | 'govId' | 'name' | 'class' | 'parentPhone' | 'bus', string[]> = {
   studentId: [
     'student id', 'studentid', 'student code', 'student no', 'student number',
     'admission number', 'admission no', 'admission no.', 'adm no', 'adm number',
@@ -165,6 +180,7 @@ const HEADER_ALIASES: Record<'studentId' | 'govId' | 'name' | 'class' | 'parentP
   name: ['student name', 'studentname', 'name', 'full name'],
   class: ['current class', 'class', 'class name', 'classname', 'grade', 'section', 'form'],
   parentPhone: ['parent phone', 'parent number', 'phone', 'second number', 'contact'],
+  bus: ['bus', 'bus no', 'busno', 'bus number', 'transport'],
 };
 
 function text(value: unknown): string {
@@ -177,6 +193,33 @@ export const MAX_IMPORT_ROWS = 7000; // SQL rejects >5,000 changes / >2,000 crea
 
 function headerKey(value: unknown): string {
   return text(value).toLowerCase().replace(/[^a-z0-9]+/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Canonical transport for a Bus-column cell. Returns:
+ *  - null for a BLANK cell (the import must NOT touch stored transport —
+ *    blank never means "make them a walker");
+ *  - a canonical value for bus number ('9' → '9'), WALKER / CAR / DRIVER,
+ *    and the non-bus markers used by the transport sheet ('nb', '0', '-');
+ *  - { invalid: true } for free text the DB CHECK would reject (e.g. a route
+ *    name). 'LEFT' is not settable from the import — it is a status, not a
+ *    mode — so it is reported as invalid rather than marking a student gone.
+ */
+function parseBusCell(raw: unknown): { value: string | null; invalid: boolean } {
+  const rawText = text(raw);
+  if (!rawText) return { value: null, invalid: false };
+
+  const upper = rawText.toUpperCase().replace(/\s+/g, ' ').trim();
+  if (upper === 'NB' || upper === 'N/B' || upper === 'NO BUS' || upper === 'WALKING'
+      || upper === 'WALKER' || upper === '0' || upper === '-') {
+    return { value: 'WALKER', invalid: false };
+  }
+  if (upper === 'CAR') return { value: 'CAR', invalid: false };
+  if (upper === 'DRIVER') return { value: 'DRIVER', invalid: false };
+  if (/^\d+$/.test(rawText.replace(/\s+/g, ''))) {
+    return { value: String(Number(rawText.replace(/\D/g, ''))), invalid: false };
+  }
+  return { value: null, invalid: true };
 }
 
 function findHeaderColumn(headerRow: unknown[], aliases: string[]): number {
@@ -213,6 +256,7 @@ export function parseClassImportFile(input: ArrayBuffer): ClassImportParseResult
   const KNOWN = new Set<string>([
     ...HEADER_ALIASES.studentId, ...HEADER_ALIASES.govId,
     ...HEADER_ALIASES.name, ...HEADER_ALIASES.class, ...HEADER_ALIASES.parentPhone,
+    ...HEADER_ALIASES.bus,
   ].map(headerKey));
   let headerIndex = -1;
   for (let i = 0; i < Math.min(rows.length, 5); i++) {
@@ -237,6 +281,7 @@ export function parseClassImportFile(input: ArrayBuffer): ClassImportParseResult
     name: findHeaderColumn(headerRow, HEADER_ALIASES.name),
     class: findHeaderColumn(headerRow, HEADER_ALIASES.class),
     parentPhone: findHeaderColumn(headerRow, HEADER_ALIASES.parentPhone),
+    bus: findHeaderColumn(headerRow, HEADER_ALIASES.bus),
   };
   const mappedHeaders = (Object.keys(cols) as Array<keyof typeof cols>)
     .filter(k => cols[k] >= 0);
@@ -274,9 +319,11 @@ export function parseClassImportFile(input: ArrayBuffer): ClassImportParseResult
     const name = cols.name >= 0 ? text(raw[cols.name]) : '';
     const rawClass = cols.class >= 0 ? text(raw[cols.class]) : '';
     const parentPhone = cols.parentPhone >= 0 ? text(raw[cols.parentPhone]) : '';
+    const rawBus = cols.bus >= 0 ? text(raw[cols.bus]) : '';
+    const bus = parseBusCell(cols.bus >= 0 ? raw[cols.bus] : '');
 
     // Fully blank / summary-noise rows are skipped silently.
-    if (!studentId && !govId && !name && !rawClass && !parentPhone) continue;
+    if (!studentId && !govId && !name && !rawClass && !parentPhone && !rawBus) continue;
     if (/^\d+\s*students?,?\s*\d*\s*free/i.test(name)) continue;
 
     if (numericStudentId) {
@@ -292,7 +339,18 @@ export function parseClassImportFile(input: ArrayBuffer): ClassImportParseResult
       });
     }
 
-    out.push({ rowNumber: r + 1, studentId, govId, name, rawClass, parentPhone, numericStudentId, numericGovId });
+    if (bus.invalid) {
+      issues.push({
+        severity: 'error', code: 'INVALID_BUS', row: r + 1,
+        message: `Row ${r + 1}: the Bus value "${rawBus}" is not a bus number, WALKER, CAR, or DRIVER. Use a route number (e.g. 9) or NB for not on the bus; this row will not be processed.`,
+      });
+    }
+
+    out.push({
+      rowNumber: r + 1, studentId, govId, name, rawClass, parentPhone,
+      numericStudentId, numericGovId,
+      rawBus, parsedTransport: bus.value, invalidBus: bus.invalid,
+    });
   }
 
   if (out.length === 0) {
@@ -407,6 +465,8 @@ export function matchClassImportRows(
     existingName: null,
     fromClass: null,
     toClass: null,
+    fromTransport: null,
+    toTransport: null,
     assignedId: null,
     excluded: false,
     issues: [],
@@ -500,6 +560,16 @@ export function matchClassImportRows(
       continue;
     }
 
+    // An unrecognizable bus value would violate the DB transport CHECK — block
+    // the row rather than silently dropping the student's transport.
+    if (row.invalidBus) {
+      row.status = 'invalid';
+      row.excluded = true;
+      issue(row, 'error', 'INVALID_BUS',
+        `Row ${row.rowNumber}: the Bus value "${row.rawBus}" is not a valid transport (use a route number like 9, NB for walker, or CAR/DRIVER). Fix the cell or leave it blank, then re-upload.`);
+      continue;
+    }
+
     // Required identifiers.
     if (!row.name.trim() && !row.studentId.trim() && !row.govId.trim()) {
       row.status = 'invalid';
@@ -584,6 +654,8 @@ export function matchClassImportRows(
       row.matchedStudentId = matched.id;
       row.existingName = matched.name;
       row.fromClass = matched.className;
+      row.fromTransport = normalizeTransport(matched.transport);
+      row.toTransport = row.parsedTransport;
 
       if (idNotFound && row.govId.trim()) {
         issue(row, 'warning', 'STUDENT_ID_NOT_FOUND', `Row ${row.rowNumber}: Student ID ${row.studentId} was not found; matched via Gov ID ${row.govId}.`);
@@ -601,7 +673,10 @@ export function matchClassImportRows(
         continue;
       }
       row.toClass = resolved;
-      row.status = resolved === matched.className ? 'no_change' : 'class_change';
+      const classChanged = resolved !== matched.className;
+      const transportChanged = row.parsedTransport !== null
+        && normalizeTransport(row.parsedTransport) !== normalizeTransport(matched.transport);
+      row.status = (classChanged || transportChanged) ? 'class_change' : 'no_change';
       continue;
     }
 
@@ -642,6 +717,7 @@ export function matchClassImportRows(
 
     row.status = 'new_student';
     row.toClass = resolved;
+    row.toTransport = row.parsedTransport;
     if (!row.studentId.trim()) {
       row.assignedId = generateNewStudentId();
       issue(row, 'warning', 'MISSING_STUDENT_ID', `Row ${row.rowNumber}: no Student ID in the file — ${row.assignedId} will be assigned.`);
@@ -659,7 +735,7 @@ export function matchClassImportRows(
 export function resolveRowCandidate(
   row: ClassImportRow,
   candidate: ClassImportCandidate,
-  existingStudent: { id: string; name: string; className: string },
+  existingStudent: { id: string; name: string; className: string; transport?: string | null },
   knownClasses: readonly string[],
 ): ClassImportRow {
   const updated: ClassImportRow = { ...row, candidates: row.candidates, issues: [...row.issues] };
@@ -667,6 +743,8 @@ export function resolveRowCandidate(
   updated.matchedStudentId = existingStudent.id;
   updated.existingName = existingStudent.name;
   updated.fromClass = existingStudent.className;
+  updated.fromTransport = normalizeTransport(existingStudent.transport ?? null);
+  updated.toTransport = updated.parsedTransport;
   updated.candidates = [];
 
   const resolved = resolveUploadedClass(updated.rawClass, knownClasses);
@@ -681,7 +759,10 @@ export function resolveRowCandidate(
     return updated;
   }
   updated.toClass = resolved;
-  updated.status = resolved === existingStudent.className ? 'no_change' : 'class_change';
+  const classChanged = resolved !== existingStudent.className;
+  const transportChanged = updated.parsedTransport !== null
+    && normalizeTransport(updated.parsedTransport) !== normalizeTransport(existingStudent.transport ?? null);
+  updated.status = (classChanged || transportChanged) ? 'class_change' : 'no_change';
   return updated;
 }
 
@@ -719,7 +800,15 @@ export function buildCommitPayload(rows: ClassImportRow[]): ClassImportCommitPay
   for (const row of rows) {
     if (row.excluded) continue;
     if (row.status === 'class_change' && row.matchedStudentId && row.toClass) {
-      changes.push({ studentId: row.matchedStudentId, toClass: row.toClass });
+      // Only attach a transport target when the sheet provided a bus value
+      // that differs from the stored one; a blank cell leaves transport alone.
+      const transportChanged = row.parsedTransport !== null
+        && normalizeTransport(row.parsedTransport) !== normalizeTransport(row.fromTransport);
+      changes.push({
+        studentId: row.matchedStudentId,
+        toClass: row.toClass,
+        transport: transportChanged ? normalizeTransport(row.parsedTransport) : undefined,
+      });
     } else if (row.status === 'new_student' && row.toClass && row.name.trim()) {
       const normPhone = normalizePhone(row.parentPhone);
       newStudents.push({
@@ -730,6 +819,8 @@ export function buildCommitPayload(rows: ClassImportRow[]): ClassImportCommitPay
         // Normalized consistently with the rest of the app (digits, +252
         // stripped) so future name+phone matching and family grouping work.
         parentPhone: normPhone || null,
+        // A blank bus cell leaves the DB default (interpreted as walker).
+        transport: row.parsedTransport ? normalizeTransport(row.parsedTransport) : 'WALKER',
       });
     }
   }
@@ -754,6 +845,15 @@ export function rosterForClass(students: Student[], className: string): Student[
  * re-upload. Column order matches HEADER_ALIASES so it round-trips through
  * parseClassImportFile().
  */
+/** Bus-cell value for the export template: route number for riders, NB for walkers. */
+function templateBusValue(student: Student): string {
+  const t = normalizeTransport(student.transport);
+  if (/^\d+$/.test(t)) return t; // on bus N
+  if (t === 'CAR') return 'CAR';
+  if (t === 'DRIVER') return 'DRIVER';
+  return 'NB'; // WALKER / unset / LEFT → not on the bus
+}
+
 export function buildClassImportTemplate(students: Student[]): Blob {
   const data = [...students]
     .sort((a, b) => a.className.localeCompare(b.className) || a.name.localeCompare(b.name))
@@ -762,6 +862,7 @@ export function buildClassImportTemplate(students: Student[]): Blob {
       'Gov ID': s.govId ?? '',
       'Student Name': s.name,
       'Current Class': s.className,
+      'Bus': templateBusValue(s),
       'Parent Phone': s.parentPhone ?? '',
     }));
   const sheet = XLSX.utils.json_to_sheet(data);

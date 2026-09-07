@@ -285,7 +285,7 @@ describe('historical data protection & bulk grade integration', () => {
     expect(payload.changes).toEqual([{ studentId: 'MBK-1001', toClass: 'Grade 7-B' }]);
     // New students carry identity fields only — no exams/attendance/history.
     expect(payload.newStudents[0]).toEqual({
-      id: 'MBK-1402', name: 'Yusuf Hassan', className: 'Grade 6-A', govId: null, parentPhone: null,
+      id: 'MBK-1402', name: 'Yusuf Hassan', className: 'Grade 6-A', govId: null, parentPhone: null, transport: 'WALKER',
     });
     // The RPC (supabase/migrations/20260906_student_class_import.sql) only
     // UPDATEs students."className", INSERTs new students, and records history
@@ -530,5 +530,91 @@ describe('new-student payload normalizes phone numbers', () => {
     expect(rows[0].status).toBe('new_student');
     const payload = buildCommitPayload(rows);
     expect(payload.newStudents[0].parentPhone).toBe('612222222');
+  });
+});
+
+// ─── Bus / transport column ─────────────────────────────────────────────────
+
+describe('class import Bus column', () => {
+  const BUS_HEADER = ['Student ID', 'Student Name', 'Current Class', 'Bus'];
+
+  it('treats a route-number change (same class) as an applicable change', () => {
+    const withBus = student('MBK-1002', 'Aisha Mohamed', 'Grade 7-B', { transport: null });
+    const parsed = parseClassImportFile(makeWorkbook([
+      BUS_HEADER,
+      ['MBK-1002', 'Aisha Mohamed', 'Grade 7-B', '9'],
+    ]));
+    expect(parsed.issues.filter(i => i.severity === 'error')).toHaveLength(0);
+    const rows = matchClassImportRows(parsed.rows, [withBus], KNOWN_CLASSES);
+    expect(rows[0].status).toBe('class_change');
+    const payload = buildCommitPayload(rows);
+    expect(payload.changes).toHaveLength(1);
+    expect(payload.changes[0]).toMatchObject({ studentId: 'MBK-1002', toClass: 'Grade 7-B', transport: '9' });
+  });
+
+  it('maps NB / no-bus markers to WALKER and detects walker→bus change', () => {
+    const walker = student('MBK-1003', 'Hassan Omar', 'Grade 8-A', { transport: 'WALKER' });
+    const parsed = parseClassImportFile(makeWorkbook([
+      BUS_HEADER,
+      ['MBK-1003', 'Hassan Omar', 'Grade 8-A', '12'],
+    ]));
+    const rows = matchClassImportRows(parsed.rows, [walker], KNOWN_CLASSES);
+    expect(rows[0].status).toBe('class_change');
+    expect(rows[0].toTransport).toBe('12');
+  });
+
+  it('leaves transport untouched when the Bus cell is blank', () => {
+    const rider = student('MBK-1001', 'Ahmed Ali', 'Grade 7-A', { transport: '5' });
+    const parsed = parseClassImportFile(makeWorkbook([
+      BUS_HEADER,
+      ['MBK-1001', 'Ahmed Ali', 'Grade 7-A', ''],
+    ]));
+    const rows = matchClassImportRows(parsed.rows, [rider], KNOWN_CLASSES);
+    expect(rows[0].status).toBe('no_change');
+    expect(rows[0].parsedTransport).toBeNull();
+    const payload = buildCommitPayload(rows);
+    expect(payload.changes).toHaveLength(0);
+  });
+
+  it('rejects a non-numeric, non-marker bus value as an invalid row', () => {
+    const parsed = parseClassImportFile(makeWorkbook([
+      BUS_HEADER,
+      ['MBK-1001', 'Ahmed Ali', 'Grade 7-A', 'North Route'],
+    ]));
+    expect(parsed.issues.some(i => i.code === 'INVALID_BUS')).toBe(true);
+    const rows = matchClassImportRows(parsed.rows, STUDENTS, KNOWN_CLASSES);
+    expect(rows[0].status).toBe('invalid');
+    expect(rows[0].excluded).toBe(true);
+    const payload = buildCommitPayload(rows);
+    expect(payload.changes).toHaveLength(0);
+  });
+
+  it('does not accept LEFT from the import', () => {
+    const parsed = parseClassImportFile(makeWorkbook([
+      BUS_HEADER,
+      ['MBK-1001', 'Ahmed Ali', 'Grade 7-A', 'left'],
+    ]));
+    expect(parsed.issues.some(i => i.code === 'INVALID_BUS')).toBe(true);
+  });
+
+  it('assigns WALKER by default to a new student with a blank Bus cell', () => {
+    const parsed = parseClassImportFile(makeWorkbook([
+      BUS_HEADER,
+      ['', 'Brand New Rider', 'Grade 5-A', ''],
+    ]));
+    const rows = matchClassImportRows(parsed.rows, STUDENTS, KNOWN_CLASSES);
+    expect(rows[0].status).toBe('new_student');
+    const payload = buildCommitPayload(rows);
+    expect(payload.newStudents[0].transport).toBe('WALKER');
+  });
+
+  it('assigns the route number to a new student who rides the bus', () => {
+    const parsed = parseClassImportFile(makeWorkbook([
+      BUS_HEADER,
+      ['', 'Brand New Rider Two', 'Grade 5-A', '7'],
+    ]));
+    const rows = matchClassImportRows(parsed.rows, STUDENTS, KNOWN_CLASSES);
+    const payload = buildCommitPayload(rows);
+    expect(payload.newStudents[0].transport).toBe('7');
   });
 });

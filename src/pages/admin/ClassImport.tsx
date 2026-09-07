@@ -26,6 +26,7 @@ import {
   MAX_IMPORT_FILE_BYTES, MAX_IMPORT_ROWS,
   type ClassImportRow, type ClassImportIssue, type ClassImportSummary, type ClassImportCandidate,
 } from '../../lib/import/classImport';
+import { transportLabel } from '../../lib/transport';
 import type { AcademicYear, Student } from '../../types';
 
 type Step = 'upload' | 'preview' | 'done';
@@ -310,7 +311,7 @@ export function ClassImport() {
             >
               <UploadCloud className="w-8 h-8 text-slate-400" />
               <span className="text-sm font-medium text-slate-700">Choose Excel file or drop it here</span>
-              <span className="text-xs text-slate-400">Accepted: .xlsx — expected columns: Student ID, Gov ID, Student Name, Current Class</span>
+              <span className="text-xs text-slate-400">Accepted: .xlsx — expected columns: Student ID, Gov ID, Student Name, Current Class, Bus (route number, or NB for not on the bus)</span>
               <input
                 ref={fileInputRef}
                 type="file"
@@ -440,13 +441,14 @@ export function ClassImport() {
                   <th className="px-3 py-2">Student ID</th>
                   <th className="px-3 py-2">Current</th>
                   <th className="px-3 py-2">Uploaded</th>
+                  <th className="px-3 py-2">Bus</th>
                   <th className="px-3 py-2">Result</th>
                   <th className="px-3 py-2">Action</th>
                 </tr>
               </thead>
               <tbody>
                 {tabRows.length === 0 && (
-                  <tr><td colSpan={7} className="px-3 py-8 text-center text-slate-400">No rows in this view.</td></tr>
+                  <tr><td colSpan={8} className="px-3 py-8 text-center text-slate-400">No rows in this view.</td></tr>
                 )}
                 {tabRows.slice(tablePage * pageSize, tablePage * pageSize + pageSize).map(row => (
                   <tr key={row.rowNumber} className={cn('border-b border-slate-100 align-top', row.excluded && 'opacity-50')}>
@@ -467,6 +469,22 @@ export function ClassImport() {
                       {row.status === 'class_change' && row.fromClass && row.toClass && (
                         <div className="text-xs text-amber-600">{row.fromClass} → {row.toClass}</div>
                       )}
+                    </td>
+                    <td className="px-3 py-2">
+                      {!row.rawBus && row.status !== 'new_student' ? (
+                        <span className="text-slate-300">—</span>
+                      ) : row.status === 'new_student' ? (
+                        <span className="text-xs">{transportLabel(row.toTransport)}</span>
+                      ) : row.parsedTransport && (() => {
+                        const changed = row.fromTransport !== null
+                          && transportLabel(row.parsedTransport) !== transportLabel(row.fromTransport);
+                        return (
+                          <>
+                            <div className="text-xs">{transportLabel(row.parsedTransport)}</div>
+                            {changed && <div className="text-xs text-amber-600">{transportLabel(row.fromTransport)} → {transportLabel(row.parsedTransport)}</div>}
+                          </>
+                        );
+                      })()}
                     </td>
                     <td className="px-3 py-2"><StatusBadge row={row} /></td>
                     <td className="px-3 py-2 space-y-1 min-w-[180px]">
@@ -497,7 +515,7 @@ export function ClassImport() {
                   </tr>
                 ))}
                 {tabRows.length > pageSize && (
-                  <tr><td colSpan={7} className="px-3 py-2 text-center text-xs text-slate-400">
+                  <tr><td colSpan={8} className="px-3 py-2 text-center text-xs text-slate-400">
                     <div className="flex items-center justify-center gap-3">
                       <button className="rounded border border-slate-300 px-2 py-1 disabled:opacity-40"
                         disabled={tablePage === 0}
