@@ -876,6 +876,86 @@ export function resolveRowCandidate(
   return updated;
 }
 
+// ─── Bulk resolution of ambiguous (Needs Review) rows ───────────────────────
+
+/** Result of the "accept all single suggestions" bulk action. */
+export interface BulkResolveResult {
+  rows: ClassImportRow[];
+  /** How many ambiguous rows were auto-bound to their single candidate. */
+  resolved: number;
+  /** Rows left in review because they have 0 or >1 candidates. */
+  stillAmbiguous: number;
+  /** Rows skipped because their only candidate was already taken by another row. */
+  conflicts: number;
+}
+
+/**
+ * Bulk-apply the "use this student" action to every Needs-Review row that has
+ * exactly ONE candidate. This mirrors clicking that button once per row, so it
+ * stays conservative:
+ *   - rows with 0 or >1 candidates are LEFT in manual review (a real choice
+ *     must be made where two students share a name, or where there is no match);
+ *   - a row whose sole candidate is already claimed by another uploaded row is
+ *     skipped (we never bind two spreadsheet rows to the same student).
+ * Resolved rows become class_change / no_change exactly like a manual pick, so
+ * the existing commit path and invariants apply unchanged.
+ */
+export function bulkResolveSingleCandidates(
+  rows: ClassImportRow[],
+  studentsById: Map<string, Student>,
+  knownClasses: readonly string[],
+): BulkResolveResult {
+  // Students already bound to a committed (non-ambiguous) row cannot be taken.
+  const claimed = new Set<string>();
+  for (const r of rows) {
+    if (r.matchedStudentId && r.status !== 'ambiguous') claimed.add(r.matchedStudentId);
+  }
+
+  let resolved = 0;
+  let stillAmbiguous = 0;
+  let conflicts = 0;
+
+  const out = rows.map(row => {
+    if (row.status !== 'ambiguous') return row;
+
+    // Only auto-accept rows with a single suggestion.
+    if (row.candidates.length !== 1) {
+      stillAmbiguous += 1;
+      return row;
+    }
+    const candidate = row.candidates[0];
+    if (claimed.has(candidate.id)) {
+      conflicts += 1;
+      return row;
+    }
+    const existing = studentsById.get(candidate.id);
+    if (!existing) {
+      stillAmbiguous += 1;
+      return row;
+    }
+
+    const updated = resolveRowCandidate(
+      row,
+      candidate,
+      existing,
+      knownClasses,
+    );
+    // Only count/claim rows that resolved into a usable state. If the pick
+    // produced an invalid row (e.g. bad class), leave it for manual handling.
+    if (updated.status === 'class_change' || updated.status === 'no_change') {
+      claimed.add(candidate.id);
+      resolved += 1;
+      // A resolved row is intended to apply — make sure it isn't still excluded.
+      updated.excluded = false;
+      return updated;
+    }
+    stillAmbiguous += 1;
+    return updated;
+  });
+
+  return { rows: out, resolved, stillAmbiguous, conflicts };
+}
+
 // ─── Summary & commit payload ───────────────────────────────────────────────
 
 export function summarizeClassImport(rows: ClassImportRow[]): ClassImportSummary {

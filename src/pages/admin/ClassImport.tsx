@@ -23,6 +23,7 @@ import { applyStudentClassImport, checkClassImportPayload, assertCanImportClasse
 import {
   parseClassImportFile, matchClassImportRows, summarizeClassImport,
   buildCommitPayload, buildClassImportTemplate, resolveRowCandidate,
+  bulkResolveSingleCandidates,
   MAX_IMPORT_FILE_BYTES, MAX_IMPORT_ROWS,
   type ClassImportRow, type ClassImportIssue, type ClassImportSummary, type ClassImportCandidate,
 } from '../../lib/import/classImport';
@@ -225,6 +226,33 @@ export function ClassImport() {
     setRows(prev => prev.map(r => (r.rowNumber === row.rowNumber ? resolveRowCandidate(r, candidate, existing, knownClasses) : r)));
   }
 
+  /**
+   * One-click "accept the suggested student" for every Needs-Review row that
+   * has exactly one possible match. Rows with several matches (e.g. two
+   * students sharing a name) are left for a manual choice.
+   */
+  function acceptAllSingleSuggestions() {
+    setRows(prev => {
+      const result = bulkResolveSingleCandidates(prev, studentById, knownClasses);
+      if (result.resolved > 0) {
+        addToast({
+          type: 'success',
+          title: `Matched ${result.resolved} row(s)`,
+          description: result.stillAmbiguous > 0 || result.conflicts > 0
+            ? `${result.stillAmbiguous + result.conflicts} row(s) still need a manual choice (multiple or no matches).`
+            : 'Every single-match review row was linked to its suggested student.',
+        });
+      } else {
+        addToast({
+          type: 'info',
+          title: 'No single-match rows',
+          description: 'The remaining Needs-Review rows each have multiple possible students (or none) and must be chosen one by one.',
+        });
+      }
+      return result.rows;
+    });
+  }
+
   function downloadTemplate() {
     const blob = buildClassImportTemplate(students);
     const url = URL.createObjectURL(blob);
@@ -324,6 +352,9 @@ export function ClassImport() {
 
   const selectedYear = academicYears.find(y => y.id === selectedYearId);
   const applicable = summary ? summary.applicableChanges + summary.applicableCreates : 0;
+  // Needs-Review rows that have exactly one suggested student and are not yet
+  // linked — these are what the "Accept all suggested matches" button resolves.
+  const reviewSingleCount = rows.filter(r => r.status === 'ambiguous' && r.candidates.length === 1).length;
 
   // ── Render ───────────────────────────────────────────────────────────────
   return (
@@ -432,7 +463,16 @@ export function ClassImport() {
               <span className="font-medium">{fileName}</span>
               {selectedYear && <span className="ml-2 text-slate-400">· academic year {selectedYear.name}</span>}
             </div>
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
+              {reviewSingleCount > 0 && (
+                <button
+                  onClick={acceptAllSingleSuggestions}
+                  className="inline-flex items-center gap-1 rounded-lg border border-purple-300 bg-purple-50 hover:bg-purple-100 px-3 py-1.5 text-sm font-medium text-purple-800"
+                  title="For every Needs-Review row with exactly one suggested student, click 'use this student' automatically. Rows with several possible students are left for you."
+                >
+                  <CheckCircle2 className="w-4 h-4" /> Accept all suggested matches ({reviewSingleCount})
+                </button>
+              )}
               <button onClick={reset} className="inline-flex items-center gap-1 rounded-lg border border-slate-300 px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50">
                 <RefreshCcw className="w-4 h-4" /> Upload another file
               </button>
