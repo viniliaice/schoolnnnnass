@@ -141,7 +141,13 @@ export function ClassImport() {
         ]);
         if (!mounted) return;
         setStudents(allStudents);
-        const classes = Array.from(new Set([...studentClasses, ...subjectClasses, 'Graduated'])).sort();
+        // Authoritative class list = every class a loaded student is in + every
+        // class with a subject assignment. Including the FULL roster (not the
+        // capped getStudentClasses query) ensures a class a matched student is
+        // already in (e.g. Grade 9-B, KG-B) is always valid and never reported
+        // as "does not exist".
+        const rosterClasses = allStudents.map(s => s.className).filter(Boolean);
+        const classes = Array.from(new Set([...rosterClasses, ...studentClasses, ...subjectClasses, 'Graduated'])).sort();
         setKnownClasses(classes);
         setAcademicYears(years);
         const current = years.find(y => y.isCurrent);

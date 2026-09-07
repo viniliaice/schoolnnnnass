@@ -72,6 +72,9 @@ export interface RawClassImportRow {
   govId: string;
   name: string;
   rawClass: string;
+  /** Every non-blank class-like cell in the row, in column order (the school
+   *  sheet can carry both a bare "Grade 3" column and a section "Grade 3-C"). */
+  classCandidates: string[];
   parentPhone: string;
   /** Identity cells that Excel stored as a number (digits may be lost). */
   numericStudentId: boolean;
@@ -223,12 +226,18 @@ function parseBusCell(raw: unknown): { value: string | null; invalid: boolean } 
 }
 
 function findHeaderColumn(headerRow: unknown[], aliases: string[]): number {
+  return findHeaderColumns(headerRow, aliases)[0] ?? -1;
+}
+
+/** Every column index whose header matches the alias set (in column order). */
+function findHeaderColumns(headerRow: unknown[], aliases: string[]): number[] {
   const aliasSet = new Set(aliases.map(a => headerKey(a)));
+  const cols: number[] = [];
   for (let c = 0; c < headerRow.length; c++) {
     const key = headerKey(headerRow[c]);
-    if (key && aliasSet.has(key)) return c;
+    if (key && aliasSet.has(key)) cols.push(c);
   }
-  return -1;
+  return cols;
 }
 
 /**
@@ -275,11 +284,12 @@ export function parseClassImportFile(input: ArrayBuffer): ClassImportParseResult
 
   const headerRow = rows[headerIndex] || [];
   const headers = headerRow.map(h => text(h)).filter(Boolean);
+  const classCols = findHeaderColumns(headerRow, HEADER_ALIASES.class);
   const cols = {
     studentId: findHeaderColumn(headerRow, HEADER_ALIASES.studentId),
     govId: findHeaderColumn(headerRow, HEADER_ALIASES.govId),
     name: findHeaderColumn(headerRow, HEADER_ALIASES.name),
-    class: findHeaderColumn(headerRow, HEADER_ALIASES.class),
+    class: classCols[0] ?? -1,
     parentPhone: findHeaderColumn(headerRow, HEADER_ALIASES.parentPhone),
     bus: findHeaderColumn(headerRow, HEADER_ALIASES.bus),
   };
@@ -317,7 +327,13 @@ export function parseClassImportFile(input: ArrayBuffer): ClassImportParseResult
     const studentId = cols.studentId >= 0 ? text(rawStudentId) : '';
     const govId = cols.govId >= 0 ? text(rawGovId).replace(/^"|"$/g, '') : '';
     const name = cols.name >= 0 ? text(raw[cols.name]) : '';
-    const rawClass = cols.class >= 0 ? text(raw[cols.class]) : '';
+    // Collect every class-like cell (the school sheet can have a bare "Grade 3"
+    // column AND a section "Grade 3-C" column). The matcher resolves against
+    // known classes and prefers the section-specific value.
+    const classCandidates = Array.from(new Set(
+      classCols.map(c => text(raw[c])).filter(v => v),
+    ));
+    const rawClass = classCandidates[0] ?? '';
     const parentPhone = cols.parentPhone >= 0 ? text(raw[cols.parentPhone]) : '';
     const rawBus = cols.bus >= 0 ? text(raw[cols.bus]) : '';
     const bus = parseBusCell(cols.bus >= 0 ? raw[cols.bus] : '');
@@ -347,7 +363,7 @@ export function parseClassImportFile(input: ArrayBuffer): ClassImportParseResult
     }
 
     out.push({
-      rowNumber: r + 1, studentId, govId, name, rawClass, parentPhone,
+      rowNumber: r + 1, studentId, govId, name, rawClass, classCandidates, parentPhone,
       numericStudentId, numericGovId,
       rawBus, parsedTransport: bus.value, invalidBus: bus.invalid,
     });
@@ -416,6 +432,73 @@ export function resolveUploadedClass(rawClass: string, knownClasses: readonly st
     return null;
   }
   return null;
+}
+
+/**
+ * A class value that carries a SECTION (e.g. "Grade 3-C", "G3C", "KG-B",
+ * "Foundation A") — these are concrete classes. A bare grade like "Grade 3"
+ * has no section and is never by itself a class.
+ */
+export function classHasSection(raw: string): boolean {
+  const v = text(raw);
+  if (!v) return false;
+  const compact = v.replace(/[\s-]+/g, '').toUpperCase();
+  if (/^(?:GRADE|YEAR|G|FORM)?\d{1,2}[A-Z]$/.test(compact)) return true; // Grade3C, G9B, 9B
+  if (/^KG[A-Z]$/.test(compact)) return true;                            // KGB
+  if (/^FOUNDATION[A-Z]$/.test(compact)) return true;                    // FOUNDATIONA
+  return false;
+}
+
+/**
+ * Resolve a row's class from ALL its class-like cells. The school sheet can
+ * contain both a bare "Grade 3" column and a section "Grade 3-C" column. We
+ * return the first value that resolves to an EXISTING canonical class. If
+ * none resolve, prefer the most section-specific raw value (so the error
+ * references "Grade 3-C", not the bare grade) and return null for resolution.
+ */
+export function resolveUploadedClassCandidates(
+  candidates: string[],
+  knownClasses: readonly string[],
+): { resolved: string | null; bestRaw: string } {
+  const vals = candidates.map(c => c?.trim()).filter(Boolean) as string[];
+  // Prefer section-specific cells (the last one wins when the sheet has both a
+  // bare "Grade" column and a section "Current Class" column), then any cell.
+  const ordered = [...vals].sort((a, b) => {
+    const as = classHasSection(a) ? 1 : 0;
+    const bs = classHasSection(b) ? 1 : 0;
+    return as - bs; // non-section first → section last; iteration below uses section first
+  });
+  const priority = [...ordered.reverse()];
+  // 1. Any value that resolves to a real class (section value first).
+  for (const v of priority) {
+    const hit = resolveUploadedClass(v, knownClasses);
+    if (hit) return { resolved: hit, bestRaw: v };
+  }
+  // 2. Nothing resolved — surface the most specific cell for the error.
+  const bestRaw = priority[0] ?? '';
+  return { resolved: null, bestRaw };
+}
+
+/**
+ * A value that names a grade/level but is missing the SECTION letter, e.g.
+ * "Grade 3", "Grade9", "KG", "Foundation". These are not complete classes —
+ * the school's classes are sectioned ("Grade 3-C", "KG-B"). Used to give a
+ * helpful error instead of a bare "does not exist".
+ */
+export function classMissingSection(raw: string): boolean {
+  const compact = text(raw).replace(/\s+/g, '').toUpperCase();
+  if (!compact) return false;
+  if (/^(?:GRADE|YEAR|FORM|G)?\d{1,2}$/.test(compact)) return true; // Grade 3, G3, 3
+  if (compact === 'KG') return true;
+  if (compact === 'FOUNDATION') return true;
+  return false;
+}
+
+function invalidClassMessage(bestRaw: string): string {
+  if (classMissingSection(bestRaw)) {
+    return `Class "${bestRaw}" is missing its section letter — classes need A/B/C, e.g. "${bestRaw.trim()}-A". Check the class column (a bare "${bestRaw.trim()}" without a letter is not a class).`;
+  }
+  return `Class ${bestRaw} does not exist.`;
 }
 
 // ─── Matching & classification ──────────────────────────────────────────────
@@ -767,17 +850,18 @@ export function matchClassImportRows(
         issue(row, 'warning', 'STUDENT_ID_NOT_FOUND', `Row ${row.rowNumber}: Student ID ${row.studentId} was not found; matched via Gov ID ${row.govId}.`);
       }
 
-      const resolved = resolveUploadedClass(row.rawClass, knownClasses);
-      if (!row.rawClass.trim()) {
+      const classChoice = resolveUploadedClassCandidates(row.classCandidates, knownClasses);
+      if (classChoice.bestRaw === '') {
         row.status = 'invalid';
         issue(row, 'error', 'MISSING_CLASS', `Row ${row.rowNumber}: Class is required.`);
         continue;
       }
-      if (!resolved) {
+      if (!classChoice.resolved) {
         row.status = 'invalid';
-        issue(row, 'error', 'INVALID_CLASS', `Row ${row.rowNumber}: Class ${row.rawClass} does not exist.`);
+        issue(row, 'error', 'INVALID_CLASS', `Row ${row.rowNumber}: ${invalidClassMessage(classChoice.bestRaw)}`);
         continue;
       }
+      const resolved = classChoice.resolved;
       row.toClass = resolved;
       const classChanged = resolved !== matched.className;
       const transportChanged = row.parsedTransport !== null
@@ -809,15 +893,16 @@ export function matchClassImportRows(
           : `Row ${row.rowNumber}: Student name is required.`);
       continue;
     }
-    if (!row.rawClass.trim()) {
+    const newClassChoice = resolveUploadedClassCandidates(row.classCandidates, knownClasses);
+    if (newClassChoice.bestRaw === '') {
       row.status = 'invalid';
       issue(row, 'error', 'MISSING_CLASS', `Row ${row.rowNumber}: Class is required for a new student.`);
       continue;
     }
-    const resolved = resolveUploadedClass(row.rawClass, knownClasses);
+    const resolved = newClassChoice.resolved;
     if (!resolved) {
       row.status = 'invalid';
-      issue(row, 'error', 'INVALID_CLASS', `Row ${row.rowNumber}: Class ${row.rawClass} does not exist.`);
+      issue(row, 'error', 'INVALID_CLASS', `Row ${row.rowNumber}: ${invalidClassMessage(newClassChoice.bestRaw)}`);
       continue;
     }
 
@@ -871,17 +956,21 @@ export function resolveRowCandidate(
   updated.toTransport = updated.parsedTransport;
   updated.candidates = [];
 
-  const resolved = resolveUploadedClass(updated.rawClass, knownClasses);
-  if (!updated.rawClass.trim()) {
+  const classChoice = resolveUploadedClassCandidates(
+    updated.classCandidates?.length ? updated.classCandidates : [updated.rawClass],
+    knownClasses,
+  );
+  if (classChoice.bestRaw === '') {
     updated.status = 'invalid';
     updated.issues = [{ severity: 'error', code: 'MISSING_CLASS', message: `Row ${updated.rowNumber}: Class is required.`, row: updated.rowNumber }];
     return updated;
   }
-  if (!resolved) {
+  if (!classChoice.resolved) {
     updated.status = 'invalid';
-    updated.issues = [{ severity: 'error', code: 'INVALID_CLASS', message: `Row ${updated.rowNumber}: Class ${updated.rawClass} does not exist.`, row: updated.rowNumber }];
+    updated.issues = [{ severity: 'error', code: 'INVALID_CLASS', message: `Row ${updated.rowNumber}: ${invalidClassMessage(classChoice.bestRaw)}`, row: updated.rowNumber }];
     return updated;
   }
+  const resolved = classChoice.resolved;
   updated.toClass = resolved;
   const classChanged = resolved !== existingStudent.className;
   const transportChanged = updated.parsedTransport !== null
