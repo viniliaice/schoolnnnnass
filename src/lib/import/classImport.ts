@@ -431,6 +431,86 @@ function normId(value: string): string {
   return value.trim().toUpperCase();
 }
 
+/** Normalize a Gov/admission ID the same way the server's gov_id_key() does. */
+function normGovId(value: string): string {
+  return value.trim().toUpperCase();
+}
+
+/**
+ * The identity keys a row would "claim" if treated as a new student: the
+ * normalized Student ID (when it is the app-generated id, it is ignored) and
+ * the normalized Gov ID. Used to guarantee a new-student row never collides
+ * with an existing student's identity — the single most important invariant
+ * of the import (no duplicate inserts).
+ */
+export interface ClassImportIdentityKeys {
+  studentIds: string[];
+  govIds: string[];
+}
+
+function isAppGeneratedId(id: string): boolean {
+  return /^student-\d{10,}-/i.test(id.trim());
+}
+
+export function rowIdentityKeys(row: { studentId: string; govId: string }): ClassImportIdentityKeys {
+  const studentIds: string[] = [];
+  const govIds: string[] = [];
+  const sid = row.studentId.trim();
+  if (sid && !isAppGeneratedId(sid)) studentIds.push(normId(sid));
+  const gov = normGovId(row.govId);
+  if (gov) govIds.push(gov);
+  return { studentIds, govIds };
+}
+
+/** Build the sets of identity keys already held by existing students. */
+export function existingIdentityKeys(students: Student[]): {
+  studentIds: Set<string>; govIds: Set<string>;
+} {
+  const studentIds = new Set<string>();
+  const govIds = new Set<string>();
+  for (const s of students) {
+    if (s.id && !isAppGeneratedId(s.id)) studentIds.add(normId(s.id));
+    if (s.govId && s.govId.trim()) govIds.add(normGovId(s.govId));
+  }
+  return { studentIds, govIds };
+}
+
+/**
+ * Final classification audit that runs BEFORE the payload is sent. It enforces
+ * the invariant the database relies on:
+ *   classChanges → existing student ids only
+ *   newStudents  → identities not present on any existing student
+ * Returns a list of human-readable problems. Empty = safe to commit. This is a
+ * pure function so it can run in the UI (blocking confirmation) and in tests.
+ */
+export function auditCommitPayload(
+  payload: ClassImportCommitPayload,
+  existing: { studentIds: Set<string>; govIds: Set<string> },
+): string[] {
+  const problems: string[] = [];
+  const newIdSet = new Set<string>();
+  const newGovSet = new Set<string>();
+
+  for (const ns of payload.newStudents) {
+    const sid = ns.id.trim();
+    const gov = ns.govId ? normGovId(ns.govId) : '';
+    // A new student must not reuse an existing student's id.
+    if (sid && existing.studentIds.has(normId(sid))) {
+      problems.push(`"${ns.name}" (${sid}) already exists as a student — it was misclassified as new and will not be created.`);
+    }
+    // A new student must not reuse an existing student's gov id.
+    if (gov && existing.govIds.has(gov)) {
+      problems.push(`"${ns.name}" uses Gov ID ${gov}, which is already assigned to an existing student — it was misclassified as new and will not be created.`);
+    }
+    // No two new students may share an identity either.
+    if (sid && newIdSet.has(normId(sid))) problems.push(`Student ID ${sid} is used by more than one new student in this file.`);
+    if (gov && newGovSet.has(gov)) problems.push(`Gov ID ${gov} is used by more than one new student in this file.`);
+    if (sid) newIdSet.add(normId(sid));
+    if (gov) newGovSet.add(gov);
+  }
+  return problems;
+}
+
 /**
  * Classify every uploaded row against the existing students.
  *
@@ -456,6 +536,9 @@ export function matchClassImportRows(
     const nameKey = normalizeName(s.name);
     if (nameKey) byName.set(nameKey, [...(byName.get(nameKey) ?? []), s]);
   }
+  // Identity keys that already exist — a row claiming one of these must never
+  // be created as a new student even if the normal matching did not resolve it.
+  const existingKeys = existingIdentityKeys(students);
 
   const rows: ClassImportRow[] = rawRows.map(raw => ({
     ...raw,
@@ -625,10 +708,19 @@ export function matchClassImportRows(
       }
     }
 
-    // Identifier conflict: the sheet's Student ID does not exist, but the
-    // row points at an existing student through a weaker key. Never guess —
-    // send it to manual review instead of creating a duplicate.
-    if (matched && idNotFound && method !== 'student_id') {
+    // An unknown sheet Student ID is a WARNING, not a blocker, when a stronger
+    // secondary key still resolves the row to exactly one existing student:
+    //   • Gov ID matches exactly one student, OR
+    //   • exact name + parent phone matches exactly one student.
+    // In the school's data the Student ID and Gov ID are frequently the SAME
+    // value stored in two columns, and legacy students carry generated ids —
+    // so a "Student ID not found" must never demote a confident gov/name+phone
+    // match into manual review (which previously could leak the row toward a
+    // false new student). We still keep the warning so the admin can see it.
+    // Only when there is NO confident secondary match do we hold for review.
+    const confidentSecondary = matched !== null && (method === 'gov_id' || method === 'name_phone');
+
+    if (matched && idNotFound && method !== 'student_id' && !confidentSecondary) {
       issue(row, 'error', 'STUDENT_ID_NOT_FOUND', `Row ${row.rowNumber}: Student ID ${row.studentId} does not exist, but the row resembles ${matched.name} (${matched.className}). Review the ID before applying.`);
       row.status = 'ambiguous';
       row.candidates = [{ id: matched.id, name: matched.name, className: matched.className }];
@@ -715,6 +807,24 @@ export function matchClassImportRows(
       continue;
     }
 
+    // ── Identity collision guard ──────────────────────────────────────────
+    // Even though normal matching did not bind this row, it claims a Student
+    // ID or Gov ID that already belongs to an existing student (this happens
+    // when the preview roster is incomplete). Creating it would be a duplicate
+    // INSERT and the server would reject the whole batch. Hold for manual
+    // review instead — NEVER auto-create.
+    const keys = rowIdentityKeys(row);
+    const idCollision = keys.studentIds.find(k => existingKeys.studentIds.has(k));
+    const govCollision = keys.govIds.find(k => existingKeys.govIds.has(k));
+    if (idCollision || govCollision) {
+      row.status = 'ambiguous';
+      const which = [idCollision ? `Student ID ${idCollision}` : null, govCollision ? `Gov ID ${govCollision}` : null]
+        .filter(Boolean).join(' / ');
+      issue(row, 'error', 'STUDENT_ID_NOT_FOUND',
+        `Row ${row.rowNumber}: ${which} already belongs to an existing student record, but the row could not be matched in the preview roster. It is held for manual review — a duplicate student is NOT created.`);
+      continue;
+    }
+
     row.status = 'new_student';
     row.toClass = resolved;
     row.toTransport = row.parsedTransport;
@@ -796,10 +906,16 @@ export function summarizeClassImport(rows: ClassImportRow[]): ClassImportSummary
 export function buildCommitPayload(rows: ClassImportRow[]): ClassImportCommitPayload {
   const changes: ClassChangeCommit[] = [];
   const newStudents: NewStudentCommit[] = [];
+  const claimedChangeIds = new Set<string>();
 
   for (const row of rows) {
     if (row.excluded) continue;
+    // INVARIANT: only a row the matcher bound to an existing student may ever
+    // produce a class change; only a row classified new_student (and never
+    // bound to an existing student) may ever produce a new student.
     if (row.status === 'class_change' && row.matchedStudentId && row.toClass) {
+      if (claimedChangeIds.has(row.matchedStudentId)) continue; // never twice
+      claimedChangeIds.add(row.matchedStudentId);
       // Only attach a transport target when the sheet provided a bus value
       // that differs from the stored one; a blank cell leaves transport alone.
       const transportChanged = row.parsedTransport !== null
@@ -810,6 +926,9 @@ export function buildCommitPayload(rows: ClassImportRow[]): ClassImportCommitPay
         transport: transportChanged ? normalizeTransport(row.parsedTransport) : undefined,
       });
     } else if (row.status === 'new_student' && row.toClass && row.name.trim()) {
+      // Defense in depth: a row bound to an existing student can NEVER be
+      // created, no matter its status flag.
+      if (row.matchedStudentId) continue;
       const normPhone = normalizePhone(row.parentPhone);
       newStudents.push({
         id: row.studentId.trim() || row.assignedId || generateNewStudentId(),

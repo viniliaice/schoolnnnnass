@@ -19,13 +19,51 @@ import { cn } from '../../utils/cn';
 import { getStudents, getStudentClasses } from '../../lib/db/students';
 import { getClasses } from '../../lib/db/classes';
 import { getAcademicYears } from '../../lib/db/academic';
-import { applyStudentClassImport, assertCanImportClasses, type ClassImportApplyResult } from '../../lib/db/classImport';
+import { applyStudentClassImport, checkClassImportPayload, assertCanImportClasses, type ClassImportApplyResult } from '../../lib/db/classImport';
 import {
   parseClassImportFile, matchClassImportRows, summarizeClassImport,
   buildCommitPayload, buildClassImportTemplate, resolveRowCandidate,
   MAX_IMPORT_FILE_BYTES, MAX_IMPORT_ROWS,
   type ClassImportRow, type ClassImportIssue, type ClassImportSummary, type ClassImportCandidate,
 } from '../../lib/import/classImport';
+import type { ClassImportPreflightProblem } from '../../lib/db/classImport';
+
+/**
+ * After the server preflight, move rows it says already-exist into manual
+ * review (ambiguous) and exclude them from this commit, attaching the
+ * existing student as a one-click candidate. This guarantees the admin
+ * fixes the misclassification instead of failing the whole atomic import.
+ */
+function reclassifyByPreflight(rows: ClassImportRow[], problems: ClassImportPreflightProblem[]): ClassImportRow[] {
+  const byGov = new Map<string, ClassImportPreflightProblem>();
+  const byId = new Map<string, ClassImportPreflightProblem>();
+  for (const p of problems) {
+    if (p.kind === 'already_exists_gov' && p.govId) byGov.set(p.govId.toUpperCase(), p);
+    if (p.kind === 'already_exists_id' && p.studentId) byId.set(p.studentId.toUpperCase(), p);
+  }
+  return rows.map(row => {
+    if (row.status !== 'new_student') return row;
+    const hit = (row.studentId.trim() && byId.get(row.studentId.trim().toUpperCase()))
+      || (row.govId.trim() && byGov.get(row.govId.trim().toUpperCase()))
+      || null;
+    if (!hit) return row;
+    const candidates = hit.existingId
+      ? [{ id: hit.existingId, name: hit.existingName ?? 'Existing student', className: hit.existingClassName ?? '' }]
+      : [];
+    return {
+      ...row,
+      status: 'ambiguous',
+      excluded: true,
+      candidates,
+      issues: [...row.issues, {
+        severity: 'error' as const,
+        code: 'STUDENT_ID_NOT_FOUND' as const,
+        row: row.rowNumber,
+        message: `${hit.message} Use “use this student” to link it, or exclude the row.`,
+      }],
+    };
+  });
+}
 import { transportLabel } from '../../lib/transport';
 import type { AcademicYear, Student } from '../../types';
 
@@ -213,6 +251,44 @@ export function ClassImport() {
     }
     setCommitting(true);
     try {
+      // ── Authoritative preflight against the live database ──────────────
+      // The preview classifies against the downloaded roster, which can be
+      // incomplete. The server confirms whether each "new" student truly
+      // does not exist and each change target exists; any row it flags as
+      // already-existing is moved to manual review instead of failing the
+      // whole atomic commit.
+      let preflight;
+      try {
+        preflight = await checkClassImportPayload(payload.changes, payload.newStudents);
+      } catch {
+        preflight = null; // older DB without the RPC → fall back to commit-time guard
+      }
+      if (preflight && !preflight.ok) {
+        const blocking = preflight.problems.filter(p =>
+          ['already_exists_id', 'already_exists_gov', 'change_student_missing'].includes(p.kind));
+        if (blocking.length > 0) {
+          setRows(prev => reclassifyByPreflight(prev, preflight.problems));
+          setConfirmOpen(false);
+          addToast({
+            type: 'error',
+            title: `${blocking.length} row(s) already match an existing student`,
+            description: 'They were moved to “Needs Review” so you can match them. No student was created and nothing was changed.',
+          });
+          setTab('review');
+          setCommitting(false);
+          return;
+        }
+        // Non-identity problems (bad class/transport) — surface and abort.
+        setConfirmOpen(false);
+        setCommitting(false);
+        addToast({
+          type: 'error',
+          title: 'Import needs fixes before committing',
+          description: preflight.problems[0]?.message ?? 'Some rows are invalid.',
+        });
+        return;
+      }
+
       const importRef = `class-import-${Date.now()}`;
       const applied = await applyStudentClassImport(payload.changes, payload.newStudents, selectedYearId || null, importRef);
       setResult(applied);

@@ -36,6 +36,49 @@ export interface ClassImportApplyResult {
   created: CreatedStudent[];
 }
 
+export interface ClassImportPreflightProblem {
+  kind: string;
+  message: string;
+  studentId?: string;
+  govId?: string;
+  existingId?: string;
+  existingName?: string;
+  existingClassName?: string;
+  claimedAs?: string;
+}
+
+export interface ClassImportPreflightResult {
+  ok: boolean;
+  problemCount: number;
+  problems: ClassImportPreflightProblem[];
+}
+
+/**
+ * Authoritative, READ-ONLY validation against the live database. Run this
+ * before applyStudentClassImport(): the preview classifies rows against the
+ * roster the browser downloaded, which can be incomplete; the server is the
+ * source of truth for "does this ID/Gov ID already exist". Returns every
+ * problem (per row) so the UI can move misclassified rows to manual review
+ * instead of failing the whole atomic commit.
+ */
+export async function checkClassImportPayload(
+  changes: ClassChangeCommit[],
+  newStudents: NewStudentCommit[],
+): Promise<ClassImportPreflightResult> {
+  const { data, error } = await supabase.rpc('check_class_import_payload', {
+    p_changes: changes,
+    p_new_students: newStudents,
+  });
+  if (error) throw new Error(error.message);
+  if (!data || typeof data !== 'object') throw new Error('The import service returned an invalid preflight response.');
+  const r = data as Record<string, unknown>;
+  return {
+    ok: r.ok === true,
+    problemCount: Number(r.problemCount ?? 0),
+    problems: Array.isArray(r.problems) ? (r.problems as ClassImportPreflightProblem[]) : [],
+  };
+}
+
 function parseApplyResult(value: unknown): ClassImportApplyResult {
   if (!value || typeof value !== 'object') throw new Error('The import service returned an invalid response.');
   const result = value as Record<string, unknown>;
