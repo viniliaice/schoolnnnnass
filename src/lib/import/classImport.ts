@@ -942,11 +942,14 @@ export function bulkResolveSingleCandidates(
       conflicts += 1;
       return row;
     }
-    const existing = studentsById.get(candidate.id);
-    if (!existing) {
-      stillAmbiguous += 1;
-      return row;
-    }
+    // The candidate may come from the server resolver and be absent from the
+    // browser roster — fall back to the candidate's own id/name/class.
+    const existing = studentsById.get(candidate.id) ?? {
+      id: candidate.id,
+      name: candidate.name,
+      className: candidate.className ?? '',
+      transport: null,
+    };
 
     const updated = resolveRowCandidate(
       row,

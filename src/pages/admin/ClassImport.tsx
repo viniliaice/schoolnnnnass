@@ -253,10 +253,15 @@ export function ClassImport() {
   }
 
   function resolveCandidate(row: ClassImportRow, candidate: ClassImportCandidate) {
-    const existing = studentById.get(candidate.id);
-    if (!existing) return;
+    // The candidate may come from the SERVER resolver (a student that exists in
+    // the live DB but is not in the browser's downloaded roster snapshot). The
+    // candidate already carries id/name/class, so use it directly rather than
+    // silently doing nothing when it is absent from the local map.
+    const existing = studentById.get(candidate.id) ?? candidate;
     setRows(prev => prev.map(r => (r.rowNumber === row.rowNumber ? resolveRowCandidate(r, candidate, existing, knownClasses) : r)));
   }
+
+
 
   /**
    * One-click "accept the suggested student" for every Needs-Review row that
