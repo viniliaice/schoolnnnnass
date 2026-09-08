@@ -188,5 +188,12 @@ describe('roster workbook build + parse roundtrip', () => {
     expect(parsed.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ code: 'MISSING_STUDENT_ID' }),
     ]));
+    // Missing identity is represented EXPLICITLY as null (never '') so it can
+    // never be mistaken for a real student identity downstream, and its scores
+    // are preserved for the Needs-Review stage.
+    const nameOnly = parsed.students.find(s => s.studentName === 'Intruder Student')!;
+    expect(nameOnly).toBeTruthy();
+    expect(nameOnly.studentId).toBeNull();
+    expect(nameOnly.scores.length).toBeGreaterThan(0);
   });
 });

@@ -307,3 +307,185 @@ describe('resolveWorkbook — Needs Review (legacy name-only matching)', () => {
     expect(result.validCount).toBe(2);
   });
 });
+
+// ─── Blank Student ID must never create false duplicates ─────────────────────
+//
+// Real-world workflow: teachers upload Google Sheets exported to Excel with the
+// Student ID column left completely BLANK for every row. A blank ID means
+// "identity not yet resolved" — it must NEVER be treated as an identity, and two
+// blank-ID rows must NEVER collide into a false duplicate.
+
+/**
+ * Build a workbook from a roster, then BLANK the Student ID cell for a set of
+ * worksheet rows (2 = first student). Optionally rename those rows' names.
+ * Every remaining cell keeps its prefilled value.
+ */
+function makeBlankIds(
+  subjects: Subject[],
+  blocks: AssessmentLabel[],
+  roster: Student[],
+  blankRows: number[],
+  edits: Record<string, string | number> = {},
+) {
+  const bytes = buildRosterWorkbook({ className: CLASS, subjects, blocks, roster });
+  const wb = XLSX.read(bytes, { type: 'array' });
+  const sheet = wb.Sheets[GRADES_SHEET_NAME];
+  for (const r of blankRows) sheet[`A${r}`] = { t: 's', v: '' };
+  for (const [addr, value] of Object.entries(edits)) {
+    sheet[addr] = typeof value === 'number' ? { t: 'n', v: value } : { t: 's', v: value };
+  }
+  const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+  return parseRosterWorkbook(out);
+}
+
+describe('resolveWorkbook — blank Student ID (real-world Google Sheet)', () => {
+  const CLASS_11A = 'Grade 11-A';
+  // A realistic roster for the "no IDs typed" workflow.
+  const ROSTER_11A = [
+    student('S-11-001', 'Amiir sakariye', CLASS_11A),
+    student('S-11-002', 'Axmed Cabdale Maxamuud', CLASS_11A),
+    student('S-11-003', 'C/raxmaan Cumar Farax', CLASS_11A),
+  ];
+  const ctx11 = (overrides: Partial<ResolveContext> = {}): ResolveContext => context({
+    className: CLASS_11A,
+    authorizedSubjects: [ARABIC],
+    roster: ROSTER_11A,
+    ...overrides,
+  });
+
+  // A / G: three different blank-ID names → three separate Needs-Review rows,
+  // ZERO duplicate errors caused by the blank IDs ('' + '' must not collide).
+  it('A/G: multiple blank Student IDs are separate rows with no false duplicates', () => {
+    // Blank all three IDs; each name matches exactly one roster student.
+    const parsed = makeBlankIds([ARABIC], ['HW1'], ROSTER_11A, [2, 3, 4], { C2: 4, C3: 5, C4: 3 });
+    // Parser must NOT emit '' as an identity.
+    expect(parsed.students.every(s => s.studentId === null || s.studentId === undefined)).toBe(true);
+
+    const result = resolveWorkbook(parsed, ctx11());
+    expect(result.errors.filter(e => /Duplicate/.test(e.message))).toHaveLength(0);
+    expect(result.errors).toHaveLength(0);
+    expect(result.reviewCount).toBe(3);
+    expect(new Set(result.reviews.map(r => r.rowNumber)).size).toBe(3);
+  });
+
+  // B: blank ID with exactly one candidate → Needs Review (not Error).
+  it('B: blank ID with a single roster candidate is Needs Review', () => {
+    const parsed = makeBlankIds([ARABIC], ['HW1'], ROSTER_11A, [2], { C2: 4 });
+    const result = resolveWorkbook(parsed, ctx11());
+    expect(result.reviewCount).toBeGreaterThanOrEqual(1);
+    const review = result.reviews.find(r => r.rowNumber === 2)!;
+    expect(review).toBeTruthy();
+    expect(review.candidates).toEqual([
+      expect.objectContaining({ id: 'S-11-001', className: CLASS_11A }),
+    ]);
+  });
+
+  // C: blank ID with multiple candidates → Needs Review, all candidates shown.
+  it('C: blank ID with multiple same-name candidates shows all candidates', () => {
+    const twins = [
+      student('T-1', 'Cali Maxamed', CLASS_11A),
+      student('T-2', 'Cali Maxamed', CLASS_11A),
+    ];
+    const parsed = makeBlankIds([ARABIC], ['HW1'], twins, [2], { C2: 4 });
+    const result = resolveWorkbook(parsed, ctx11({ roster: twins }));
+    const review = result.reviews.find(r => r.rowNumber === 2)!;
+    expect(review.candidates.map(c => c.id).sort()).toEqual(['T-1', 'T-2']);
+    expect(result.errors).toHaveLength(0);
+  });
+
+  // D: blank ID with no candidate → Error (removable from the UI).
+  it('D: blank ID with no roster candidate is an Error', () => {
+    const parsed = makeBlankIds([ARABIC], ['HW1'], ROSTER_11A, [2], { B2: 'salmaan axmed carab', C2: 4 });
+    const result = resolveWorkbook(parsed, ctx11());
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        rowNumber: 2,
+        removableRow: 2,
+        message: expect.stringContaining('No roster student matches legacy name "salmaan axmed carab"'),
+      }),
+    ]));
+  });
+
+  // E: manual resolution attaches the row's FULL score set to the chosen student.
+  it('E: choosing a student attaches all of the blank-ID row scores, none lost', () => {
+    // Two subjects, all four HW blocks → 8 scores in one row.
+    const parsed = makeBlankIds(
+      [ARABIC, TARBIYA],
+      ['HW1', 'HW2', 'HW3', 'HW4'],
+      ROSTER_11A,
+      [2],
+      { C2: 5, D2: 4, E2: 3, F2: 2, G2: 5, H2: 4, I2: 3, J2: 2 },
+    );
+    const result = resolveWorkbook(parsed, ctx11({
+      authorizedSubjects: [ARABIC, TARBIYA],
+      decisions: { 2: { action: 'use', studentId: 'S-11-001' } },
+    }));
+    const mine = result.records.filter(r => r.studentId === 'S-11-001');
+    expect(mine).toHaveLength(8);
+    expect(result.errors).toHaveLength(0);
+    expect(result.reviewCount).toBe(0);
+  });
+
+  // F: TWO blank-ID rows resolved to the SAME student → genuine duplicate error.
+  it('F: two blank-ID rows resolved to the same student produce a real duplicate', () => {
+    const parsed = makeBlankIds([ARABIC], ['HW1'], ROSTER_11A, [2, 3], { C2: 4, C3: 5 });
+    const result = resolveWorkbook(parsed, ctx11({
+      decisions: {
+        2: { action: 'use', studentId: 'S-11-001' },
+        3: { action: 'use', studentId: 'S-11-001' },
+      },
+    }));
+    expect(result.errors).toEqual(expect.arrayContaining([
+      expect.objectContaining({ message: expect.stringContaining('Duplicate') }),
+    ]));
+  });
+
+  // H: the exact real-world workbook — every ID blank, MATH + ENGLISH, 11 blocks
+  // each → resolves into Needs Review rows, NOT hundreds of duplicate errors.
+  it('H: full real-world workbook (all IDs blank, two subjects × 11 blocks)', () => {
+    const ENGLISH = subject('english', 'English');
+    const roster = [
+      student('R1', 'Amiir sakariye', CLASS_11A),
+      student('R2', 'Axmed Cabdale Maxamuud', CLASS_11A),
+      student('R3', 'C/raxmaan Cumar Farax', CLASS_11A),
+    ];
+    const allBlocks: AssessmentLabel[] = ['HW1','HW2','HW3','HW4','CPW1','CPW2','CPW3','CPW4','ATTENDANCE','MT','AKHLAAQ'];
+    // Fill every grade cell for all three rows with valid values.
+    const bytes = buildRosterWorkbook({ className: CLASS_11A, subjects: [ARABIC, ENGLISH], blocks: allBlocks, roster });
+    const wb = XLSX.read(bytes, { type: 'array' });
+    const sheet = wb.Sheets[GRADES_SHEET_NAME];
+    const ref = XLSX.utils.decode_range(sheet['!ref'] as string);
+    for (let r = 2; r <= 4; r++) {
+      sheet[`A${r}`] = { t: 's', v: '' }; // blank the ID
+      for (let c = 2; c <= ref.e.c; c++) { // columns C.. = grade cells
+        const addr = XLSX.utils.encode_cell({ r: r - 1, c });
+        // Modest valid score that fits every block's max (HW=5 is the smallest max).
+        sheet[addr] = { t: 'n', v: 3 };
+      }
+    }
+    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+    const parsed = parseRosterWorkbook(out);
+
+    const result = resolveWorkbook(parsed, ctx11({ authorizedSubjects: [ARABIC, ENGLISH], roster }));
+    // No explosion of duplicate errors from blank IDs.
+    expect(result.errors.filter(e => /Duplicate/.test(e.message))).toHaveLength(0);
+    expect(result.errors).toHaveLength(0);
+    // Three students → three Needs-Review items, none auto-resolved.
+    expect(result.reviewCount).toBe(3);
+    expect(result.records).toHaveLength(0);
+
+    // Resolve all three → every score record materializes (2 subjects × 11 = 22 each).
+    const result2 = resolveWorkbook(parsed, ctx11({
+      authorizedSubjects: [ARABIC, ENGLISH],
+      roster,
+      decisions: {
+        2: { action: 'use', studentId: 'R1' },
+        3: { action: 'use', studentId: 'R2' },
+        4: { action: 'use', studentId: 'R3' },
+      },
+    }));
+    expect(result2.reviewCount).toBe(0);
+    expect(result2.errors).toHaveLength(0);
+    expect(result2.records).toHaveLength(3 * 2 * 11);
+  });
+});

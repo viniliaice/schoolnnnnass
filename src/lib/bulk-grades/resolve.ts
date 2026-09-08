@@ -217,7 +217,9 @@ export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveCon
       return;
     }
 
-    const studentIdRaw = row.studentId.trim();
+    // A blank Student ID arrives as null (explicit "identity not resolved").
+    // An empty/whitespace string is treated identically. It is NEVER an identity.
+    const studentIdRaw = (row.studentId ?? '').trim();
 
     // ── Rows WITH a Student ID: authoritative identity. ─────────────────────
     if (studentIdRaw) {
@@ -296,7 +298,13 @@ export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveCon
   const seen = new Map<string, number>();
   const dedupErrors: ResolveProblem[] = [];
   for (const record of records) {
-    const key = [record.studentId, record.subjectId, record.examType, record.assessmentLabel, record.termId].join('|');
+    // Defensive: `records` only ever contains rows with a concrete, resolved
+    // studentId (emitRecordsFor uses student.id). A blank/unresolved identity
+    // must never reach dedup — skip it so two name-only rows can never collide
+    // on an empty key.
+    const resolvedId = (record.studentId ?? '').trim();
+    if (!resolvedId) continue;
+    const key = [resolvedId, record.subjectId, record.examType, record.assessmentLabel, record.termId].join('|');
     seen.set(key, (seen.get(key) || 0) + 1);
   }
   for (const [key, count] of seen) {

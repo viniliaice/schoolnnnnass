@@ -205,7 +205,14 @@ export interface WorkbookScore {
 
 export interface WorkbookStudentRow {
   rowNumber: number;
-  studentId: string;
+  /**
+   * Authoritative student identity from the Student ID cell, or `null` when the
+   * cell is BLANK. `null` explicitly means "identity not yet resolved" — it is
+   * NEVER a valid identity and must never be used as a duplicate/identity key.
+   * Blank IDs are resolved by name at the Needs-Review stage; only after a
+   * concrete student is chosen does the row gain a real id.
+   */
+  studentId: string | null;
   studentName: string;
   scores: WorkbookScore[];
 }
@@ -420,7 +427,10 @@ export function parseRosterWorkbook(file: ArrayBuffer): WorkbookParseResult {
         row: r + 1,
       });
       const scores = collectScores(r, row);
-      students.push({ rowNumber: r + 1, studentId: '', studentName, scores });
+      // Missing identity is represented EXPLICITLY as null — never '' — so a
+      // blank Student ID can never be mistaken for a real identity anywhere
+      // downstream (dedup, roster lookup, etc.).
+      students.push({ rowNumber: r + 1, studentId: null, studentName, scores });
       continue;
     }
     const previous = seenIds.get(studentId);
