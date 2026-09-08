@@ -169,6 +169,16 @@ export function BulkUploadGrades() {
     resetDownstream();
   };
 
+  const allBlockLabels = useMemo(
+    () => ASSESSMENT_GROUPS.flatMap(group => group.blocks.map(block => block.label)),
+    [],
+  );
+  const allBlocksSelected = allBlockLabels.length > 0 && selectedBlocks.length === allBlockLabels.length;
+  const toggleAllBlocks = () => {
+    setSelectedBlocks(allBlocksSelected ? [] : allBlockLabels);
+    resetDownstream();
+  };
+
   // ---- Derived readiness --------------------------------------------------
   const canConfigureAssessment = Boolean(selectedClass && selectedSubjects.length > 0);
   const canDownload = Boolean(canConfigureAssessment && currentTerm && selectedBlocks.length > 0);
@@ -424,8 +434,19 @@ export function BulkUploadGrades() {
           </div>
 
           <section>
-            <h2 className="text-sm font-semibold text-slate-700">Assessment blocks</h2>
-            <p className="mb-3 text-xs text-slate-500">Maximum scores come from the shared assessment definitions and are enforced by the server.</p>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-slate-700">Assessment blocks</h2>
+                <p className="mb-3 text-xs text-slate-500">Maximum scores come from the shared assessment definitions and are enforced by the server.</p>
+              </div>
+              <button
+                type="button"
+                onClick={toggleAllBlocks}
+                className="shrink-0 rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-700 hover:bg-teal-100"
+              >
+                {allBlocksSelected ? 'Clear all' : 'Select all'}
+              </button>
+            </div>
             <div className="grid gap-4 sm:grid-cols-2">
               {ASSESSMENT_GROUPS.map(group => (
                 <div key={group.id} className="rounded-xl border border-slate-200 p-4">
