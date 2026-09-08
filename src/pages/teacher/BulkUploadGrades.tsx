@@ -614,7 +614,29 @@ export function BulkUploadGrades() {
             <IssueList title={`Workbook errors (${parseErrors.length})`} tone="error" items={parseErrors.map(i => (i.cell ? `${i.cell}: ` : i.row ? `Row ${i.row}: ` : '') + i.message)} />
           )}
           {resolveResult.errors.length > 0 && (
-            <IssueList title={`Authorization & roster errors (${resolveResult.errors.length})`} tone="error" items={resolveResult.errors.map(e => e.message)} />
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-5 text-red-900">
+              <h2 className="font-bold">Authorization &amp; roster errors ({resolveResult.errors.length})</h2>
+              <ul className="mt-2 space-y-2 text-sm">
+                {resolveResult.errors.slice(0, 50).map((error, index) => (
+                  <li key={index} className="flex items-start justify-between gap-3">
+                    <span className="flex items-start gap-2">
+                      <span aria-hidden className="mt-1 text-red-400">•</span>
+                      <span>{error.message}</span>
+                    </span>
+                    {typeof error.removableRow === 'number' && (
+                      <button
+                        type="button"
+                        onClick={() => excludeReviewRow(error.removableRow!)}
+                        className="shrink-0 rounded-lg border border-red-300 bg-white px-3 py-1 text-xs font-semibold text-red-700 hover:bg-red-100"
+                      >
+                        Remove row {error.removableRow}
+                      </button>
+                    )}
+                  </li>
+                ))}
+                {resolveResult.errors.length > 50 && <li>…and {resolveResult.errors.length - 50} more.</li>}
+              </ul>
+            </div>
           )}
 
           <div className="flex items-center justify-between rounded-xl bg-slate-50 p-4 text-sm text-slate-700">

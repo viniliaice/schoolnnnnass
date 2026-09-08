@@ -220,8 +220,28 @@ describe('resolveWorkbook — Needs Review (legacy name-only matching)', () => {
     const result = resolveWorkbook(parsed, context());
     expect(result.reviewCount).toBe(0);
     expect(result.errors).toEqual(expect.arrayContaining([
-      expect.objectContaining({ rowNumber: 2, message: expect.stringContaining('No roster student matches legacy name "salmaan axmed carab"') }),
+      expect.objectContaining({
+        rowNumber: 2,
+        removableRow: 2,
+        message: expect.stringContaining('No roster student matches legacy name "salmaan axmed carab"'),
+      }),
     ]));
+  });
+
+  // H2: a no-candidate error row can be REMOVED directly from the UI (exclude
+  // decision) — the teacher never has to go back to the spreadsheet.
+  it('H2: excluding a no-roster-match error row clears the error and counts as excluded', () => {
+    const parsed = makeLegacyNameOnly([ARABIC], ['HW1'], ROSTER, 2, { C2: 4 }, 'salmaan axmed carab');
+    const before = resolveWorkbook(parsed, context());
+    const after = resolveWorkbook(parsed, context({
+      decisions: { 2: { action: 'exclude' } },
+    }));
+    // The error is gone and the row moved to Excluded — no spreadsheet edit needed.
+    expect(before.errors.some(e => e.rowNumber === 2)).toBe(true);
+    expect(after.errors).toHaveLength(0);
+    expect(after.reviewCount).toBe(0);
+    expect(after.excludedCount).toBe(before.excludedCount + 1);
+    expect(after.records).toHaveLength(0);
   });
 
   // J-mirror: choosing a student who is NOT in the current class → Error (client

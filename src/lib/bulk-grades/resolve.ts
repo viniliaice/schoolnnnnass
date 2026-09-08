@@ -68,6 +68,13 @@ export interface ResolveProblem {
   studentName?: string;
   subjectName?: string;
   rowNumber?: number;
+  /**
+   * When set, this error belongs to a specific workbook row that the reviewer
+   * may drop directly from the UI (via a `{ action: 'exclude' }` decision)
+   * without editing the source spreadsheet — e.g. a legacy name that matches no
+   * roster student. Excluding moves the row to Excluded and clears the error.
+   */
+  removableRow?: number;
 }
 
 /** An actionable Needs-Review item: a plausible-but-unsafe automatic match. */
@@ -265,6 +272,7 @@ export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveCon
         severity: 'error',
         studentName: row.studentName,
         rowNumber: row.rowNumber,
+        removableRow: row.rowNumber,
         message: `Row ${row.rowNumber}: No roster student matches legacy name "${row.studentName}". Correct the Student ID or remove the row.`,
       });
       return;
