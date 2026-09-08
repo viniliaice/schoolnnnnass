@@ -134,19 +134,35 @@ export async function createStudent(data: Omit<Student, 'id' | 'createdAt'>): Pr
   } as Student;
 }
 
+/**
+ * update_student() (20260906c_student_write_security.sql) uses NULL as the
+ * "leave this column alone" sentinel for every optional argument, and applies
+ * NULLIF(p_parent_id,'') when it does write. So:
+ *   * omit the key entirely            -> NULL  -> column untouched
+ *   * pass a parent id                 -> that id is assigned
+ *   * pass null (explicit unassign)    -> '' -> the RPC stores NULL
+ * Sending raw null for an explicit unassign (the previous behaviour) was
+ * silently a no-op: administrators could never REMOVE a wrongly assigned
+ * parent from a student.
+ */
+function rpcNullable(value: string | null | undefined): string | null {
+  if (value === undefined) return null; // no change
+  return value ?? '';                   // '' => explicit clear inside the RPC
+}
+
 export async function updateStudent(id: string, data: Partial<Student>): Promise<Student | null> {
   const { error } = await supabase.rpc('update_student', {
     p_student_id: id,
     p_name: data.name ?? null,
     p_class: data.className ?? null,
-    p_parent_id: data.parentId === undefined ? null : (data.parentId ?? null),
-    p_gov_id: data.govId === undefined ? null : (data.govId ?? null),
-    p_parent_phone: data.parentPhone === undefined ? null : (data.parentPhone ?? null),
-    p_transport: data.transport === undefined ? null : (data.transport ?? null),
+    p_parent_id: rpcNullable(data.parentId),
+    p_gov_id: rpcNullable(data.govId),
+    p_parent_phone: rpcNullable(data.parentPhone),
+    p_transport: rpcNullable(data.transport),
   });
   if (error) {
     console.error('Error updating student:', error);
-    return null;
+    throw new Error(error.message);
   }
   return (await getStudentById(id)) ?? null;
 }

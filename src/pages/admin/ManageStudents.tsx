@@ -1,7 +1,7 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Listbox } from '@headlessui/react';
 import { getStudentsPaginated, getStudentsByClasses, createStudent, updateStudent, deleteStudent, getStudentById } from '../../lib/db/students';
-import { getUserById, getUsersByRole } from '../../lib/db/profiles';
+import { getUserById, searchParents } from '../../lib/db/profiles';
 import { getExamsByStudent } from '../../lib/db/exams';
 import { getCurrentTerm } from '../../lib/db/academic';
 import { getReportCommentsForStudentTerm as getReportCommentsForStudentTermDirect } from '../../lib/db/reports';
@@ -28,9 +28,13 @@ export function ManageStudents() {
   const [parentMap, setParentMap] = useState<Map<string, User>>(new Map());
   const [loadingParentIds, setLoadingParentIds] = useState<Set<string>>(new Set());
 
-  // ── Parent search (only loaded when create/edit form opens) ──
-  const [searchParents, setSearchParents] = useState<User[]>([]);
-  const [searchParentsLoaded, setSearchParentsLoaded] = useState(false);
+  // ── Parent search ──
+  // Matching happens in Postgres (searchParents), NOT on a pre-fetched slice:
+  // the previous implementation loaded page 1 / 100 parents once and filtered
+  // that array in the browser, so parent #101 onwards could never be found.
+  const [parentResults, setParentResults] = useState<User[]>([]);
+  const [parentSearchLoading, setParentSearchLoading] = useState(false);
+  const [parentSearchError, setParentSearchError] = useState<string | null>(null);
 
   const [classFilter, setClassFilter] = useState<string[]>([]);
   const [search, setSearch] = useState('');
@@ -79,8 +83,13 @@ export function ManageStudents() {
   const [formName, setFormName] = useState('');
   const [formClass, setFormClass] = useState(CLASSES[0]);
   const [formParent, setFormParent] = useState('');
+  // Name of the currently assigned parent, shown as a confirmation chip so the
+  // admin can always see WHO is assigned independently of the search box text.
+  const [formParentLabel, setFormParentLabel] = useState('');
   const [parentSearch, setParentSearch] = useState('');
   const [parentFocused, setParentFocused] = useState(false);
+  const parentSearchSeq = useRef(0);
+  const parentPickerOpen = showCreate || !!showEdit;
 
   const STUDENTS_PER_PAGE = 50;
 
@@ -100,17 +109,35 @@ export function ManageStudents() {
     }
   }, [parentMap, loadingParentIds]);
 
-  // ── Load all parents for search (only when form opens) ──
-  const ensureParentsForSearch = useCallback(async () => {
-    if (searchParentsLoaded) return;
+  // ── Server-side parent search, debounced ──
+  const runParentSearch = useCallback(async (term: string) => {
+    setParentSearchLoading(true);
+    setParentSearchError(null);
+    const requestId = ++parentSearchSeq.current;
     try {
-      const parents = await getUsersByRole('parent');
-      setSearchParents(parents || []);
-      setSearchParentsLoaded(true);
+      const parents = await searchParents(term);
+      // Ignore out-of-order responses so a slow early keystroke cannot
+      // overwrite the results of a later one.
+      if (requestId !== parentSearchSeq.current) return;
+      setParentResults(parents || []);
     } catch (err) {
-      console.warn('Failed to load parents for search:', err);
+      if (requestId !== parentSearchSeq.current) return;
+      console.warn('Failed to search parents:', err);
+      setParentResults([]);
+      setParentSearchError('Could not load parents. Check your connection and try again.');
+    } finally {
+      if (requestId === parentSearchSeq.current) setParentSearchLoading(false);
     }
-  }, [searchParentsLoaded]);
+  }, []);
+
+  // Debounced re-query whenever the term changes while a picker is open.
+  // An empty term still queries: the dropdown then shows the first page of
+  // parents, which is what an admin expects on focus.
+  useEffect(() => {
+    if (!parentPickerOpen) return;
+    const t = setTimeout(() => { runParentSearch(parentSearch); }, 300);
+    return () => clearTimeout(t);
+  }, [parentSearch, parentPickerOpen, runParentSearch]);
 
   // ── Refresh students only (NO parent bulk fetch) ──
   const refresh = async (page: number = currentPage, searchTerm?: string) => {
@@ -154,11 +181,6 @@ export function ManageStudents() {
   useEffect(() => { setCurrentPage(1); refresh(1, debouncedSearch); }, [classFilter]);
 
   const handlePageChange = (page: number) => { setCurrentPage(page); };
-
-  const filteredParents = searchParents.filter(p =>
-    p.name.toLowerCase().includes(parentSearch.toLowerCase()) ||
-    p.email.toLowerCase().includes(parentSearch.toLowerCase())
-  );
 
   const filtered = students.filter(s => classFilter.length === 0 || classFilter.includes(s.className));
 
@@ -277,7 +299,11 @@ export function ManageStudents() {
     },
   ];
 
-  const resetForm = () => { setFormName(''); setFormClass(CLASSES[0]); setFormParent(''); setParentSearch(''); };
+  const resetForm = () => {
+    setFormName(''); setFormClass(CLASSES[0]);
+    setFormParent(''); setFormParentLabel(''); setParentSearch('');
+    setParentResults([]); setParentSearchError(null);
+  };
 
   const handleCreate = async () => {
     if (!formName.trim()) { addToast({ type: 'error', title: 'Student name is required' }); return; }
@@ -294,26 +320,43 @@ export function ManageStudents() {
     setFormName(s.name);
     setFormClass(s.className);
     setFormParent(s.parentId || '');
-    // Lazy-load parent name for display
-    if (s.parentId && !parentMap.has(s.parentId)) {
-      loadParent(s.parentId);
-    }
-    const parent = s.parentId ? parentMap.get(s.parentId) : undefined;
-    setParentSearch(parent ? parent.name : '');
-    // Load parents for search dropdown
-    ensureParentsForSearch();
+    setParentSearch('');
+    setParentResults([]);
+    setParentSearchError(null);
+    // Show who is currently assigned. The cache is populated lazily per row,
+    // so fall back to a direct fetch instead of rendering a blank field (which
+    // previously made an assigned parent look unassigned).
+    const cached = s.parentId ? parentMap.get(s.parentId) : undefined;
+    setFormParentLabel(cached?.name || (s.parentId ? 'Loading…' : ''));
     setShowEdit(s);
+    if (s.parentId && !cached) {
+      try {
+        const parent = await getUserById(s.parentId);
+        setFormParentLabel(parent?.name || 'Unknown parent');
+        if (parent) setParentMap(prev => new Map(prev).set(parent.id, parent));
+      } catch {
+        setFormParentLabel('Unknown parent');
+      }
+    }
   };
 
   const handleEdit = async () => {
     if (!showEdit) return;
     if (!formName.trim()) { addToast({ type: 'error', title: 'Student name is required' }); return; }
     try {
+      // Goes through updateStudent -> update_student() RPC: the admin-gated,
+      // SECURITY DEFINER, audit-logged path. students has no client UPDATE
+      // policy (20260906d_rls_lockdown), so this is the only write route.
+      // `formParent || null` sends an explicit null to CLEAR the assignment.
       await updateStudent(showEdit.id, { name: formName, className: formClass, parentId: formParent || null });
       addToast({ type: 'success', title: 'Student updated successfully' });
       setShowEdit(null); resetForm(); await refresh();
     } catch (error) {
-      addToast({ type: 'error', title: 'Failed to update student' });
+      addToast({
+        type: 'error',
+        title: 'Failed to update student',
+        description: error instanceof Error ? error.message : undefined,
+      });
     }
   };
 
@@ -335,7 +378,7 @@ export function ManageStudents() {
           <h1 className="text-2xl font-bold text-slate-900">Manage Students</h1>
           <p className="text-slate-500 mt-1">Add students, assign classes and parents</p>
         </div>
-        <button onClick={() => { resetForm(); ensureParentsForSearch(); setShowCreate(true); }}
+        <button onClick={() => { resetForm(); setShowCreate(true); }}
           className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-medium text-sm hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all">
           <Plus className="w-4 h-4" /> Add Student
         </button>
@@ -415,31 +458,62 @@ export function ManageStudents() {
           </div>
           <div>
             <label className="text-sm font-semibold text-slate-700 mb-1.5 block">Assign Parent</label>
+            <div className="mb-2 flex items-center gap-2 text-sm">
+              {formParent ? (
+                <>
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 font-medium">
+                    <UserCheck className="w-3.5 h-3.5" /> {formParentLabel || formParent}
+                  </span>
+                  <button type="button"
+                    onClick={() => { setFormParent(''); setFormParentLabel(''); setParentSearch(''); }}
+                    className="text-xs text-slate-500 hover:text-red-600 underline">
+                    Remove
+                  </button>
+                </>
+              ) : (
+                <span className="text-slate-500">No parent assigned</span>
+              )}
+            </div>
             <div className="relative">
               <input
                 type="text"
-                placeholder="Search parents by name or email..."
+                placeholder="Search parents by name, email or phone…"
                 value={parentSearch}
                 onChange={e => setParentSearch(e.target.value)}
-                onFocus={() => { setParentFocused(true); ensureParentsForSearch(); }}
+                onFocus={() => setParentFocused(true)}
                 onBlur={() => setTimeout(() => setParentFocused(false), 150)}
                 className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none"
               />
-              {parentSearch && parentFocused && (
-                <div className="mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
-                  <button onClick={() => { setFormParent(''); setParentSearch(''); }}
+              {parentFocused && (
+                <div className="mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-56 overflow-y-auto">
+                  <button onMouseDown={e => e.preventDefault()}
+                    onClick={() => { setFormParent(''); setFormParentLabel(''); setParentSearch(''); }}
                     className="w-full px-4 py-2 text-left text-sm text-slate-500 hover:bg-slate-50">
                     — No parent —
                   </button>
-                  {filteredParents.map(p => (
-                    <button key={p.id} onClick={() => { setFormParent(p.id); setParentSearch(p.name); }}
-                      className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+                  {parentSearchLoading && (
+                    <div className="flex items-center gap-2 px-4 py-2 text-sm text-slate-500">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching parents…
+                    </div>
+                  )}
+                  {parentSearchError && (
+                    <div className="px-4 py-2 text-sm text-red-600">{parentSearchError}</div>
+                  )}
+                  {parentResults.map(p => (
+                    <button key={p.id} onMouseDown={e => e.preventDefault()}
+                      onClick={() => { setFormParent(p.id); setFormParentLabel(p.name); setParentSearch(''); setParentFocused(false); }}
+                      className={cn('w-full px-4 py-2 text-left text-sm hover:bg-slate-50',
+                        formParent === p.id && 'bg-indigo-50')}>
                       <div className="font-medium text-slate-800">{p.name}</div>
-                      <div className="text-xs text-slate-500">{p.email}</div>
+                      <div className="text-xs text-slate-500">
+                        {[p.email, p.phone1 || p.phone2].filter(Boolean).join(' · ') || 'No contact details'}
+                      </div>
                     </button>
                   ))}
-                  {filteredParents.length === 0 && parentSearch && (
-                    <div className="px-4 py-2 text-sm text-slate-500">No parents found</div>
+                  {!parentSearchLoading && !parentSearchError && parentResults.length === 0 && (
+                    <div className="px-4 py-2 text-sm text-slate-500">
+                      {parentSearch ? 'No parents match that search' : 'No parent profiles found'}
+                    </div>
                   )}
                 </div>
               )}
@@ -466,31 +540,62 @@ export function ManageStudents() {
           </div>
           <div>
             <label className="text-sm font-semibold text-slate-700 mb-1.5 block">Assign Parent</label>
+            <div className="mb-2 flex items-center gap-2 text-sm">
+              {formParent ? (
+                <>
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-indigo-50 text-indigo-700 font-medium">
+                    <UserCheck className="w-3.5 h-3.5" /> {formParentLabel || formParent}
+                  </span>
+                  <button type="button"
+                    onClick={() => { setFormParent(''); setFormParentLabel(''); setParentSearch(''); }}
+                    className="text-xs text-slate-500 hover:text-red-600 underline">
+                    Remove
+                  </button>
+                </>
+              ) : (
+                <span className="text-slate-500">No parent assigned</span>
+              )}
+            </div>
             <div className="relative">
               <input
                 type="text"
-                placeholder="Search parents by name or email..."
+                placeholder="Search parents by name, email or phone…"
                 value={parentSearch}
                 onChange={e => setParentSearch(e.target.value)}
-                onFocus={() => { setParentFocused(true); ensureParentsForSearch(); }}
+                onFocus={() => setParentFocused(true)}
                 onBlur={() => setTimeout(() => setParentFocused(false), 150)}
                 className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none"
               />
-              {parentSearch && parentFocused && (
-                <div className="mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-48 overflow-y-auto">
-                  <button onClick={() => { setFormParent(''); setParentSearch(''); }}
+              {parentFocused && (
+                <div className="mt-2 w-full bg-white border border-slate-200 rounded-xl shadow-lg max-h-56 overflow-y-auto">
+                  <button onMouseDown={e => e.preventDefault()}
+                    onClick={() => { setFormParent(''); setFormParentLabel(''); setParentSearch(''); }}
                     className="w-full px-4 py-2 text-left text-sm text-slate-500 hover:bg-slate-50">
                     — No parent —
                   </button>
-                  {filteredParents.map(p => (
-                    <button key={p.id} onClick={() => { setFormParent(p.id); setParentSearch(p.name); }}
-                      className="w-full px-4 py-2 text-left text-sm hover:bg-slate-50">
+                  {parentSearchLoading && (
+                    <div className="flex items-center gap-2 px-4 py-2 text-sm text-slate-500">
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" /> Searching parents…
+                    </div>
+                  )}
+                  {parentSearchError && (
+                    <div className="px-4 py-2 text-sm text-red-600">{parentSearchError}</div>
+                  )}
+                  {parentResults.map(p => (
+                    <button key={p.id} onMouseDown={e => e.preventDefault()}
+                      onClick={() => { setFormParent(p.id); setFormParentLabel(p.name); setParentSearch(''); setParentFocused(false); }}
+                      className={cn('w-full px-4 py-2 text-left text-sm hover:bg-slate-50',
+                        formParent === p.id && 'bg-indigo-50')}>
                       <div className="font-medium text-slate-800">{p.name}</div>
-                      <div className="text-xs text-slate-500">{p.email}</div>
+                      <div className="text-xs text-slate-500">
+                        {[p.email, p.phone1 || p.phone2].filter(Boolean).join(' · ') || 'No contact details'}
+                      </div>
                     </button>
                   ))}
-                  {filteredParents.length === 0 && parentSearch && (
-                    <div className="px-4 py-2 text-sm text-slate-500">No parents found</div>
+                  {!parentSearchLoading && !parentSearchError && parentResults.length === 0 && (
+                    <div className="px-4 py-2 text-sm text-slate-500">
+                      {parentSearch ? 'No parents match that search' : 'No parent profiles found'}
+                    </div>
                   )}
                 </div>
               )}

@@ -60,6 +60,72 @@ export async function getUsersByRole(role: Role, page: number = 1, limit: number
   return rows.filter(user => String(user.role || '').toLowerCase().trim() === normalizedRole);
 }
 
+/**
+ * Server-side parent lookup for the "Assign Parent" pickers.
+ *
+ * Why this exists instead of getUsersByRole('parent'):
+ *   getUsersByRole() defaults to page 1 / limit 100 and then the caller
+ *   filtered that slice in the browser. Any school with more than 100 parent
+ *   profiles could therefore never see parents 101..N in the search box — the
+ *   parent existed, but the client had never fetched the row. That is the
+ *   "some existing parents do not appear" bug.
+ *
+ * This does the matching in Postgres (so the whole parent table is searched,
+ * not a 100-row window) and only ships the matches back:
+ *   * role is matched case/whitespace-insensitively (ilike), matching the
+ *     defensive normalization getUsersByRole() already does,
+ *   * the term matches name, email, phone1 or phone2 — administrators
+ *     routinely identify a parent by phone number, and the old client-side
+ *     filter only looked at name + email,
+ *   * an empty term returns the first `limit` parents so the dropdown is
+ *     useful before typing.
+ *
+ * Reads only. profiles stays SELECT-only under RLS and "Admins can read all
+ * profiles" (20260708_profiles_auth_session_rls) is what authorizes this.
+ */
+const PARENT_SEARCH_LIMIT = 50;
+
+function escapeOrPattern(term: string): string {
+  // PostgREST `or=` is a comma-separated list wrapped in parens: a comma,
+  // parenthesis or backslash in the term would break out of the filter.
+  return term.replace(/[\\,()]/g, ' ');
+}
+
+export async function searchParents(
+  term: string = '',
+  limit: number = PARENT_SEARCH_LIMIT,
+): Promise<User[]> {
+  const trimmed = String(term || '').trim();
+
+  let query = supabase
+    .from('profiles')
+    .select('*')
+    .ilike('role', 'parent');
+
+  if (trimmed) {
+    const pattern = `%${escapeOrPattern(trimmed)}%`;
+    query = query.or(
+      [
+        `name.ilike.${pattern}`,
+        `email.ilike.${pattern}`,
+        `phone1.ilike.${pattern}`,
+        `phone2.ilike.${pattern}`,
+      ].join(','),
+    );
+  }
+
+  const { data, error } = await query
+    .order('name', { ascending: true })
+    .limit(Math.min(limit, MAX_QUERY_LIMIT));
+  if (error) throw error;
+
+  // Defensive: mirror getUsersByRole()'s post-filter in case a legacy row has
+  // a padded/odd-cased role that ilike matched loosely.
+  return ((data || []) as User[]).filter(
+    user => String(user.role || '').toLowerCase().trim() === 'parent',
+  );
+}
+
 export async function getUsersByIds(ids: string[]): Promise<User[]> {
   if (!Array.isArray(ids) || ids.length === 0) return [];
 
@@ -193,4 +259,25 @@ export async function getAllTeachers(): Promise<User[]> {
     .eq('role', 'teacher');
   if (error) throw error;
   return (data || []) as User[];
+}
+
+/**
+ * Every parent profile, for callers that genuinely need the COMPLETE list
+ * rather than a search (bulk import resolves an arbitrary sheet of parent
+ * names offline, and renders a full <select>; a search box cannot serve that).
+ *
+ * getUsersByRole('parent') defaults to page 1 / limit 100, so bulk import
+ * silently failed to match any parent past the 100th row — the same defect
+ * that hid parents in the Edit Student picker. Use searchParents() for
+ * interactive pickers and this only when the whole set is required.
+ */
+export async function getAllParents(limit: number = MAX_QUERY_LIMIT): Promise<User[]> {
+  const { data, error } = await applyLimit(
+    supabase.from('profiles').select('*').ilike('role', 'parent'),
+    limit,
+  );
+  if (error) throw error;
+  return ((data || []) as User[]).filter(
+    user => String(user.role || '').toLowerCase().trim() === 'parent',
+  );
 }
