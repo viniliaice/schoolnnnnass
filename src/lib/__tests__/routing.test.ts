@@ -29,8 +29,17 @@ describe('canAccessRoute — office role', () => {
 
   it('every guarded route is listed in ROUTE_ACCESS', () => {
     expect(Object.keys(ROUTE_ACCESS).sort()).toEqual([
-      '/admin/class-import', '/admin/drivers', '/admin/family-ids', '/admin/family-ids/setup', '/directory', '/gate',
+      '/admin/class-import', '/admin/drivers', '/admin/family-ids', '/admin/family-ids/setup', '/admin/grade-corrections', '/directory', '/gate',
     ]);
+  });
+});
+
+describe('grade corrections route is admin-only', () => {
+  it('only admins may open /admin/grade-corrections', () => {
+    expect(canAccessRoute('admin', '/admin/grade-corrections')).toBe(true);
+    for (const role of ['supervisor', 'office', 'teacher', 'parent'] as const) {
+      expect(canAccessRoute(role, '/admin/grade-corrections'), role).toBe(false);
+    }
   });
 });
 

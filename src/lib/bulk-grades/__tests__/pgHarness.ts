@@ -155,7 +155,7 @@ $fn$;
  * (from 20260908). Returns a thin client with auth simulation.
  */
 export async function createBulkGradesTestDb(
-  opts: { includeStatusGuard?: boolean } = {},
+  opts: { includeStatusGuard?: boolean; includeGradeCorrection?: boolean } = {},
 ): Promise<PgTestDb> {
   const { PGlite } = await import('@electric-sql/pglite');
   const pg = await PGlite.create();
@@ -201,6 +201,24 @@ export async function createBulkGradesTestDb(
         BEFORE INSERT OR UPDATE ON public.exams
         FOR EACH ROW EXECUTE FUNCTION public.enforce_exam_status_guard();
     `);
+  }
+
+  // Optionally install the ACTUAL shipped Admin Grade Correction artifacts
+  // (audit table + immutability trigger + admin_correct_grade +
+  // get_grade_correction_history) from 20260910, so those RPCs are EXECUTED
+  // against real Postgres, not mocked.
+  if (opts.includeGradeCorrection) {
+    // The migration's RLS policy targets the `authenticated` role; ensure it
+    // exists (Supabase provides it in production). Its GRANT/REVOKE statements
+    // are already guarded by pg_roles existence checks.
+    await pg.exec(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='authenticated') THEN
+        CREATE ROLE authenticated NOLOGIN;
+      END IF;
+    END $$;`);
+    const migration = readMigration('20260910_admin_grade_correction.sql');
+    // The whole migration is idempotent and self-contained; run it verbatim.
+    await pg.exec(migration);
   }
 
   const client: PgTestDb = {
