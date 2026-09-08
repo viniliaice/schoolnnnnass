@@ -33,16 +33,15 @@ import { cn } from '../../utils/cn';
 
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 
-type StepId = 'class' | 'assessment' | 'download' | 'upload' | 'resolve' | 'review' | 'confirm';
+type StepId = 'class' | 'assessment' | 'upload' | 'resolve' | 'review' | 'confirm';
 
 const STEPS: { id: StepId; label: string }[] = [
   { id: 'class', label: '1. Class & Subjects' },
   { id: 'assessment', label: '2. Assessment' },
-  { id: 'download', label: '3. Download Example' },
-  { id: 'upload', label: '4. Upload' },
-  { id: 'resolve', label: '5. Resolve & Validate' },
-  { id: 'review', label: '6. Review' },
-  { id: 'confirm', label: '7. Confirm' },
+  { id: 'upload', label: '3. Upload' },
+  { id: 'resolve', label: '4. Resolve & Validate' },
+  { id: 'review', label: '5. Review' },
+  { id: 'confirm', label: '6. Confirm' },
 ];
 
 function createUploadKey(): string {
@@ -259,7 +258,6 @@ export function BulkUploadGrades() {
       anchor.remove();
       URL.revokeObjectURL(url);
       addToast({ type: 'success', title: `Workbook ready for ${selectedClass}`, description: `${roster.length} students · ${selectedSubjects.length} subject(s).` });
-      setStep('upload');
     } catch (error) {
       addToast({ type: 'error', title: 'Could not generate the workbook', description: error instanceof Error ? error.message : undefined });
     }
@@ -474,7 +472,7 @@ export function BulkUploadGrades() {
             <button onClick={() => setStep('class')} className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700"><ChevronLeft className="h-4 w-4" /> Back</button>
             <button
               disabled={!canDownload}
-              onClick={() => setStep('download')}
+              onClick={() => setStep('upload')}
               className={cn('flex items-center gap-2 rounded-xl px-5 py-3 font-semibold', canDownload ? 'bg-teal-600 text-white hover:bg-teal-700' : 'cursor-not-allowed bg-slate-100 text-slate-400')}
             >
               Continue <ChevronRight className="h-4 w-4" />
@@ -484,32 +482,23 @@ export function BulkUploadGrades() {
       )}
 
       {/* STEP 3 — DOWNLOAD */}
-      {step === 'download' && (
-        <div className="max-w-3xl space-y-5 rounded-2xl border border-slate-200 bg-white p-6">
-          <h2 className="text-xl font-bold text-slate-900">Download the class workbook</h2>
-          <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <SummaryItem label="Class" value={selectedClass} />
-            <SummaryItem label="Students" value={String(roster.length)} />
-            <SummaryItem label="Subjects" value={selectedSubjects.map(s => s.name).join(', ')} />
-            <SummaryItem label="Assessment blocks" value={selectedBlocks.length ? selectedBlocks.map(blockDisplayName).join(', ') : '—'} />
-          </dl>
-          <p className="text-sm text-slate-600">
-            The workbook is prefilled with the {roster.length}-student {selectedClass} roster. Student IDs are already filled in — you only enter grades.
-          </p>
-          <div className="flex items-center justify-between">
-            <button onClick={() => setStep('assessment')} className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700"><ChevronLeft className="h-4 w-4" /> Back</button>
-            <button onClick={download} disabled={!canDownload} className={cn('flex items-center gap-2 rounded-xl px-5 py-3 font-semibold', canDownload ? 'bg-teal-600 text-white hover:bg-teal-700' : 'cursor-not-allowed bg-slate-100 text-slate-400')}>
-              <Download className="h-4 w-4" /> Download {workbookFileName(selectedClass, selectedSubjects.map(s => s.name))}
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* STEP 4 — UPLOAD */}
+      {/* STEP 3 — UPLOAD */}
       {step === 'upload' && (
         <div className="max-w-3xl space-y-5 rounded-2xl border border-slate-200 bg-white p-6">
-          <h2 className="text-xl font-bold text-slate-900">Upload the completed workbook</h2>
-          <p className="text-sm text-slate-600">Upload the {selectedClass} workbook you downloaded and filled in.</p>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold text-slate-900">Upload the completed workbook</h2>
+              <p className="text-sm text-slate-600">Upload the {selectedClass} workbook filled in with grades. Need the template? Download the roster-prefilled example (Student IDs already filled in) — optional.</p>
+            </div>
+            <button
+              onClick={download}
+              disabled={!canDownload}
+              className={cn('flex shrink-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold', canDownload ? 'border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100' : 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400')}
+              title="Download the roster-prefilled example workbook"
+            >
+              <Download className="h-4 w-4" /> Download example
+            </button>
+          </div>
           <div
             onClick={() => fileInputRef.current?.click()}
             onDragOver={e => { e.preventDefault(); setDragOver(true); }}
@@ -523,7 +512,7 @@ export function BulkUploadGrades() {
             <p className="mt-1 text-sm text-slate-500">Excel only, maximum 5 MB.</p>
           </div>
           <div className="flex justify-between">
-            <button onClick={() => setStep('download')} className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700"><ChevronLeft className="h-4 w-4" /> Back</button>
+            <button onClick={() => setStep('assessment')} className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700"><ChevronLeft className="h-4 w-4" /> Back</button>
           </div>
         </div>
       )}
