@@ -230,6 +230,25 @@ d('submit_bulk_grades — behavioral (real PostgreSQL via PGlite)', () => {
     const msg = await expectDenied(() => callRpc(db, rec(), 'anon-key-00000001', true));
     expect(msg).toContain('Only authenticated teachers and admins');
   });
+
+  // J: a Needs-Review row that was manually matched to a student produces a
+  // NORMAL record (studentId = the chosen student). If that student then moves
+  // out of the class before confirm, the server MUST still reject it — manual
+  // review never weakens stale-roster protection.
+  it('J: a manually-selected student who moved out of the class is still server-rejected', async () => {
+    await db.setAuthUid(AUTH_A);
+    // studentA was chosen during review; now move them out of Grade 5-A.
+    await db.exec(`UPDATE students SET "className"='Grade 9-Z' WHERE id='studentA'`);
+    const msg = await expectDenied(() => callRpc(
+      db,
+      rec({ assessmentLabel: 'HW4', examType: 'Homework', total: 5, score: 3 }),
+      'manual-moved-00001',
+      true,
+    ));
+    expect(msg).toContain('assigned class subjects');
+    // restore for any later assertions
+    await db.exec(`UPDATE students SET "className"='Grade 5-A' WHERE id='studentA'`);
+  });
 });
 
 // Regression: the RPC must coexist with the status-guard trigger (20260909).

@@ -365,34 +365,10 @@ export function parseRosterWorkbook(file: ArrayBuffer): WorkbookParseResult {
   const students: WorkbookStudentRow[] = [];
   const seenIds = new Map<string, number>();
   let totalEntered = 0;
-  for (let r = headerIdx + 1; r < rows.length; r++) {
-    const row = rows[r] || [];
-    const studentId = text(row[idColumn]);
-    const studentName = text(row[nameColumn]);
-    if (!studentId && !studentName) continue;
-    if (!studentId) {
-      issues.push({
-        severity: 'error',
-        code: 'MISSING_STUDENT_ID',
-        message: `Row ${r + 1} has no Student ID. Do not add rows; the roster is fixed for this class.`,
-        cell: cellAddress(r, idColumn),
-        row: r + 1,
-      });
-      continue;
-    }
-    const previous = seenIds.get(studentId);
-    if (previous != null) {
-      issues.push({
-        severity: 'error',
-        code: 'DUPLICATE_STUDENT_ROW',
-        message: `Student ID "${studentId}" appears more than once (rows ${previous + 1} and ${r + 1}).`,
-        cell: cellAddress(r, idColumn),
-        row: r + 1,
-      });
-      continue;
-    }
-    seenIds.set(studentId, r);
 
+  // Collect the scored cells for one worksheet row (shared by ID rows and
+  // legacy name-only rows). Invalid cells still surface a blocking parse error.
+  const collectScores = (r: number, row: unknown[]): WorkbookScore[] => {
     const scores: WorkbookScore[] = [];
     for (const column of columns) {
       const outcome = interpretScoreCell(row[column.columnIndex], column.block.total);
@@ -421,6 +397,46 @@ export function parseRosterWorkbook(file: ArrayBuffer): WorkbookParseResult {
       });
       totalEntered += 1;
     }
+    return scores;
+  };
+
+  for (let r = headerIdx + 1; r < rows.length; r++) {
+    const row = rows[r] || [];
+    const studentId = text(row[idColumn]);
+    const studentName = text(row[nameColumn]);
+    if (!studentId && !studentName) continue;
+    if (!studentId) {
+      // A row with a name but no Student ID is a legacy / manually-edited
+      // identity. Rather than silently dropping its scores, surface it to the
+      // resolver (studentId = '') so it can attempt a name match and route the
+      // row to Needs Review (human-resolvable) or Errors (no candidate). This
+      // is a warning, not a blocking parse error: the roster-prefilled template
+      // always includes IDs, so this only fires for legacy/edited workbooks.
+      issues.push({
+        severity: 'warning',
+        code: 'MISSING_STUDENT_ID',
+        message: `Row ${r + 1} ("${studentName}") has no Student ID and needs manual review to match a student.`,
+        cell: cellAddress(r, idColumn),
+        row: r + 1,
+      });
+      const scores = collectScores(r, row);
+      students.push({ rowNumber: r + 1, studentId: '', studentName, scores });
+      continue;
+    }
+    const previous = seenIds.get(studentId);
+    if (previous != null) {
+      issues.push({
+        severity: 'error',
+        code: 'DUPLICATE_STUDENT_ROW',
+        message: `Student ID "${studentId}" appears more than once (rows ${previous + 1} and ${r + 1}).`,
+        cell: cellAddress(r, idColumn),
+        row: r + 1,
+      });
+      continue;
+    }
+    seenIds.set(studentId, r);
+
+    const scores = collectScores(r, row);
     students.push({ rowNumber: r + 1, studentId, studentName, scores });
   }
 

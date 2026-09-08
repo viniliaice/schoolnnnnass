@@ -1,19 +1,46 @@
 // Client-side resolution + validation for the class-specific bulk upload.
 //
 // This is a PURE function: it takes the parsed roster workbook plus the class
-// context (authorized subjects, current roster, term/month/date) and produces
+// context (authorized subjects, current roster, term/month/date, and any manual
+// Needs-Review decisions) and produces
 //   * the normalized BulkGradeRecord[] to send to submit_bulk_grades
 //   * per-category counts (valid / errors / needs review / excluded)
-//   * human-readable problems
+//   * human-readable problems and actionable review items
 //
 // It mirrors the server's authorization checks so the teacher gets fast,
 // specific feedback — but the server (submit_bulk_grades) remains authoritative
 // and re-checks everything. Nothing here is trusted by the database.
+//
+// Resolution categories (mirrors the Student Class Update & Import experience):
+//   VALID        — Student ID (or a manually chosen student) resolves to a
+//                  student currently in the selected class, with an authorized
+//                  subject and a valid score.
+//   NEEDS REVIEW — a legacy / name-only row that has at least one plausible
+//                  roster candidate but cannot be matched automatically. The
+//                  reviewer must choose a student ("Use this student") or
+//                  exclude the row. NEVER auto-selected.
+//   ERROR        — definitively invalid and not human-resolvable by choosing a
+//                  student: no roster candidate for a legacy name, unauthorized
+//                  subject, student not in the current class (stale/wrong class),
+//                  duplicate workbook identity, invalid assessment/score.
+//   EXCLUDED     — no score entered, or the reviewer excluded the row.
 
 import type { BulkGradeRecord } from '../db/bulkGrades';
 import type { WorkbookParseResult, WorkbookStudentRow } from './workbook';
 import { blockDisplayName } from './assessments';
 import type { Student, Subject } from '../../types';
+
+/** A student the reviewer may pick for a Needs-Review row. */
+export interface ResolveCandidate {
+  id: string;
+  name: string;
+  className: string;
+}
+
+/** A reviewer's manual decision for a Needs-Review row, keyed by workbook row. */
+export type ReviewDecision =
+  | { action: 'exclude' }
+  | { action: 'use'; studentId: string };
 
 export interface ResolveContext {
   /** The single class the teacher selected. */
@@ -26,6 +53,12 @@ export interface ResolveContext {
   termName?: string;
   month: string;
   date: string;
+  /**
+   * Manual Needs-Review decisions keyed by workbook rowNumber. When present,
+   * "use" re-runs the SAME validation pipeline with the chosen student, and
+   * "exclude" moves the row to Excluded. Absent rows stay in Needs Review.
+   */
+  decisions?: Record<number, ReviewDecision>;
 }
 
 export interface ResolveProblem {
@@ -37,19 +70,35 @@ export interface ResolveProblem {
   rowNumber?: number;
 }
 
+/** An actionable Needs-Review item: a plausible-but-unsafe automatic match. */
+export interface ResolveReview {
+  rowNumber: number;
+  /** The legacy name as written in the workbook. */
+  studentName: string;
+  reason: string;
+  message: string;
+  /** Roster students the reviewer may choose. Never pre-selected. */
+  candidates: ResolveCandidate[];
+  /** Number of scored cells this row would contribute once resolved. */
+  scoreCount: number;
+}
+
 export interface ResolveResult {
   records: BulkGradeRecord[];
   /** Records that passed every client check. */
   validCount: number;
   /** Number of distinct students contributing valid records. */
   validStudentCount: number;
-  // Note: there is intentionally no separate "needs review" category. Every
-  // uncertain record in this architecture is either a hard error (unauthorized
-  // subject, student not in the current roster, duplicate identity) or is
-  // excluded (no scores entered). A permanently-empty category would be
-  // misleading, so it was removed rather than left dead.
   errors: ResolveProblem[];
-  /** Rows/cells intentionally excluded (e.g. no scores entered). */
+  /**
+   * Rows that are plausible but require a human decision (legacy name-only,
+   * missing ID with candidates, ambiguous identity). The Review/Confirm step is
+   * blocked until this list is empty (every item chosen or excluded).
+   */
+  reviews: ResolveReview[];
+  /** Convenience: reviews.length — the number of unresolved review items. */
+  reviewCount: number;
+  /** Rows/cells intentionally excluded (no scores, or reviewer-excluded). */
   excludedCount: number;
   /** Subjects present in the workbook that the teacher is not authorized for. */
   unauthorizedSubjects: string[];
@@ -75,13 +124,16 @@ function subjectAliases(name: string): string[] {
 
 /**
  * Resolves a parsed roster workbook against the class context. Student identity
- * is taken ONLY from Student ID (never name/row/position), matched against the
- * current roster — so a stale workbook whose student has since moved classes is
- * flagged rather than silently accepted.
+ * is taken from Student ID (authoritative), matched against the current roster.
+ * Legacy / name-only rows (no Student ID) are matched by name and routed to
+ * Needs Review when a plausible roster candidate exists, or to Errors when none
+ * does — never silently accepted.
  */
 export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveContext): ResolveResult {
+  const decisions = context.decisions ?? {};
   const errors: ResolveProblem[] = [];
   const records: BulkGradeRecord[] = [];
+  const reviews: ResolveReview[] = [];
   const validStudents = new Set<string>();
   let excludedCount = 0;
 
@@ -102,36 +154,21 @@ export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveCon
     if (!bound) unauthorizedSubjects.push(subjectName);
   }
 
-  // Roster lookup by exact trimmed Student ID (authoritative identity).
+  // Roster lookups: by exact trimmed Student ID, and by normalized name.
   const rosterById = new Map<string, Student>();
-  for (const student of context.roster) rosterById.set(student.id.trim(), student);
-
-  for (const row of parsed.students) {
-    resolveRow(row);
+  const rosterByName = new Map<string, Student[]>();
+  for (const student of context.roster) {
+    rosterById.set(student.id.trim(), student);
+    const key = normalizeName(student.name);
+    const bucket = rosterByName.get(key);
+    if (bucket) bucket.push(student); else rosterByName.set(key, [student]);
   }
 
-  function resolveRow(row: WorkbookStudentRow): void {
-    const studentIdRaw = row.studentId.trim();
-    const student = rosterById.get(studentIdRaw) || null;
-
-    if (row.scores.length === 0) {
-      excludedCount += 1;
-      return;
-    }
-
-    if (!student) {
-      // Wrong-class / stale-roster / tampering protection (client mirror).
-      errors.push({
-        severity: 'error',
-        studentId: studentIdRaw,
-        studentName: row.studentName,
-        rowNumber: row.rowNumber,
-        message: `Student ID "${studentIdRaw}" (${row.studentName || 'unknown'}) is not currently in ${context.className}. The roster may have changed — re-download the template for this class.`,
-      });
-      return;
-    }
-
-    let rowContributed = false;
+  // Emit the normalized records for one resolved student + workbook row. Pushes
+  // a subject-authorization error for any unauthorized column. Returns true if
+  // the row contributed at least one record.
+  function emitRecordsFor(student: Student, row: WorkbookStudentRow): boolean {
+    let contributed = false;
     for (const score of row.scores) {
       const subject = subjectBinding.get(score.subjectName.toLowerCase()) ?? null;
       if (!subject) {
@@ -157,12 +194,97 @@ export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveCon
         date: context.date,
         termId: context.termId,
       });
-      rowContributed = true;
+      contributed = true;
     }
-    if (rowContributed) validStudents.add(student.id);
+    if (contributed) validStudents.add(student.id);
+    return contributed;
+  }
+
+  for (const row of parsed.students) {
+    resolveRow(row);
+  }
+
+  function resolveRow(row: WorkbookStudentRow): void {
+    if (row.scores.length === 0) {
+      excludedCount += 1;
+      return;
+    }
+
+    const studentIdRaw = row.studentId.trim();
+
+    // ── Rows WITH a Student ID: authoritative identity. ─────────────────────
+    if (studentIdRaw) {
+      const student = rosterById.get(studentIdRaw) || null;
+      if (!student) {
+        // Wrong-class / stale-roster / tampering protection (client mirror).
+        errors.push({
+          severity: 'error',
+          studentId: studentIdRaw,
+          studentName: row.studentName,
+          rowNumber: row.rowNumber,
+          message: `Student ID "${studentIdRaw}" (${row.studentName || 'unknown'}) is not currently in ${context.className}. The roster may have changed — re-download the template for this class.`,
+        });
+        return;
+      }
+      emitRecordsFor(student, row);
+      return;
+    }
+
+    // ── Legacy / name-only rows: no Student ID. ─────────────────────────────
+    const decision = decisions[row.rowNumber];
+
+    if (decision?.action === 'exclude') {
+      excludedCount += 1;
+      return;
+    }
+
+    if (decision?.action === 'use') {
+      const student = rosterById.get(decision.studentId.trim()) || null;
+      if (!student) {
+        // The chosen student is no longer in the current class (e.g. moved out
+        // after selection). Re-running the pipeline turns this into an error;
+        // the server would also reject it.
+        errors.push({
+          severity: 'error',
+          studentId: decision.studentId,
+          studentName: row.studentName,
+          rowNumber: row.rowNumber,
+          message: `Row ${row.rowNumber}: the selected student is no longer in ${context.className}. Re-download the template and review again.`,
+        });
+        return;
+      }
+      emitRecordsFor(student, row);
+      return;
+    }
+
+    // No decision yet → attempt a name match to build candidates.
+    const candidates = rosterByName.get(normalizeName(row.studentName)) ?? [];
+    if (candidates.length === 0) {
+      // Definitively unresolvable: no safe candidate to choose. Stays an ERROR.
+      errors.push({
+        severity: 'error',
+        studentName: row.studentName,
+        rowNumber: row.rowNumber,
+        message: `Row ${row.rowNumber}: No roster student matches legacy name "${row.studentName}". Correct the Student ID or remove the row.`,
+      });
+      return;
+    }
+
+    const reason = candidates.length === 1
+      ? 'could not be safely matched automatically (name-only match)'
+      : `could not be safely matched — ${candidates.length} possible students`;
+    reviews.push({
+      rowNumber: row.rowNumber,
+      studentName: row.studentName,
+      reason,
+      message: `Row ${row.rowNumber}: Student ${row.studentName || '(no name)'} ${reason}. Choose the correct student or exclude the row.`,
+      candidates: candidates.map(c => ({ id: c.id, name: c.name, className: c.className })),
+      scoreCount: row.scores.length,
+    });
   }
 
   // Duplicate assessment identity within the upload (student+subject+type+label+term).
+  // A manually chosen student that collides with another row is caught here too.
   const seen = new Map<string, number>();
   const dedupErrors: ResolveProblem[] = [];
   for (const record of records) {
@@ -177,7 +299,7 @@ export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveCon
         severity: 'error',
         studentId,
         studentName: student?.name,
-        message: `Duplicate ${blockDisplayName(label as never)} for ${student?.name || studentId}. Keep one value per assessment.`,
+        message: `Duplicate ${blockDisplayName(label as never)} for ${student?.name || studentId}. Keep one row or correct the Student ID; duplicate rows are not automatically chosen.`,
       });
     }
   }
@@ -187,6 +309,8 @@ export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveCon
     validCount: records.length,
     validStudentCount: validStudents.size,
     errors: [...errors, ...dedupErrors],
+    reviews,
+    reviewCount: reviews.length,
     excludedCount,
     unauthorizedSubjects,
   };

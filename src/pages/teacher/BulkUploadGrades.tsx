@@ -25,7 +25,7 @@ import {
   workbookFileName,
   type WorkbookParseResult,
 } from '../../lib/bulk-grades/workbook';
-import { resolveWorkbook, type ResolveResult } from '../../lib/bulk-grades/resolve';
+import { resolveWorkbook, type ResolveResult, type ReviewDecision } from '../../lib/bulk-grades/resolve';
 import type { AssessmentLabel } from '../../lib/excel-parser';
 import type { Student, Subject, Term } from '../../types';
 import { MONTHS } from '../../types';
@@ -74,6 +74,9 @@ export function BulkUploadGrades() {
   const [fileName, setFileName] = useState('');
   const [parsed, setParsed] = useState<WorkbookParseResult | null>(null);
   const [dragOver, setDragOver] = useState(false);
+  // Manual Needs-Review decisions keyed by workbook rowNumber. "use" picks a
+  // student (re-runs the full validation pipeline); "exclude" drops the row.
+  const [reviewDecisions, setReviewDecisions] = useState<Record<number, ReviewDecision>>({});
 
   // Step 6/7 — server preview
   const [serverPreview, setServerPreview] = useState<BulkGradeSubmissionResult | null>(null);
@@ -147,6 +150,7 @@ export function BulkUploadGrades() {
     setFileName('');
     setServerPreview(null);
     setApprovedAcknowledged(false);
+    setReviewDecisions({});
   };
 
   const chooseClass = (className: string) => {
@@ -179,12 +183,40 @@ export function BulkUploadGrades() {
       termName: currentTerm.name,
       month,
       date,
+      decisions: reviewDecisions,
     });
-  }, [parsed, currentTerm, selectedClass, selectedSubjects, roster, month, date]);
+  }, [parsed, currentTerm, selectedClass, selectedSubjects, roster, month, date, reviewDecisions]);
 
   const parseErrors = useMemo(() => (parsed ? parsed.issues.filter(i => i.severity === 'error') : []), [parsed]);
   const blockingCount = (parseErrors.length) + (resolveResult ? resolveResult.errors.length : 0);
-  const canValidate = Boolean(resolveResult && resolveResult.records.length > 0 && blockingCount === 0);
+  const pendingReviews = resolveResult ? resolveResult.reviewCount : 0;
+  // Cannot advance to the server preview while any row still needs review, or
+  // while there are blocking parse/authorization errors, or with nothing valid.
+  const canValidate = Boolean(
+    resolveResult && resolveResult.records.length > 0 && blockingCount === 0 && pendingReviews === 0,
+  );
+
+  // Needs-Review actions: pick a student ("use") or drop the row ("exclude").
+  // Both re-run the SAME resolver pipeline via reviewDecisions.
+  const useReviewStudent = (rowNumber: number, studentId: string) => {
+    setReviewDecisions(prev => ({ ...prev, [rowNumber]: { action: 'use', studentId } }));
+    setServerPreview(null);
+    setApprovedAcknowledged(false);
+  };
+  const excludeReviewRow = (rowNumber: number) => {
+    setReviewDecisions(prev => ({ ...prev, [rowNumber]: { action: 'exclude' } }));
+    setServerPreview(null);
+    setApprovedAcknowledged(false);
+  };
+  const undoReviewDecision = (rowNumber: number) => {
+    setReviewDecisions(prev => {
+      const next = { ...prev };
+      delete next[rowNumber];
+      return next;
+    });
+    setServerPreview(null);
+    setApprovedAcknowledged(false);
+  };
 
   // Server-computed change lists for the Review step (old -> new).
   const changes = serverPreview?.changes ?? [];
@@ -478,12 +510,84 @@ export function BulkUploadGrades() {
       {/* STEP 5 — RESOLVE & VALIDATE */}
       {step === 'resolve' && parsed && resolveResult && (
         <div className="space-y-5">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             <CountCard label="Valid" count={resolveResult.validCount} color="teal" />
             <CountCard label="Errors" count={parseErrors.length + resolveResult.errors.length} color="red" />
+            <CountCard label="Needs Review" count={resolveResult.reviewCount} color="amber" />
             <CountCard label="Excluded" count={resolveResult.excludedCount} color="slate" />
             <CountCard label="Students" count={resolveResult.validStudentCount} color="slate" />
           </div>
+
+          {/* NEEDS REVIEW — actionable legacy / name-only matches. Choose a
+              student or exclude each row before continuing. */}
+          {resolveResult.reviews.length > 0 && (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5">
+              <h3 className="font-bold text-amber-900">Needs Review ({resolveResult.reviews.length})</h3>
+              <p className="mt-1 text-sm text-amber-800">
+                {resolveResult.reviews.length} item{resolveResult.reviews.length === 1 ? '' : 's'} still need review.
+                Choose a student or exclude each row before continuing.
+              </p>
+              <div className="mt-4 space-y-3">
+                {resolveResult.reviews.map(review => (
+                  <div key={review.rowNumber} className="rounded-xl border border-amber-200 bg-white p-4">
+                    <div className="font-semibold text-slate-900">{review.studentName || '(no name)'}</div>
+                    <div className="text-xs text-slate-500">{selectedClass}</div>
+                    <p className="mt-1 text-sm text-slate-600">{review.message}</p>
+                    {review.candidates.length > 1 && (
+                      <p className="mt-2 text-xs font-medium uppercase tracking-wide text-slate-500">Possible matches</p>
+                    )}
+                    <div className="mt-2 space-y-1">
+                      {review.candidates.map(candidate => (
+                        <button
+                          key={candidate.id}
+                          onClick={() => useReviewStudent(review.rowNumber, candidate.id)}
+                          className="block w-full rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-left text-sm hover:bg-teal-100"
+                          title={`Match this row to ${candidate.name}`}
+                        >
+                          <span className="font-medium text-slate-800">{candidate.name}</span>{' '}
+                          <span className="text-slate-500">({candidate.className})</span>
+                          <span className="ml-1 font-semibold text-teal-700">— Use this student</span>
+                        </button>
+                      ))}
+                    </div>
+                    <button
+                      onClick={() => excludeReviewRow(review.rowNumber)}
+                      className="mt-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100"
+                    >
+                      Exclude row
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Resolved review decisions — visible so the reviewer sees what happened. */}
+          {Object.keys(reviewDecisions).length > 0 && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-4">
+              <h3 className="text-sm font-bold text-slate-700">Reviewed rows ({Object.keys(reviewDecisions).length})</h3>
+              <ul className="mt-2 space-y-1 text-sm text-slate-600">
+                {Object.entries(reviewDecisions).map(([rowNumber, decision]) => {
+                  const row = parsed.students.find(s => s.rowNumber === Number(rowNumber));
+                  const name = row?.studentName || `Row ${rowNumber}`;
+                  const chosen = decision.action === 'use'
+                    ? roster.find(s => s.id === decision.studentId)
+                    : null;
+                  return (
+                    <li key={rowNumber} className="flex items-center justify-between gap-3">
+                      <span>
+                        Row {rowNumber}: <span className="font-medium text-slate-800">{name}</span>{' '}
+                        {decision.action === 'use'
+                          ? <span className="text-teal-700">→ matched to {chosen?.name ?? decision.studentId}</span>
+                          : <span className="text-slate-500">→ excluded</span>}
+                      </span>
+                      <button onClick={() => undoReviewDecision(Number(rowNumber))} className="rounded p-1 text-slate-400 hover:bg-slate-100" title="Undo"><X className="h-4 w-4" /></button>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
 
           {parseErrors.length > 0 && (
             <IssueList title={`Workbook errors (${parseErrors.length})`} tone="error" items={parseErrors.map(i => (i.cell ? `${i.cell}: ` : i.row ? `Row ${i.row}: ` : '') + i.message)} />
@@ -496,6 +600,12 @@ export function BulkUploadGrades() {
             <span>{fileName} · {parsed.studentCount} rows · {parsed.subjects.length} subjects</span>
             <button onClick={() => { resetDownstream(); setStep('upload'); }} className="rounded p-1 hover:bg-slate-200"><X className="h-4 w-4" /></button>
           </div>
+
+          {pendingReviews > 0 && (
+            <p className="text-sm font-medium text-amber-700">
+              {pendingReviews} item{pendingReviews === 1 ? '' : 's'} still need review. Choose a student or exclude each row before continuing.
+            </p>
+          )}
 
           <div className="flex items-center justify-between">
             <button onClick={() => setStep('upload')} className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700"><ChevronLeft className="h-4 w-4" /> Back</button>
