@@ -154,7 +154,9 @@ $fn$;
  * the ACTUAL unique-assignment index (from 20260906c), and the ACTUAL RPC
  * (from 20260908). Returns a thin client with auth simulation.
  */
-export async function createBulkGradesTestDb(): Promise<PgTestDb> {
+export async function createBulkGradesTestDb(
+  opts: { includeStatusGuard?: boolean } = {},
+): Promise<PgTestDb> {
   const { PGlite } = await import('@electric-sql/pglite');
   const pg = await PGlite.create();
 
@@ -182,6 +184,24 @@ export async function createBulkGradesTestDb(): Promise<PgTestDb> {
     '$$;',
   );
   await pg.exec(rpcSql);
+
+  // Optionally install the ACTUAL status-guard trigger (20260909) to prove the
+  // SECURITY DEFINER RPC coexists with it (the RPC always writes 'pending', so
+  // the guard must be a no-op for the RPC path).
+  if (opts.includeStatusGuard) {
+    const guardFn = extractStatementContaining(
+      readMigration('20260909_exam_status_teacher_guard.sql'),
+      'FUNCTION public.enforce_exam_status_guard',
+      '$$;',
+    );
+    await pg.exec(guardFn);
+    await pg.exec(`
+      DROP TRIGGER IF EXISTS enforce_exam_status_guard_trg ON public.exams;
+      CREATE TRIGGER enforce_exam_status_guard_trg
+        BEFORE INSERT OR UPDATE ON public.exams
+        FOR EACH ROW EXECUTE FUNCTION public.enforce_exam_status_guard();
+    `);
+  }
 
   const client: PgTestDb = {
     query: async (sql, params) => {

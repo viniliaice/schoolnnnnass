@@ -232,6 +232,42 @@ d('submit_bulk_grades — behavioral (real PostgreSQL via PGlite)', () => {
   });
 });
 
+// Regression: the RPC must coexist with the status-guard trigger (20260909).
+// The RPC runs as a teacher context and always writes 'pending', so the guard
+// must be a harmless no-op and every RPC behavior must be unchanged.
+d('submit_bulk_grades coexists with the exam status guard trigger', () => {
+  let db: PgTestDb;
+  beforeAll(async () => { db = await createBulkGradesTestDb({ includeStatusGuard: true }); await seed(db); });
+  afterAll(async () => { await db?.close(); });
+
+  it('teacher commit still succeeds and rows land as pending with the guard installed', async () => {
+    await db.setAuthUid(AUTH_A);
+    const res = await callRpc(db, rec({ assessmentLabel: 'HW1', examType: 'Homework', total: 5, score: 4 }), 'guard-coexist-0001', true);
+    expect(res.insertCount).toBe(1);
+    const { rows } = await db.query<{ status: string; score: number }>(
+      `SELECT status,score FROM exams WHERE "studentId"='studentA' AND "assessmentLabel"='HW1'`,
+    );
+    expect(rows[0].status).toBe('pending');
+    expect(rows[0].score).toBe(4);
+  });
+
+  it('approved-overwrite via RPC still resets to pending with the guard installed', async () => {
+    await db.setAuthUid(AUTH_A);
+    await db.exec(`
+      INSERT INTO exams(id,"studentId","subjectId",subject,score,total,"examType","assessmentLabel","entryState","termId",month,status,date,"teacherId")
+      VALUES('ex-guard-appr','studentA','arabic','Arabic',14,20,'Quiz','MT','scored','term1','May','approved','2026-05-10','teacherA')
+      ON CONFLICT DO NOTHING;
+    `);
+    const res = await callRpc(db, rec({ score: 17 }), 'guard-overwrite-01', true);
+    expect(res.updateCount).toBe(1);
+    const { rows } = await db.query<{ status: string; score: number }>(
+      `SELECT status,score FROM exams WHERE id='ex-guard-appr'`,
+    );
+    expect(rows[0].status).toBe('pending');
+    expect(rows[0].score).toBe(17);
+  });
+});
+
 // Loud marker so a skipped DB suite cannot be mistaken for a passing one.
 if (!AVAILABLE) {
   describe('submit_bulk_grades — behavioral DB tests', () => {
