@@ -31,6 +31,7 @@
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/vite": "4.1.17",
     "@types/node": "^22.0.0",
     "@types/qrcode": "^1.5.6",

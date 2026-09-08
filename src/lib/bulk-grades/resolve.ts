@@ -29,7 +29,7 @@ export interface ResolveContext {
 }
 
 export interface ResolveProblem {
-  severity: 'error' | 'needs_review';
+  severity: 'error';
   message: string;
   studentId?: string;
   studentName?: string;
@@ -43,8 +43,12 @@ export interface ResolveResult {
   validCount: number;
   /** Number of distinct students contributing valid records. */
   validStudentCount: number;
+  // Note: there is intentionally no separate "needs review" category. Every
+  // uncertain record in this architecture is either a hard error (unauthorized
+  // subject, student not in the current roster, duplicate identity) or is
+  // excluded (no scores entered). A permanently-empty category would be
+  // misleading, so it was removed rather than left dead.
   errors: ResolveProblem[];
-  needsReview: ResolveProblem[];
   /** Rows/cells intentionally excluded (e.g. no scores entered). */
   excludedCount: number;
   /** Subjects present in the workbook that the teacher is not authorized for. */
@@ -77,7 +81,6 @@ function subjectAliases(name: string): string[] {
  */
 export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveContext): ResolveResult {
   const errors: ResolveProblem[] = [];
-  const needsReview: ResolveProblem[] = [];
   const records: BulkGradeRecord[] = [];
   const validStudents = new Set<string>();
   let excludedCount = 0;
@@ -184,7 +187,6 @@ export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveCon
     validCount: records.length,
     validStudentCount: validStudents.size,
     errors: [...errors, ...dedupErrors],
-    needsReview,
     excludedCount,
     unauthorizedSubjects,
   };

@@ -16,7 +16,7 @@ import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
 import { getCurrentTerm } from '../../lib/db/academic';
 import { getClassAssignmentsForTeacher, getClasses, getClassSubjectsForTeacher } from '../../lib/db/classes';
-import { submitBulkGrades, type BulkGradeSubmissionResult } from '../../lib/db/bulkGrades';
+import { submitBulkGrades, type BulkGradeChange, type BulkGradeSubmissionResult } from '../../lib/db/bulkGrades';
 import { getStudentsByClasses } from '../../lib/db/students';
 import { ASSESSMENT_GROUPS, blockDisplayName } from '../../lib/bulk-grades/assessments';
 import {
@@ -77,6 +77,7 @@ export function BulkUploadGrades() {
 
   // Step 6/7 — server preview
   const [serverPreview, setServerPreview] = useState<BulkGradeSubmissionResult | null>(null);
+  const [approvedAcknowledged, setApprovedAcknowledged] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [uploadKey, setUploadKey] = useState(createUploadKey);
 
@@ -145,6 +146,7 @@ export function BulkUploadGrades() {
     setParsed(null);
     setFileName('');
     setServerPreview(null);
+    setApprovedAcknowledged(false);
   };
 
   const chooseClass = (className: string) => {
@@ -183,6 +185,14 @@ export function BulkUploadGrades() {
   const parseErrors = useMemo(() => (parsed ? parsed.issues.filter(i => i.severity === 'error') : []), [parsed]);
   const blockingCount = (parseErrors.length) + (resolveResult ? resolveResult.errors.length : 0);
   const canValidate = Boolean(resolveResult && resolveResult.records.length > 0 && blockingCount === 0);
+
+  // Server-computed change lists for the Review step (old -> new).
+  const changes = serverPreview?.changes ?? [];
+  const approvedChanges = useMemo(() => changes.filter(c => c.isApproved), [changes]);
+  const updateChanges = useMemo(() => changes.filter(c => c.changeType === 'update' && !c.isApproved), [changes]);
+  const newChanges = useMemo(() => changes.filter(c => c.changeType === 'new'), [changes]);
+  const requiresApprovedAck = Boolean(serverPreview?.requiresApprovedAcknowledgement);
+  const canConfirm = !requiresApprovedAck || approvedAcknowledged;
 
   // ---- Download -----------------------------------------------------------
   const download = () => {
@@ -250,6 +260,7 @@ export function BulkUploadGrades() {
     try {
       const result = await submitBulkGrades(resolveResult.records, uploadKey, false);
       setServerPreview(result);
+      setApprovedAcknowledged(false);
       setStep('review');
     } catch (error) {
       addToast({ type: 'error', title: 'Could not validate this upload', description: error instanceof Error ? error.message : 'Please try again.' });
@@ -467,10 +478,9 @@ export function BulkUploadGrades() {
       {/* STEP 5 — RESOLVE & VALIDATE */}
       {step === 'resolve' && parsed && resolveResult && (
         <div className="space-y-5">
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
             <CountCard label="Valid" count={resolveResult.validCount} color="teal" />
             <CountCard label="Errors" count={parseErrors.length + resolveResult.errors.length} color="red" />
-            <CountCard label="Needs review" count={resolveResult.needsReview.length} color="amber" />
             <CountCard label="Excluded" count={resolveResult.excludedCount} color="slate" />
             <CountCard label="Students" count={resolveResult.validStudentCount} color="slate" />
           </div>
@@ -480,9 +490,6 @@ export function BulkUploadGrades() {
           )}
           {resolveResult.errors.length > 0 && (
             <IssueList title={`Authorization & roster errors (${resolveResult.errors.length})`} tone="error" items={resolveResult.errors.map(e => e.message)} />
-          )}
-          {resolveResult.needsReview.length > 0 && (
-            <IssueList title={`Needs review (${resolveResult.needsReview.length})`} tone="warning" items={resolveResult.needsReview.map(e => e.message)} />
           )}
 
           <div className="flex items-center justify-between rounded-xl bg-slate-50 p-4 text-sm text-slate-700">
@@ -505,21 +512,40 @@ export function BulkUploadGrades() {
 
       {/* STEP 6 — REVIEW (server preview) */}
       {step === 'review' && serverPreview && resolveResult && (
-        <div className="max-w-3xl space-y-5 rounded-2xl border border-slate-200 bg-white p-6">
-          <div>
+        <div className="max-w-4xl space-y-5">
+          <div className="rounded-2xl border border-slate-200 bg-white p-6">
             <h2 className="text-xl font-bold text-slate-900">Review server-validated changes</h2>
-            <p className="mt-1 text-slate-600">The server validated your roster, subjects, term, score limits, and duplicate keys. Nothing has been written yet.</p>
+            <p className="mt-1 text-slate-600">The server validated your roster, subjects, term, score limits, and duplicate keys, and computed every change below from the existing records. Nothing has been written yet.</p>
+            <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <CountCard label="New grades" count={serverPreview.insertCount} color="teal" />
+              <CountCard label="Grades changing" count={serverPreview.updateCount} color="amber" />
+              <CountCard label="Records in upload" count={resolveResult.records.length} color="slate" />
+            </div>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <CountCard label="New grades" count={serverPreview.insertCount} color="teal" />
-            <CountCard label="Grades changing" count={serverPreview.updateCount} color="amber" />
-            <CountCard label="Records in upload" count={resolveResult.records.length} color="slate" />
-          </div>
-          {serverPreview.updateCount > 0 && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">
-              <strong>{serverPreview.updateCount} existing grade{serverPreview.updateCount === 1 ? '' : 's'} will be updated.</strong> Existing scores are replaced using the same student, subject, exam type, assessment label, and term. Approval status resets to pending.
+
+          {approvedChanges.length > 0 && (
+            <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
+              <h3 className="font-bold text-red-900">Approved grades being changed ({approvedChanges.length})</h3>
+              <p className="mt-1 text-sm text-red-800">These grades were already <strong>approved</strong>. Uploading will replace them and return them to <strong>Pending</strong> review.</p>
+              <ChangeTable changes={approvedChanges} showStatus />
             </div>
           )}
+
+          {updateChanges.length > 0 && (
+            <div className="rounded-2xl border border-amber-200 bg-white p-5">
+              <h3 className="font-bold text-amber-900">Existing grades changing ({updateChanges.length})</h3>
+              <p className="mt-1 text-sm text-slate-600">Existing values shown come from the database, not the workbook.</p>
+              <ChangeTable changes={updateChanges} showStatus />
+            </div>
+          )}
+
+          {newChanges.length > 0 && (
+            <div className="rounded-2xl border border-slate-200 bg-white p-5">
+              <h3 className="font-bold text-slate-800">New grades ({newChanges.length})</h3>
+              <ChangeTable changes={newChanges} />
+            </div>
+          )}
+
           <div className="flex items-center justify-between">
             <button onClick={() => setStep('resolve')} className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700"><ChevronLeft className="h-4 w-4" /> Back</button>
             <button onClick={() => setStep('confirm')} className="flex items-center gap-2 rounded-xl bg-teal-600 px-5 py-3 text-sm font-bold text-white hover:bg-teal-700">Continue to confirm <ChevronRight className="h-4 w-4" /></button>
@@ -538,9 +564,22 @@ export function BulkUploadGrades() {
             <SummaryItem label="Assessment blocks" value={selectedBlocks.map(blockDisplayName).join(', ')} />
             <SummaryItem label="New grades" value={String(serverPreview.insertCount)} />
             <SummaryItem label="Grades changing" value={String(serverPreview.updateCount)} />
+            <SummaryItem label="Approved grades changing" value={String(serverPreview.approvedChangeCount)} />
             <SummaryItem label="Errors" value="0" />
-            <SummaryItem label="Needs review" value={String(resolveResult.needsReview.length)} />
           </dl>
+
+          {requiresApprovedAck && (
+            <label className="flex cursor-pointer items-start gap-3 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+              <input
+                type="checkbox"
+                checked={approvedAcknowledged}
+                onChange={e => setApprovedAcknowledged(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-red-300 text-red-600 focus:ring-red-500"
+              />
+              <span>I understand that the {serverPreview.approvedChangeCount} approved grade{serverPreview.approvedChangeCount === 1 ? '' : 's'} shown in the review will be replaced and returned to <strong>Pending</strong> review.</span>
+            </label>
+          )}
+
           <div className="flex flex-wrap items-center justify-between gap-3">
             <button
               onClick={() => { setStep('class'); setSelectedBlocks([]); setSelectedSubjectIds([]); resetDownstream(); setUploadKey(createUploadKey()); }}
@@ -553,8 +592,9 @@ export function BulkUploadGrades() {
               <button onClick={() => setStep('review')} disabled={submitting} className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-2 text-sm font-medium text-slate-700"><ChevronLeft className="h-4 w-4" /> Back</button>
               <button
                 onClick={() => void confirmAndUpload()}
-                disabled={submitting}
-                className={cn('flex items-center gap-2 rounded-xl bg-teal-600 px-5 py-3 text-sm font-bold text-white hover:bg-teal-700', submitting && 'cursor-wait opacity-70')}
+                disabled={submitting || !canConfirm}
+                title={!canConfirm ? 'Acknowledge the approved-grade changes above to continue.' : undefined}
+                className={cn('flex items-center gap-2 rounded-xl px-5 py-3 text-sm font-bold text-white', submitting ? 'cursor-wait bg-teal-600 opacity-70' : canConfirm ? 'bg-teal-600 hover:bg-teal-700' : 'cursor-not-allowed bg-slate-300')}
               >
                 {submitting ? <>Submitting atomically…</> : <><Upload className="h-4 w-4" /> Confirm &amp; Upload</>}
               </button>
@@ -589,6 +629,54 @@ function StepIndicator({ step, onStep }: { step: StepId; onStep: (s: StepId) => 
           </React.Fragment>
         );
       })}
+    </div>
+  );
+}
+
+function formatCellValue(score: number | null, entryState: string | null): string {
+  if (entryState === 'absent') return 'Absent';
+  if (entryState === 'not_applicable') return 'N/A';
+  if (score == null) return '—';
+  return String(score);
+}
+
+function ChangeTable({ changes, showStatus = false }: { changes: BulkGradeChange[]; showStatus?: boolean }) {
+  if (!changes.length) return null;
+  return (
+    <div className="mt-3 max-h-80 overflow-auto rounded-xl border border-slate-200">
+      <table className="min-w-full text-sm">
+        <thead className="sticky top-0 bg-slate-50 text-left text-xs uppercase text-slate-500">
+          <tr>
+            <th className="px-3 py-2">Student</th>
+            <th className="px-3 py-2">Subject</th>
+            <th className="px-3 py-2">Assessment</th>
+            <th className="px-3 py-2">Current</th>
+            <th className="px-3 py-2">New</th>
+            {showStatus && <th className="px-3 py-2">Status</th>}
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {changes.map((c, index) => (
+            <tr key={`${c.studentId}-${c.subjectId}-${c.assessmentLabel}-${index}`} className="bg-white">
+              <td className="px-3 py-2 font-medium text-slate-800">{c.studentName || c.studentId}</td>
+              <td className="px-3 py-2 text-slate-700">{c.subject}</td>
+              <td className="px-3 py-2 text-slate-700">{blockDisplayName(c.assessmentLabel)}</td>
+              <td className="px-3 py-2 text-slate-500">{c.changeType === 'new' ? '—' : formatCellValue(c.existingScore, c.existingEntryState)}</td>
+              <td className="px-3 py-2 font-semibold text-slate-900">
+                {c.changeType === 'update' && <span className="text-slate-400">→ </span>}
+                {formatCellValue(c.newScore, c.newEntryState)}
+              </td>
+              {showStatus && (
+                <td className="px-3 py-2">
+                  {c.isApproved
+                    ? <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-700">Approved → Pending</span>
+                    : <span className="text-xs text-slate-500">{c.existingStatus || 'pending'} → Pending</span>}
+                </td>
+              )}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
