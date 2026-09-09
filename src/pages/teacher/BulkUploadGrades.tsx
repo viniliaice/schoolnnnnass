@@ -163,6 +163,12 @@ export function BulkUploadGrades() {
     resetDownstream();
   };
 
+  const allSubjectsSelected = classSubjects.length > 0 && selectedSubjectIds.length === classSubjects.length;
+  const toggleAllSubjects = () => {
+    setSelectedSubjectIds(allSubjectsSelected ? [] : classSubjects.map(s => s.id));
+    resetDownstream();
+  };
+
   const toggleBlock = (label: AssessmentLabel) => {
     setSelectedBlocks(prev => prev.includes(label) ? prev.filter(x => x !== label) : [...prev, label]);
     resetDownstream();
@@ -382,7 +388,18 @@ export function BulkUploadGrades() {
 
           {selectedClass && (
             <section>
-              <h2 className="text-sm font-semibold text-slate-700">Subjects</h2>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h2 className="text-sm font-semibold text-slate-700">Subjects</h2>
+                {classSubjects.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={toggleAllSubjects}
+                    className="rounded-lg border border-teal-200 bg-teal-50 px-3 py-1.5 text-xs font-semibold text-teal-700 hover:bg-teal-100"
+                  >
+                    {allSubjectsSelected ? 'Clear all' : 'Select all subjects'}
+                  </button>
+                )}
+              </div>
               <p className="mb-2 text-xs text-slate-500">Only subjects you teach in {selectedClass} are shown. Choose which to include in this upload.</p>
               <div className="grid gap-2 sm:grid-cols-2">
                 {classSubjects.map(subject => (
