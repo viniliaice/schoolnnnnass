@@ -127,7 +127,7 @@ function buildInstructionsSheet(options: BuildWorkbookOptions, columns: GradeCol
     ['How to enter grades'],
     ['  1. Open the "Grades" sheet.'],
     ['  2. Each student already has a Student ID and Student Name. Do NOT edit them.'],
-    ['  3. Enter a whole number in each grade cell, within the maximum shown in the header.'],
+    ['  3. Enter a number in each grade cell, within the maximum shown in the header. Half points are allowed (e.g. 4 or 4.5).'],
     ['  4. Leave a cell BLANK if there is no grade yet — blank is never treated as zero.'],
     ['  5. Type "Absent" if the student was absent, or "N/A" if the assessment does not apply.'],
     ['  6. Do not add, remove, rename, or reorder columns.'],
@@ -399,8 +399,8 @@ export function parseRosterWorkbook(file: ArrayBuffer): WorkbookParseResult {
         issues.push({
           severity: 'error',
           code: 'INVALID_SCORE',
-          message: outcome.reason === 'not_integer'
-            ? `${column.subjectName} ${blockDisplayName(column.block.label)} must be a whole number from 0 to ${column.block.total}, Absent, N/A, or blank.`
+          message: outcome.reason === 'not_half_step'
+            ? `${column.subjectName} ${blockDisplayName(column.block.label)} must be a number from 0 to ${column.block.total} in whole or half points (e.g. 4 or 4.5), Absent, N/A, or blank.`
             : `${column.subjectName} ${blockDisplayName(column.block.label)} cannot exceed ${column.block.total}.`,
           cell,
           row: r + 1,

@@ -15,6 +15,11 @@ export interface ParsedNewValue {
   entryState: CorrectionEntryState;
 }
 
+/** True for whole numbers and half points (multiples of 0.5), e.g. 4 or 4.5. */
+export function isHalfStep(n: number): boolean {
+  return Number.isFinite(n) && Number.isInteger(n * 2);
+}
+
 /** Parse the draft into a concrete {score, entryState}, or an error string. */
 export function parseNewValue(draft: CorrectionDraft, total: number): ParsedNewValue | string {
   if (draft.newEntryState !== 'scored') {
@@ -24,7 +29,8 @@ export function parseNewValue(draft: CorrectionDraft, total: number): ParsedNewV
   if (raw === '') return 'Enter a new score.';
   const n = Number(raw);
   if (!Number.isFinite(n)) return 'The score must be a valid number.';
-  if (!Number.isInteger(n)) return 'The score must be a whole number.';
+  // Whole numbers and half points (steps of 0.5) are allowed, e.g. 4 or 4.5.
+  if (!isHalfStep(n)) return 'The score must be a whole or half point (e.g. 4 or 4.5).';
   if (n < 0) return 'The score cannot be negative.';
   if (n > total) return `The score must be between 0 and ${total}.`;
   return { score: n, entryState: 'scored' };

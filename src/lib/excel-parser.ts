@@ -177,7 +177,16 @@ export type ScoreCellOutcome =
   | { kind: 'absent' }
   | { kind: 'not_applicable' }
   | { kind: 'scored'; score: number }
-  | { kind: 'invalid'; reason: 'not_integer' | 'out_of_range' };
+  | { kind: 'invalid'; reason: 'not_half_step' | 'out_of_range' };
+
+/**
+ * Scores may be whole numbers OR half points (steps of 0.5), e.g. 4 or 4.5.
+ * Only ".0" and ".5" fractions are accepted; anything else (letters,
+ * parseFloat-style "5oops", quarter points like 4.25, negatives) is rejected.
+ * A half point is stored as a decimal (the score column is NUMERIC), never
+ * rounded, so partial-credit marks survive the round trip.
+ */
+const HALF_STEP_SCORE = /^\d+(?:\.[05])?$/;
 
 export function interpretScoreCell(raw: unknown, total: number): ScoreCellOutcome {
   const value = text(raw);
@@ -186,12 +195,11 @@ export function interpretScoreCell(raw: unknown, total: number): ScoreCellOutcom
   if (ABSENT_MARKERS.has(normalized)) return { kind: 'absent' };
   if (NOT_APPLICABLE_MARKERS.has(normalized)) return { kind: 'not_applicable' };
 
-  // Scores are stored as INTEGER. Full-string validation intentionally rejects
-  // decimal values and parseFloat-style partial values such as "5oops".
-  if (!/^(?:0|[1-9]\d*)$/.test(value)) return { kind: 'invalid', reason: 'not_integer' };
+  // Full-string validation: only whole or half-point (.5) values are accepted.
+  if (!HALF_STEP_SCORE.test(value)) return { kind: 'invalid', reason: 'not_half_step' };
 
   const score = Number(value);
-  if (!Number.isSafeInteger(score) || score < 0 || score > total) {
+  if (!Number.isFinite(score) || score < 0 || score > total) {
     return { kind: 'invalid', reason: 'out_of_range' };
   }
   return { kind: 'scored', score };
@@ -213,8 +221,8 @@ function parseScore(raw: unknown, column: ParsedAssessmentColumn, rowIndex: numb
       issues.push({
         severity: 'error',
         code: 'INVALID_SCORE',
-        message: outcome.reason === 'not_integer'
-          ? `${column.subjectName} ${column.assessmentLabel} must be a whole number from 0 to ${column.total}, Absent, N/A, or blank.`
+        message: outcome.reason === 'not_half_step'
+          ? `${column.subjectName} ${column.assessmentLabel} must be a number from 0 to ${column.total} in whole or half points (e.g. 4 or 4.5), Absent, N/A, or blank.`
           : `${column.subjectName} ${column.assessmentLabel} cannot exceed ${column.total}.`,
         cell,
         row: rowIndex + 1,
@@ -224,6 +232,7 @@ function parseScore(raw: unknown, column: ParsedAssessmentColumn, rowIndex: numb
       return null;
   }
 }
+
 
 /**
  * Parses the school's fixed 11-column-per-subject production sheet. The

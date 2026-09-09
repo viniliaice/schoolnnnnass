@@ -33,7 +33,7 @@ CREATE TABLE exams (
   "studentId" TEXT NOT NULL REFERENCES students(id) ON DELETE CASCADE,
   "subjectId" TEXT,
   subject TEXT NOT NULL,
-  score INTEGER,
+  score NUMERIC,
   total INTEGER NOT NULL CHECK (total > 0),
   "examType" TEXT NOT NULL CHECK ("examType" IN ('CA', 'Homework', 'Classwork', 'Quiz', 'Midterm', 'Final', 'Attendance', 'Discipline')),
   "assessmentLabel" TEXT CHECK ("assessmentLabel" IS NULL OR "assessmentLabel" IN ('HW1', 'HW2', 'HW3', 'HW4', 'CPW1', 'CPW2', 'CPW3', 'CPW4', 'ATTENDANCE', 'MT', 'AKHLAAQ')),
@@ -47,7 +47,7 @@ CREATE TABLE exams (
   "teacherId" TEXT NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   "uploadedBy" TEXT REFERENCES profiles(id) ON DELETE SET NULL,
   CHECK (
-    ("entryState" = 'scored' AND score IS NOT NULL AND score >= 0 AND score <= total)
+    ("entryState" = 'scored' AND score IS NOT NULL AND score >= 0 AND score <= total AND score * 2 = floor(score * 2))
     OR ("entryState" IN ('absent', 'not_applicable') AND score IS NULL)
   ),
   CHECK (

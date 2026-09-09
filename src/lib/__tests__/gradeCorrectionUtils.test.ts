@@ -31,8 +31,11 @@ describe('gradeCorrectionUtils.parseNewValue', () => {
   it('rejects NaN / non-numeric', () => {
     expect(parseNewValue(draft({ newScoreText: 'abc' }), 15)).toMatch(/valid number/);
   });
-  it('rejects non-integer', () => {
-    expect(parseNewValue(draft({ newScoreText: '10.5' }), 15)).toMatch(/whole number/);
+  it('accepts a half point (e.g. 10.5)', () => {
+    expect(parseNewValue(draft({ newScoreText: '10.5' }), 15)).toEqual({ score: 10.5, entryState: 'scored' });
+  });
+  it('rejects a quarter point', () => {
+    expect(parseNewValue(draft({ newScoreText: '10.25' }), 15)).toMatch(/whole or half/);
   });
   it('rejects Infinity', () => {
     expect(parseNewValue(draft({ newScoreText: 'Infinity' }), 15)).toMatch(/valid number/);

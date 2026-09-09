@@ -347,6 +347,7 @@ export function GradeCorrections() {
                       type="number"
                       min={0}
                       max={active.total}
+                      step={0.5}
                       value={draft.newScoreText}
                       disabled={draft.newEntryState !== 'scored'}
                       onChange={e => setDraft(d => ({ ...d, newScoreText: e.target.value }))}

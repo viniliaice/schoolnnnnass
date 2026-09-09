@@ -155,7 +155,7 @@ $fn$;
  * (from 20260908). Returns a thin client with auth simulation.
  */
 export async function createBulkGradesTestDb(
-  opts: { includeStatusGuard?: boolean; includeGradeCorrection?: boolean } = {},
+  opts: { includeStatusGuard?: boolean; includeGradeCorrection?: boolean; includeHalfPoints?: boolean } = {},
 ): Promise<PgTestDb> {
   const { PGlite } = await import('@electric-sql/pglite');
   const pg = await PGlite.create();
@@ -219,6 +219,44 @@ export async function createBulkGradesTestDb(
     const migration = readMigration('20260910_admin_grade_correction.sql');
     // The whole migration is idempotent and self-contained; run it verbatim.
     await pg.exec(migration);
+  }
+
+  // Optionally install the ACTUAL shipped half-point migration (20260911): it
+  // widens exams.score to NUMERIC, enforces the whole/half-step CHECK, and
+  // redefines submit_bulk_grades + admin_correct_grade to accept NUMERIC scores.
+  // Requires the grade-correction artifacts to be present so its DROP/CREATE of
+  // admin_correct_grade and its audit-column ALTERs apply.
+  if (opts.includeHalfPoints) {
+    // Mirror the real migration: widen the score column to NUMERIC, then install
+    // the whole/half-step CHECK so INSERT/UPDATE of a quarter point is rejected
+    // exactly as in production.
+    await pg.exec(`ALTER TABLE public.exams ALTER COLUMN score TYPE NUMERIC USING score::NUMERIC;`);
+    // The correction-audit before/after columns follow the same numeric domain.
+    await pg.exec(`
+      ALTER TABLE IF EXISTS public.grade_correction_audit
+        ALTER COLUMN old_score TYPE NUMERIC USING old_score::NUMERIC;
+      ALTER TABLE IF EXISTS public.grade_correction_audit
+        ALTER COLUMN new_score TYPE NUMERIC USING new_score::NUMERIC;
+    `);
+    await pg.exec(`
+      ALTER TABLE public.exams DROP CONSTRAINT IF EXISTS exams_score_entry_state_check;
+      ALTER TABLE public.exams ADD CONSTRAINT exams_score_entry_state_check
+        CHECK (
+          ("entryState" = 'scored' AND score IS NOT NULL AND score >= 0 AND score <= total
+            AND total > 0 AND score * 2 = floor(score * 2))
+          OR ("entryState" IN ('absent', 'not_applicable') AND score IS NULL AND total > 0)
+        );
+    `);
+    // Redefine both RPCs from the ACTUAL shipped migration.
+    const submitRpc = extractStatementContaining(
+      readMigration('20260911_half_point_scores.sql'),
+      'FUNCTION public.submit_bulk_grades',
+      '$$;',
+    );
+    await pg.exec(submitRpc);
+    const dropAndCorrect = readMigration('20260911_half_point_scores.sql');
+    const correctRpc = dropAndCorrect.slice(dropAndCorrect.indexOf('DROP FUNCTION IF EXISTS public.admin_correct_grade'));
+    await pg.exec(correctRpc);
   }
 
   const client: PgTestDb = {

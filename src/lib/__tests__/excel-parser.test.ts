@@ -94,12 +94,25 @@ describe('bulk grade Excel parser', () => {
     ]));
   });
 
-  it('rejects decimal, negative, and parseFloat-style values with cell references', () => {
+  it('rejects quarter-point, negative, and parseFloat-style values with cell references', () => {
     const result = parseExcel(workbook(['English'], [[
-      'S-001', 'Asha Ali', '3.5', '-1', '5oops', 0, 15, 15, 15, 15, 20, 20, 10,
+      'S-001', 'Asha Ali', '3.25', '-1', '5oops', 0, 15, 15, 15, 15, 20, 20, 10,
     ]]));
     const invalidCells = result.issues.filter(issue => issue.code === 'INVALID_SCORE').map(issue => issue.cell);
     expect(invalidCells).toEqual(expect.arrayContaining(['C3', 'D3', 'E3']));
+  });
+
+  it('accepts whole and half-point scores (e.g. 4.5) and stores them faithfully', () => {
+    const result = parseExcel(workbook(['English'], [[
+      'S-001', 'Asha Ali', '4.5', 5, 0, '0.5', 15, 15, 15, 15, 20, 20, 10,
+    ]]));
+    expect(result.issues.filter(i => i.code === 'INVALID_SCORE')).toEqual([]);
+    const asha = result.students.find(s => s.studentId === 'S-001')!;
+    const hw1 = asha.scores.find(s => s.assessmentLabel === 'HW1')!;
+    const hw4 = asha.scores.find(s => s.assessmentLabel === 'HW4')!;
+    expect(hw1.score).toBe(4.5);
+    expect(hw1.entryState).toBe('scored');
+    expect(hw4.score).toBe(0.5);
   });
 
   it('marks name-only files as legacy identity uploads', () => {
