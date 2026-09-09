@@ -225,6 +225,84 @@ Not changed: workbook format, `submit_bulk_grades`, migrations, RLS, `BulkUpload
 
 **https://github.com/viniliaice/schoolnnnnass/pull/41** — `fix: reconcile PR #39 and PR #40 bulk upload grades` (branch `arena/01a0867d-schoolnnnnass` → `main`; contains #39 + #40 + fixes).
 
+
+## Database Migration Requirements (Bulk Upload Grades)
+
+Verified against the actual `supabase/migrations/` directory on this branch and by executing the chain with a real Postgres engine (PGlite).
+
+### 1. Migrations the Bulk Upload Grades pipeline depends on
+
+| Migration | Provides for Bulk Upload | On `main` already? | On this branch? |
+|---|---|---|---|
+| `20260802_bulk_grade_integrity.sql` | `exams.assessmentLabel/entryState`, `exams_bulk_assessment_identity_unique`, `grade_uploads` (idempotency), `can_submit_exam_target`, **exams RLS** (`exam_select/insert/update/delete_authorized`), first `submit_bulk_grades` | ✅ | ✅ (unchanged) |
+| `20260908_bulk_grade_change_preview.sql` | `submit_bulk_grades` v2 (preview / `requiresConfirmation` / change list) | ✅ | ✅ (unchanged) |
+| `20260909_exam_status_teacher_guard.sql` | `enforce_exam_status_guard` trigger (teachers cannot self-approve; RPC always writes `pending`) | ✅ | ✅ (unchanged) |
+| `20260910_admin_grade_correction.sql` | prerequisite of 20260911 (it re-creates `admin_correct_grade` and alters `grade_correction_audit`) | ✅ | ✅ (unchanged) |
+| **`20260911_half_point_scores.sql`** | **`ALTER exams.score TYPE NUMERIC`**, **`exams_score_entry_state_check`** with `score * 2 = floor(score * 2)`, **`submit_bulk_grades` v3** accepting `^[0-9]+(\.[05])?$` scores, `REVOKE … FROM PUBLIC` / `GRANT EXECUTE … TO authenticated` | ✅ | ✅ (unchanged) |
+| `20260912_report_rpc_remediation.sql` (added by PR #40) | **Nothing** for Bulk Upload — it only redefines `assert_can_view_student_term_report`, `get_monthly_report`, `get_midterm_report`, `get_final_report`. `submit_bulk_grades`, `can_submit_exam_target`, the exams RLS policies and the Bulk Upload page (`BulkUploadGrades.tsx`, `db/bulkGrades.ts`, `db/students.ts`, `db/classes.ts`) reference none of these functions. | ❌ | ✅ (report-only; carried because it is part of PR #40, not because Bulk Upload needs it) |
+
+`git diff --name-status origin/main HEAD -- supabase/` → only `A supabase/migrations/20260912_report_rpc_remediation.sql`. **PR #39 adds no migration** (it is client-only and relies on 20260911, which is already on `main`). **This integration branch adds no new migration** and none is needed: every schema/RPC/RLS object Bulk Upload requires was shipped by `20260802 … 20260911`, all already merged to `main`.
+
+### 2. Executed proof — real chain in Supabase order
+
+Applied verbatim, in lexical order, into PGlite: `20260802 → 20260906b → 20260908 → 20260909 → 20260910 → 20260911 → 20260912` (all 7 applied without error). Resulting catalog:
+
+| Requirement | Observed |
+|---|---|
+| `exams.score` | `information_schema.columns.data_type = 'numeric'` |
+| half-point constraint | `exams_score_entry_state_check`: `… (score * 2::numeric) = floor(score * 2::numeric) …` (`NOT VALID`, i.e. enforced for all new/updated rows; historical rows are not re-scanned — intentional in 20260911) |
+| `submit_bulk_grades` | signature `(p_records jsonb, p_idempotency_key text, p_confirm_updates boolean)` = exactly what `db/bulkGrades.ts` calls; `SECURITY DEFINER`; body contains the `[05]` half-step regex; EXECUTE granted to `authenticated` only (revoked from PUBLIC) |
+| security helpers | `can_submit_exam_target` (SECURITY DEFINER), `enforce_exam_status_guard_trg` on `exams`, `admin_correct_grade` NUMERIC signature |
+| unique identity | `exams_bulk_assessment_identity_unique` present |
+| RLS | `exams.relrowsecurity = true`, `grade_uploads.relrowsecurity = true`; policies `exam_select/insert/update/delete_authorized` |
+| behaviour | RPC stores `4.5` → `score::text = '4.5'`; `4.25` → `whole or half points` error |
+
+Committed suites re-run after this check (all use the shipped migration files, not mocks): `pr39-pr40-integration.db.test.ts` 12 ✓, `submit-bulk-grades.db.test.ts` 16 ✓, `half-point-scores.db.test.ts` 7 ✓, `exam-rls.db.test.ts` 12 ✓, `admin-correct-grade.db.test.ts` 22 ✓, `e2e-teacher-scenario.db.test.ts` 3 ✓, `report-rpcs.db.test.ts` 2 ✓ → **74/74, 0 skipped**.
+
+### 3. Will they be applied automatically?
+
+There is **no CI/CD step in this repository that runs migrations** (no `.github/workflows`, no `db push` in `package.json`/Vercel config). The rollout doc (`docs/how-tos/bulk-grade-upload-rollout.md`) and prior sign-off reports assume the operator applies `supabase/migrations` with `supabase db push` (or the SQL editor) **before** deploying the frontend — the same process used for every previous Bulk Upload migration. So:
+
+- Migration **files** required by Bulk Upload: all present in the repo (and in this PR's tree).
+- Migration **execution**: performed by the existing operator process, not by merging the PR.
+
+Two operational facts an operator must know (pre-existing, not introduced here):
+
+1. **Files `20260906b … 20260906h` do not match the Supabase CLI filename pattern** `^([0-9]+)_(.*)\.sql$` (letter suffix after the digits). `supabase db push` prints *"Skipping migration 20260906b_… (file name must match pattern "<timestamp>_name.sql")"* and does **not** apply them. This affects Bulk Upload only indirectly: `submit_bulk_grades`, `can_submit_exam_target` and the exams RLS do not call `class_for_term`/`class_students_for_term`/`student_enrollments` (grep count 0) — but `20260912` (PR #40's report RPC) does, and other features depend on 20260906c/d. These files were merged to `main` long before this PR and are therefore already part of whatever process the operator used; nothing in Bulk Upload requires renaming them in this PR.
+2. The CLI's `schema_migrations.version` primary key is the numeric prefix; several dates carry multiple files (e.g. 10 × `20260802`, 5 × `20260707`). With `db push` the second file of a version would collide on insert unless the operator has been applying them another way. Again pre-existing across the whole project history, and all Bulk Upload files (`20260802_bulk_grade_integrity`, `20260908`, `20260909`, `20260910`, `20260911`) are already on `main`.
+
+### 4. Required statement
+
+```text
+Bulk Upload migrations required: YES
+
+If YES:
+- 20260802_bulk_grade_integrity.sql   — assessment identity columns/unique index, grade_uploads idempotency table,
+                                        can_submit_exam_target, exams RLS policies, first submit_bulk_grades
+                                        confirmed included in this PR: YES (already on main, unchanged)
+- 20260908_bulk_grade_change_preview.sql — submit_bulk_grades preview/confirm contract
+                                        confirmed included in this PR: YES (already on main, unchanged)
+- 20260909_exam_status_teacher_guard.sql — status guard trigger (no teacher self-approval)
+                                        confirmed included in this PR: YES (already on main, unchanged)
+- 20260910_admin_grade_correction.sql — prerequisite objects that 20260911 alters/redefines
+                                        confirmed included in this PR: YES (already on main, unchanged)
+- 20260911_half_point_scores.sql      — exams.score NUMERIC, half-step CHECK, submit_bulk_grades accepting
+                                        whole/half scores, GRANT/REVOKE
+                                        confirmed included in this PR: YES (already on main, unchanged)
+- 20260912_report_rpc_remediation.sql — NOT required by Bulk Upload (report RPCs only); present because it is
+                                        part of PR #40
+
+New migration added by PR #39 / PR #40 / this PR for Bulk Upload: NONE needed, none added.
+
+Manual migration required outside this PR: YES — operational only.
+  Merging the PR does not execute SQL; this repository has no automated
+  migration step. The operator must ensure supabase/migrations up to
+  20260911_half_point_scores.sql are applied to the target Supabase project
+  (they already are if the currently deployed Bulk Upload accepts half points;
+  if not, apply 20260910 then 20260911 — both idempotent). 20260912 is
+  additionally required only for PR #40's report changes, not for Bulk Upload.
+```
+
 ## GitHub status checks on PR #41
 
 | Check | Result | Note |
