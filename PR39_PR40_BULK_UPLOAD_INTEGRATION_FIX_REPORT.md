@@ -225,8 +225,17 @@ Not changed: workbook format, `submit_bulk_grades`, migrations, RLS, `BulkUpload
 
 **https://github.com/viniliaice/schoolnnnnass/pull/41** — `fix: reconcile PR #39 and PR #40 bulk upload grades` (branch `arena/01a0867d-schoolnnnnass` → `main`; contains #39 + #40 + fixes).
 
+## GitHub status checks on PR #41
+
+| Check | Result | Note |
+|---|---|---|
+| Vercel Preview Comments | ✅ pass | |
+| Vercel | ❌ failure | Message from Vercel: *"Git author arena-agent must have access to the project on Vercel to create deployments."* This is a Vercel team-permission condition on the commit author, not a build failure — `vite build` passes on this exact commit (`✓ built`, exit 0), and #39/#40 (authored by `viniliaice`) deployed fine. Resolution is outside the repository: grant the `arena-agent` GitHub user access to the Vercel project, or have a Vercel member re-author/merge. The commit author was deliberately not spoofed. |
+
 ## FINAL VERDICT
 
 ```
-GO
+GO WITH CONDITIONS
 ```
+
+**Code / tests / merge state: clean (no Critical/High/Medium open).** The single condition is external to the code: the Vercel preview-deployment status on PR #41 fails because the commit author (`arena-agent`) is not a member of the Vercel project. Once that permission is granted (or the PR is merged by a Vercel member), nothing else stands between this branch and `main`.
