@@ -120,6 +120,13 @@ describe('roster workbook build + parse roundtrip', () => {
     expect(isRosterWorkbook(bytes)).toBe(true);
   });
 
+  it('leaves the Grades sheet fully editable (no sheet protection / read-only mode)', () => {
+    const wb = XLSX.read(bytes, { type: 'array' });
+    // No '!protect' key => Excel opens the file normally editable, so teachers
+    // can copy/paste grades without dismissing protected/read-only mode.
+    expect('!protect' in wb.Sheets[GRADES_SHEET_NAME]).toBe(false);
+  });
+
   it('parses entered grades back with subject-scoped identity', () => {
     // Fill Ahmed's Arabic HW1=4, Arabic MT=17, Tarbiya Akhlaaq=9.
     const wb = XLSX.read(bytes, { type: 'array' });

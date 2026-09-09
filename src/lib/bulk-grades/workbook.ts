@@ -174,10 +174,11 @@ export function buildRosterWorkbook(options: BuildWorkbookOptions): ArrayBuffer 
     ...columns.map(() => ({ wch: Math.max(10, 0) + 12 })),
   ];
 
-  // Advisory read-only protection for the identity columns. The community xlsx
-  // build does not always persist cell protection, so this is a hint only —
-  // the SERVER is the authoritative guard against edited IDs/rosters.
-  gradesSheet['!protect'] = { selectLockedCells: true, selectUnlockedCells: true } as XLSX.WorkSheet['!protect'];
+  // The sheet is intentionally left FULLY EDITABLE (no '!protect'): teachers
+  // need to freely copy/paste grades from their own spreadsheets, and sheet
+  // protection made Excel open the file in read-only/protected mode. The SERVER
+  // remains the authoritative guard against edited IDs/rosters at upload time,
+  // so nothing is lost by keeping the template unlocked.
 
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, buildInstructionsSheet(options, columns), INSTRUCTIONS_SHEET_NAME);
