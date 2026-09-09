@@ -11,7 +11,7 @@ import {
   GRADES_SHEET_NAME,
   INSTRUCTIONS_SHEET_NAME,
 } from '../bulk-grades/workbook';
-import { ASSESSMENT_DEFINITIONS } from '../excel-parser';
+import { ASSESSMENT_DEFINITIONS, type AssessmentLabel } from '../excel-parser';
 import * as XLSX from 'xlsx';
 
 function subject(id: string, name: string): Subject {
@@ -195,5 +195,60 @@ describe('roster workbook build + parse roundtrip', () => {
     expect(nameOnly).toBeTruthy();
     expect(nameOnly.studentId).toBeNull();
     expect(nameOnly.scores.length).toBeGreaterThan(0);
+  });
+});
+
+describe('example download ↔ parser round trip (spec §14 Test 6)', () => {
+  const ALL_SUBJECTS = [
+    subject('en', 'English'), subject('ma', 'Math'), subject('sc', 'Science'),
+    subject('so', 'Social'), subject('sm', 'Somali'), subject('ar', 'Arabic'),
+    subject('ta', 'Tarabiya'),
+  ];
+  const ALL_BLOCKS: AssessmentLabel[] = ['HW1', 'HW2', 'HW3', 'HW4', 'CPW1', 'CPW2', 'CPW3', 'CPW4', 'ATTENDANCE', 'MT', 'AKHLAAQ'];
+
+  it('generates all seven subjects in master order and parses populated cells back correctly', () => {
+    // Provide subjects in a scrambled order to prove the generator reorders.
+    const scrambled = [ALL_SUBJECTS[5], ALL_SUBJECTS[6], ALL_SUBJECTS[0], ALL_SUBJECTS[2], ALL_SUBJECTS[3], ALL_SUBJECTS[4], ALL_SUBJECTS[1]];
+    const bytes = buildRosterWorkbook({
+      className: 'Grade 5-A',
+      subjects: scrambled,
+      blocks: ALL_BLOCKS,
+      roster: ROSTER,
+    });
+
+    const wb = XLSX.read(bytes, { type: 'array' });
+    const header = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[GRADES_SHEET_NAME], { header: 1 })[0] as string[];
+    // Master subject order regardless of the scrambled input.
+    expect(header.slice(0, 2)).toEqual(['Student ID', 'Student Name']);
+    const gradeHeaders = header.slice(2);
+    const subjectSequence = gradeHeaders
+      .map(h => h.replace(/\s+\S+$/, ''))
+      .filter((s, i, arr) => arr.indexOf(s) === i);
+    expect(subjectSequence).toEqual(['English', 'Math', 'Science', 'Social', 'Somali', 'Arabic', 'Tarabiya']);
+
+    // Populate a spread of cells by locating each header column by name.
+    const sheet = wb.Sheets[GRADES_SHEET_NAME];
+    const put = (rowNumber: number, headerText: string, cell: XLSX.CellObject) => {
+      const col = header.indexOf(headerText);
+      expect(col).toBeGreaterThanOrEqual(0);
+      sheet[XLSX.utils.encode_cell({ r: rowNumber - 1, c: col })] = cell;
+    };
+    put(2, 'English HW1', { t: 'n', v: 4 });
+    put(2, 'English CPW1', { t: 'n', v: 12 });
+    put(2, 'Math HW1', { t: 'n', v: 5 });
+    put(2, 'Arabic MT', { t: 'n', v: 18 });
+    put(2, 'Tarabiya Akhlaaq', { t: 'n', v: 9 });
+    const out = XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+
+    const parsed = parseRosterWorkbook(out);
+    expect(parsed.issues.filter(i => i.severity === 'error')).toEqual([]);
+    const ahmed = parsed.students.find(s => s.studentId === 'MBK-1001')!;
+    expect(ahmed.scores).toEqual(expect.arrayContaining([
+      expect.objectContaining({ subjectName: 'English', assessmentLabel: 'HW1', score: 4 }),
+      expect.objectContaining({ subjectName: 'English', assessmentLabel: 'CPW1', score: 12 }),
+      expect.objectContaining({ subjectName: 'Math', assessmentLabel: 'HW1', score: 5 }),
+      expect.objectContaining({ subjectName: 'Arabic', assessmentLabel: 'MT', score: 18 }),
+      expect.objectContaining({ subjectName: 'Tarabiya', assessmentLabel: 'AKHLAAQ', score: 9 }),
+    ]));
   });
 });

@@ -22,6 +22,7 @@ import {
   orderBlocks,
   type AssessmentBlock,
 } from './assessments';
+import { orderSubjectNames } from './subjectOrder';
 import { interpretScoreCell, type AssessmentLabel } from '../excel-parser';
 import type { Student, Subject } from '../../types';
 
@@ -62,11 +63,24 @@ export interface GradeColumn {
   header: string;
 }
 
-/** Builds the "<Subject> <Block>" column list for the selected subjects/blocks. */
+/**
+ * Builds the "<Subject> <Block>" column list for the selected subjects/blocks.
+ *
+ * This is the single authoritative column definition. Both the master SUBJECT
+ * order (English → Math → Science → Social → Somali → Arabic → Tarabiya) and the
+ * master ASSESSMENT order (HW1..HW4 → CPW1..CPW4 → Att → MT → Akhlaaq) are
+ * enforced here, so the generated workbook, its merged headers, the filename, and
+ * — because every header is "<Subject> <Block>" — the parser all agree, no matter
+ * what order the caller/database provided the subjects or blocks in.
+ *
+ * Only the subjects passed in are included: the master order controls PLACEMENT,
+ * while the caller's authorization/selection controls MEMBERSHIP.
+ */
 export function buildGradeColumns(subjectNames: string[], blocks: AssessmentLabel[]): GradeColumn[] {
   const orderedBlocks = orderBlocks(blocks);
+  const orderedSubjectNames = orderSubjectNames(subjectNames);
   const columns: GradeColumn[] = [];
-  for (const subjectName of subjectNames) {
+  for (const subjectName of orderedSubjectNames) {
     for (const block of orderedBlocks) {
       columns.push({
         subjectName,
@@ -90,7 +104,7 @@ export function safeFileSegment(value: string): string {
 /** e.g. "Grade_5-A_Arabic_Tarbiya_Grades.xlsx" */
 export function workbookFileName(className: string, subjectNames: string[]): string {
   const classSegment = safeFileSegment(className);
-  const subjectSegment = subjectNames.map(safeFileSegment).join('_') || 'Subjects';
+  const subjectSegment = orderSubjectNames(subjectNames).map(safeFileSegment).join('_') || 'Subjects';
   return `${classSegment}_${subjectSegment}_Grades.xlsx`;
 }
 
@@ -100,7 +114,7 @@ function buildInstructionsSheet(options: BuildWorkbookOptions, columns: GradeCol
     ['MBK International School — Bulk Grade Upload'],
     [''],
     ['Class', options.className],
-    ['Subjects', options.subjects.map(s => s.name).join(', ')],
+    ['Subjects', orderSubjectNames(options.subjects.map(s => s.name)).join(', ')],
     ['Assessment blocks', blockList.map(b => `${blockDisplayName(b.label)} (max ${b.total})`).join(', ')],
     ['Term', options.termName || '—'],
     ['Month', options.month || '—'],
