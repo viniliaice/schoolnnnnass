@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   FileSpreadsheet, Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight
+  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -36,6 +36,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Create Quiz', icon: HelpCircle, path: '/admin/quizzes' },
     { label: 'Grade Quizzes', icon: ClipboardCheck, path: '/admin/grade-quizzes' },
     { label: 'Exam Verification', icon: ClipboardCheck, path: '/admin/exams' },
+    { label: 'Grade Corrections', icon: Pencil, path: '/admin/grade-corrections' },
     { label: 'Class Progress', icon: Calendar, path: '/admin/class-progress' },
     { label: 'Promote Classes', icon: ArrowUpDown, path: '/admin/promotion' },
     { label: 'Monitor Teacher', icon: ClipboardCheck, path: '/admin/monitor' },

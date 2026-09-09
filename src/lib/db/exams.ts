@@ -250,3 +250,130 @@ export async function deleteExam(id: string): Promise<boolean> {
   const { error } = await supabase.from('exams').delete().eq('id', id);
   return !error;
 }
+
+// ─── Admin Grade Correction: server-side filtered grade search ────────────────
+
+export interface GradeSearchRow {
+  id: string;
+  studentId: string;
+  studentName: string;
+  className: string;
+  govId: string | null;
+  subject: string;
+  subjectId: string | null;
+  assessmentLabel: string | null;
+  examType: string;
+  score: number | null;
+  total: number;
+  entryState: 'scored' | 'absent' | 'not_applicable';
+  status: ExamStatus;
+  month: string;
+  date: string;
+  termId: string | null;
+  teacherId: string | null;
+  uploadedBy: string | null;
+}
+
+export interface GradeSearchParams {
+  classNames?: string[];
+  subject?: string;          // subject display name (exams.subject)
+  assessmentLabel?: string;  // e.g. 'CPW1'
+  termId?: string;
+  month?: string;
+  status?: ExamStatus | 'all';
+  studentSearch?: string;    // matches student name / id / govId
+  page?: number;
+  pageSize?: number;
+}
+
+/**
+ * Server-side filtered/paginated grade search for the Admin Grade Correction
+ * page. Filtering happens in the database (never "load everything and filter in
+ * React"). Student identity fields (name / id / govId) are resolved through the
+ * students table so the admin can search by any of them; the returned rows carry
+ * the exact exam.id used by the correction RPC.
+ */
+export async function searchGradesForCorrection(
+  params: GradeSearchParams,
+): Promise<{ rows: GradeSearchRow[]; total: number }> {
+  const page = Math.max(1, params.page ?? 1);
+  const pageSize = Math.min(params.pageSize ?? 50, 200);
+
+  // Resolve the candidate student set from class + student search, in the DB.
+  let studentQuery: any = supabase.from('students').select('id,name,className,govId');
+  if (params.classNames && params.classNames.length > 0) {
+    studentQuery = studentQuery.in('className', params.classNames);
+  }
+  const term = params.studentSearch?.trim();
+  if (term) {
+    const like = `%${term}%`;
+    studentQuery = studentQuery.or(`name.ilike.${like},id.ilike.${like},govId.ilike.${like}`);
+  }
+  studentQuery = studentQuery.limit(MAX_QUERY_LIMIT);
+  const { data: studentRows, error: studentError } = await studentQuery;
+  if (studentError) throw studentError;
+
+  const students = (studentRows || []) as Array<{ id: string; name: string; className: string; govId: string | null }>;
+  if ((params.classNames && params.classNames.length > 0 || term) && students.length === 0) {
+    return { rows: [], total: 0 };
+  }
+  const studentById = new Map(students.map(s => [s.id, s]));
+  const studentIds = students.map(s => s.id);
+
+  const from = (page - 1) * pageSize;
+  const to = from + pageSize - 1;
+  const selectFields = 'id,studentId,subject,subjectId,score,total,examType,assessmentLabel,entryState,termId,month,status,date,teacherId,uploadedBy';
+  let query: any = supabase.from('exams').select(selectFields, { count: 'exact' });
+
+  // Only constrain by student set when a class or student search is active.
+  if (studentIds.length > 0 && (Boolean(term) || (params.classNames?.length ?? 0) > 0)) {
+    query = query.in('studentId', studentIds);
+  }
+  if (params.subject && params.subject !== 'All') query = query.eq('subject', params.subject);
+  if (params.assessmentLabel && params.assessmentLabel !== 'All') query = query.eq('assessmentLabel', params.assessmentLabel);
+  if (params.termId && params.termId !== 'All') query = query.eq('termId', params.termId);
+  if (params.month && params.month !== 'All') query = query.eq('month', params.month);
+  if (params.status && params.status !== 'all') query = query.eq('status', params.status);
+
+  const { data, error, count } = await query.order('date', { ascending: false }).range(from, to);
+  if (error) throw error;
+
+  // For rows whose student wasn't in the pre-resolved set (no class/search
+  // filter active), fetch the missing student identities in one batch.
+  const rawRows = (data || []) as any[];
+  const missingIds = Array.from(new Set(rawRows.map(r => r.studentId).filter(id => !studentById.has(id))));
+  if (missingIds.length > 0) {
+    const { data: extra } = await supabase
+      .from('students')
+      .select('id,name,className,govId')
+      .in('id', missingIds)
+      .limit(MAX_QUERY_LIMIT);
+    for (const s of (extra || []) as any[]) studentById.set(s.id, s);
+  }
+
+  const rows: GradeSearchRow[] = rawRows.map(r => {
+    const s = studentById.get(r.studentId);
+    return {
+      id: r.id,
+      studentId: r.studentId,
+      studentName: s?.name ?? '(unknown student)',
+      className: s?.className ?? '',
+      govId: s?.govId ?? null,
+      subject: r.subject,
+      subjectId: r.subjectId ?? null,
+      assessmentLabel: r.assessmentLabel ?? null,
+      examType: r.examType,
+      score: r.score,
+      total: r.total,
+      entryState: r.entryState ?? 'scored',
+      status: r.status,
+      month: r.month,
+      date: r.date,
+      termId: r.termId ?? null,
+      teacherId: r.teacherId ?? null,
+      uploadedBy: r.uploadedBy ?? null,
+    };
+  });
+
+  return { rows, total: count || 0 };
+}

@@ -163,49 +163,76 @@ function findSubjectSequenceStart(subjectRow: unknown[]): number {
   return -1;
 }
 
-function parseScore(raw: unknown, column: ParsedAssessmentColumn, rowIndex: number, issues: ParseIssue[]): ParsedScore | null {
+/**
+ * The single, shared interpretation of a raw grade cell. Both the legacy
+ * fixed-block parser and the new roster-workbook parser call this so that
+ * blank / Absent / N/A / integer-range semantics can never drift apart.
+ *
+ * It performs no I/O and pushes no issues — callers translate the outcome into
+ * their own {@link ParseIssue} shape (with subject/label context) so error
+ * messages stay identical to the ones users already know.
+ */
+export type ScoreCellOutcome =
+  | { kind: 'blank' }
+  | { kind: 'absent' }
+  | { kind: 'not_applicable' }
+  | { kind: 'scored'; score: number }
+  | { kind: 'invalid'; reason: 'not_half_step' | 'out_of_range' };
+
+/**
+ * Scores may be whole numbers OR half points (steps of 0.5), e.g. 4 or 4.5.
+ * Only ".0" and ".5" fractions are accepted; anything else (letters,
+ * parseFloat-style "5oops", quarter points like 4.25, negatives) is rejected.
+ * A half point is stored as a decimal (the score column is NUMERIC), never
+ * rounded, so partial-credit marks survive the round trip.
+ */
+const HALF_STEP_SCORE = /^\d+(?:\.[05])?$/;
+
+export function interpretScoreCell(raw: unknown, total: number): ScoreCellOutcome {
   const value = text(raw);
-  if (LEGACY_EMPTY_MARKERS.has(normalize(value))) return null;
-
   const normalized = normalize(value);
-  if (ABSENT_MARKERS.has(normalized)) {
-    return { ...column, score: null, entryState: 'absent', cell: cellAddress(rowIndex, column.columnIndex) };
-  }
-  if (NOT_APPLICABLE_MARKERS.has(normalized)) {
-    return { ...column, score: null, entryState: 'not_applicable', cell: cellAddress(rowIndex, column.columnIndex) };
-  }
+  if (LEGACY_EMPTY_MARKERS.has(normalized)) return { kind: 'blank' };
+  if (ABSENT_MARKERS.has(normalized)) return { kind: 'absent' };
+  if (NOT_APPLICABLE_MARKERS.has(normalized)) return { kind: 'not_applicable' };
 
-  // Scores are stored as INTEGER. Full-string validation intentionally rejects
-  // decimal values and parseFloat-style partial values such as "5oops".
-  if (!/^(?:0|[1-9]\d*)$/.test(value)) {
-    issues.push({
-      severity: 'error',
-      code: 'INVALID_SCORE',
-      message: `${column.subjectName} ${column.assessmentLabel} must be a whole number from 0 to ${column.total}, Absent, N/A, or blank.`,
-      cell: cellAddress(rowIndex, column.columnIndex),
-      row: rowIndex + 1,
-      column: column.columnIndex + 1,
-      subjectName: column.subjectName,
-    });
-    return null;
-  }
+  // Full-string validation: only whole or half-point (.5) values are accepted.
+  if (!HALF_STEP_SCORE.test(value)) return { kind: 'invalid', reason: 'not_half_step' };
 
   const score = Number(value);
-  if (!Number.isSafeInteger(score) || score < 0 || score > column.total) {
-    issues.push({
-      severity: 'error',
-      code: 'INVALID_SCORE',
-      message: `${column.subjectName} ${column.assessmentLabel} cannot exceed ${column.total}.`,
-      cell: cellAddress(rowIndex, column.columnIndex),
-      row: rowIndex + 1,
-      column: column.columnIndex + 1,
-      subjectName: column.subjectName,
-    });
-    return null;
+  if (!Number.isFinite(score) || score < 0 || score > total) {
+    return { kind: 'invalid', reason: 'out_of_range' };
   }
-
-  return { ...column, score, entryState: 'scored', cell: cellAddress(rowIndex, column.columnIndex) };
+  return { kind: 'scored', score };
 }
+
+function parseScore(raw: unknown, column: ParsedAssessmentColumn, rowIndex: number, issues: ParseIssue[]): ParsedScore | null {
+  const cell = cellAddress(rowIndex, column.columnIndex);
+  const outcome = interpretScoreCell(raw, column.total);
+  switch (outcome.kind) {
+    case 'blank':
+      return null;
+    case 'absent':
+      return { ...column, score: null, entryState: 'absent', cell };
+    case 'not_applicable':
+      return { ...column, score: null, entryState: 'not_applicable', cell };
+    case 'scored':
+      return { ...column, score: outcome.score, entryState: 'scored', cell };
+    case 'invalid':
+      issues.push({
+        severity: 'error',
+        code: 'INVALID_SCORE',
+        message: outcome.reason === 'not_half_step'
+          ? `${column.subjectName} ${column.assessmentLabel} must be a number from 0 to ${column.total} in whole or half points (e.g. 4 or 4.5), Absent, N/A, or blank.`
+          : `${column.subjectName} ${column.assessmentLabel} cannot exceed ${column.total}.`,
+        cell,
+        row: rowIndex + 1,
+        column: column.columnIndex + 1,
+        subjectName: column.subjectName,
+      });
+      return null;
+  }
+}
+
 
 /**
  * Parses the school's fixed 11-column-per-subject production sheet. The

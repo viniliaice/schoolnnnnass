@@ -30,3 +30,46 @@ describe('submitBulkGrades', () => {
     await expect(submitBulkGrades([record], 'upload-key-12345', true)).rejects.toThrow('assigned class subjects');
   });
 });
+
+describe('submitBulkGrades — change preview parsing', () => {
+  it('parses the server change list, approved flags, and old->new values', async () => {
+    rpc.mockResolvedValue({
+      data: {
+        requiresConfirmation: true,
+        insertCount: 1,
+        updateCount: 1,
+        approvedChangeCount: 1,
+        requiresApprovedAcknowledgement: true,
+        changes: [
+          {
+            studentId: 'student-1', studentName: 'Ahmed Ali', className: 'Grade 5-A',
+            subject: 'Arabic', subjectId: 'arabic', assessmentLabel: 'MT', examType: 'Quiz',
+            newScore: 17, newEntryState: 'scored', existingScore: 14, existingEntryState: 'scored',
+            existingStatus: 'approved', changeType: 'update', isApproved: true,
+          },
+          {
+            studentId: 'student-2', studentName: 'Aisha Hassan', className: 'Grade 5-A',
+            subject: 'Tarbiya', subjectId: 'tarbiya', assessmentLabel: 'HW2', examType: 'Homework',
+            newScore: 5, newEntryState: 'scored', existingScore: null, existingEntryState: null,
+            existingStatus: null, changeType: 'new', isApproved: false,
+          },
+        ],
+      },
+      error: null,
+    });
+    const result = await submitBulkGrades([record], 'upload-key-12345', false);
+    expect(result.approvedChangeCount).toBe(1);
+    expect(result.requiresApprovedAcknowledgement).toBe(true);
+    expect(result.changes).toHaveLength(2);
+    expect(result.changes[0]).toMatchObject({ existingScore: 14, newScore: 17, isApproved: true, changeType: 'update' });
+    expect(result.changes[1]).toMatchObject({ existingScore: null, newScore: 5, changeType: 'new', isApproved: false });
+  });
+
+  it('defaults change fields safely when the server omits them (backward compatible)', async () => {
+    rpc.mockResolvedValue({ data: { requiresConfirmation: false, insertCount: 2, updateCount: 0 }, error: null });
+    const result = await submitBulkGrades([record], 'upload-key-12345', false);
+    expect(result.changes).toEqual([]);
+    expect(result.approvedChangeCount).toBe(0);
+    expect(result.requiresApprovedAcknowledgement).toBe(false);
+  });
+});

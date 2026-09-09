@@ -24,6 +24,7 @@ import { ManageDrivers } from './pages/admin/drivers/ManageDrivers';
 import { OfficeDashboard } from './pages/office/OfficeDashboard';
 import { StudentDirectory } from './pages/office/StudentDirectory';
 import { ExamVerification } from './pages/admin/ExamVerification';
+import { GradeCorrections } from './pages/admin/GradeCorrections';
 import { MonitorTeachers } from './pages/admin/MonitorTeachers';
 import { ClassProgress } from './pages/admin/ClassProgress';
 import { ClassAnnouncements } from './pages/admin/ClassAnnouncements';
@@ -110,6 +111,7 @@ function AppContent() {
             case '/directory': return <StudentDirectory />;
             case '/admin/bulk-grades': return <BulkUploadGrades />;
             case '/admin/exams': return <ExamVerification />;
+            case '/admin/grade-corrections': return <GradeCorrections />;
             case '/admin/monitor': return <MonitorTeachers />;
             case '/admin/ai-logs': return <AiReviewLogs />;
             case '/admin/class-progress': return <ClassProgress />;

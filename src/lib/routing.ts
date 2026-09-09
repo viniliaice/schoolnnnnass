@@ -27,6 +27,10 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   // here, in the App route switch, AND in SQL (the RPCs re-check the role).
   '/admin/family-ids/setup': ['admin'],
 
+  // Admin Grade Correction. Admin only — it corrects an existing grade through
+  // the admin-gated admin_correct_grade RPC (which re-checks the role in SQL).
+  '/admin/grade-corrections': ['admin'],
+
   // Student class update / new-student import. Admin only — it writes
   // students."className" and creates student rows through the admin-gated
   // apply_student_class_import RPC (which re-checks the role in SQL).
