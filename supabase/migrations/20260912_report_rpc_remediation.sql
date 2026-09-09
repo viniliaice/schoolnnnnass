@@ -11,6 +11,21 @@
 --   * Uses historical class helpers class_for_term() / class_students_for_term()
 --     so peer averages and ranks stay term-correct after class changes.
 --   * Enforces explicit report access in SECURITY DEFINER functions.
+--
+-- Idempotent / re-runnable. The report RPCs are DROPped before being
+-- re-created: live projects may already carry get_monthly_report /
+-- get_final_report with a different return type (created outside this repo),
+-- and PostgreSQL refuses `CREATE OR REPLACE` when the return type changes
+-- (SQLSTATE 42P13 "cannot change return type of existing function").
+-- Only the exact (TEXT, TEXT) signatures the frontend calls are dropped; any
+-- other overload is left untouched. Nothing here depends on these functions
+-- (no views/triggers), so plain DROP is safe. Bulk Upload objects
+-- (submit_bulk_grades, exams, RLS) are not touched by this migration.
+
+DROP FUNCTION IF EXISTS public.assert_can_view_student_term_report(TEXT, TEXT);
+DROP FUNCTION IF EXISTS public.get_monthly_report(TEXT, TEXT);
+DROP FUNCTION IF EXISTS public.get_midterm_report(TEXT, TEXT);
+DROP FUNCTION IF EXISTS public.get_final_report(TEXT, TEXT);
 
 CREATE OR REPLACE FUNCTION public.assert_can_view_student_term_report(
   p_student_id TEXT,

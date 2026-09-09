@@ -303,6 +303,20 @@ Manual migration required outside this PR: YES — operational only.
   additionally required only for PR #40's report changes, not for Bulk Upload.
 ```
 
+
+### 5. Live-apply failure fixed: `20260912` — `42P13 cannot change return type of existing function`
+
+Applying PR #40's `20260912_report_rpc_remediation.sql` to the live project failed with
+`ERROR: 42P13: cannot change return type of existing function — HINT: Use DROP FUNCTION get_monthly_report(text,text) first.`
+Cause: the live database already has `get_monthly_report(text,text)` (and possibly `get_final_report`) with a different return type (created outside the repo — no migration on `main` defines them), and PostgreSQL does not allow `CREATE OR REPLACE` to change a return type.
+
+**Fix (commit on this branch):** the migration now `DROP FUNCTION IF EXISTS`es the four exact `(TEXT, TEXT)` signatures it re-creates (`assert_can_view_student_term_report`, `get_monthly_report`, `get_midterm_report`, `get_final_report`) before the `CREATE`s. Only those signatures are dropped; no views/triggers depend on them; GRANT/REVOKE at the end re-apply to the new objects. Bulk Upload objects are untouched.
+
+Proof (PGlite, real Postgres): seeded a live-like DB with `get_monthly_report` returning `TABLE(...)` and `get_final_report` returning `SETOF JSON` →
+original file: **`42P13 cannot change return type of existing function`** (reproduced) · fixed file: applies, re-runs idempotently, and leaves all four functions as `(p_student_id text, p_term_id text)` → `jsonb`/`void`, SECURITY DEFINER, EXECUTE granted to `authenticated`. Also applies on a fresh DB with no prior functions. Bulk-grades DB suites + reports tests after the change: 76/76; `tsc` exit 0.
+
+**Operator action:** re-run `supabase/migrations/20260912_report_rpc_remediation.sql` from this branch (it is safe to re-run). This migration is required for PR #40's report changes only — Bulk Upload Grades works without it.
+
 ## GitHub status checks on PR #41
 
 | Check | Result | Note |
