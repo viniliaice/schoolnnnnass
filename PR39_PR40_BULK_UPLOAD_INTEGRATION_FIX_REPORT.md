@@ -223,7 +223,7 @@ Not changed: workbook format, `submit_bulk_grades`, migrations, RLS, `BulkUpload
 
 ## PR URL
 
-See the bottom of this file (filled in after `gh pr create`).
+**https://github.com/viniliaice/schoolnnnnass/pull/41** — `fix: reconcile PR #39 and PR #40 bulk upload grades` (branch `arena/01a0867d-schoolnnnnass` → `main`; contains #39 + #40 + fixes).
 
 ## FINAL VERDICT
 
