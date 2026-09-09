@@ -15,6 +15,7 @@ import {
   ClipboardList, Sparkles, AlertCircle, RotateCcw
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { parseScoreInput, isScoreTextInvalid } from '../../lib/scores';
 
 interface StudentScore {
   studentId: string;
@@ -175,14 +176,12 @@ export function UploadResults({ navigate }: UploadResultsProps) {
 
   const includedStudents = studentScores.filter(s => s.included);
   const filledStudents = includedStudents.filter(s => s.score.trim() !== '');
-  const totalNum = parseInt(total) || 100;
+  const totalNum = parseInt(total, 10) || 100;
 
-  const hasErrors = filledStudents.some(s => {
-    const score = parseInt(s.score);
-    return isNaN(score) || score < 0 || score > totalNum;
-  });
+  // Half points (4.5, 12.5) are valid scores — never truncate them.
+  const hasErrors = filledStudents.some(s => isScoreTextInvalid(s.score, totalNum));
 
-  const canProceedToScores = selectedClass && selectedSubject && examType && month && total && parseInt(total) > 0;
+  const canProceedToScores = selectedClass && selectedSubject && examType && month && total && parseInt(total, 10) > 0;
   const canProceedToReview = filledStudents.length > 0 && !hasErrors;
 
   const goToScores = () => {
@@ -208,7 +207,7 @@ export function UploadResults({ navigate }: UploadResultsProps) {
       const examsToCreate = filledStudents.map(s => ({
         studentId: s.studentId,
         subject: subjects.find(sub => sub.id === selectedSubject)?.name || subjects[0]?.name || '',
-        score: parseInt(s.score),
+        score: parseScoreInput(s.score) as number,
         total: totalNum,
         examType,
         month,
@@ -259,8 +258,8 @@ export function UploadResults({ navigate }: UploadResultsProps) {
   };
 
   const getScoreColor = (score: string) => {
-    const num = parseInt(score);
-    if (isNaN(num)) return '';
+    const num = parseScoreInput(score);
+    if (num == null) return '';
     const pct = (num / totalNum) * 100;
     if (pct >= 80) return 'text-emerald-700 bg-emerald-50 border-emerald-200';
     if (pct >= 60) return 'text-blue-700 bg-blue-50 border-blue-200';
@@ -268,11 +267,7 @@ export function UploadResults({ navigate }: UploadResultsProps) {
     return 'text-red-700 bg-red-50 border-red-200';
   };
 
-  const isScoreInvalid = (score: string) => {
-    if (!score.trim()) return false;
-    const num = parseInt(score);
-    return isNaN(num) || num < 0 || num > totalNum;
-  };
+  const isScoreInvalid = (score: string) => isScoreTextInvalid(score, totalNum);
 
   // ─── RENDER ───
   return (
@@ -455,6 +450,8 @@ export function UploadResults({ navigate }: UploadResultsProps) {
             <div className="flex items-center gap-2">
               <input
                 type="number"
+                step={0.5}
+                inputMode="decimal"
                 placeholder="Quick fill score"
                 value={quickFillValue}
                 onChange={e => setQuickFillValue(e.target.value)}
@@ -497,8 +494,8 @@ export function UploadResults({ navigate }: UploadResultsProps) {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {studentScores.map((s, idx) => {
-                    const scoreNum = parseInt(s.score);
-                    const pct = !isNaN(scoreNum) ? Math.round((scoreNum / totalNum) * 100) : null;
+                    const scoreNum = parseScoreInput(s.score);
+                    const pct = scoreNum != null ? Math.round((scoreNum / totalNum) * 100) : null;
                     const invalid = isScoreInvalid(s.score);
 
                     return (
@@ -537,6 +534,8 @@ export function UploadResults({ navigate }: UploadResultsProps) {
                               type="number"
                               min="0"
                               max={totalNum}
+                              step={0.5}
+                              inputMode="decimal"
                               placeholder="—"
                               value={s.score}
                               onChange={e => updateScore(s.studentId, e.target.value)}
@@ -675,7 +674,7 @@ export function UploadResults({ navigate }: UploadResultsProps) {
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {filledStudents.map((s, idx) => {
-                    const scoreNum = parseInt(s.score);
+                    const scoreNum = parseScoreInput(s.score) ?? 0;
                     const pct = Math.round((scoreNum / totalNum) * 100);
                     const grade = pct >= 90 ? 'A' : pct >= 80 ? 'B' : pct >= 70 ? 'C' : pct >= 60 ? 'D' : 'F';
                     return (
@@ -716,7 +715,7 @@ export function UploadResults({ navigate }: UploadResultsProps) {
 
             {/* Class average */}
             {filledStudents.length > 0 && (() => {
-              const avg = Math.round(filledStudents.reduce((sum, s) => sum + ((parseInt(s.score) / totalNum) * 100), 0) / filledStudents.length);
+              const avg = Math.round(filledStudents.reduce((sum, s) => sum + (((parseScoreInput(s.score) ?? 0) / totalNum) * 100), 0) / filledStudents.length);
               return (
                 <div className="mt-4 bg-slate-50 rounded-xl p-4 flex items-center justify-between">
                   <span className="text-sm font-medium text-slate-600">Class Average</span>
