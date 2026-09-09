@@ -146,6 +146,7 @@ function buildInstructionsSheet(options: BuildWorkbookOptions, columns: GradeCol
     ['  5. Type "Absent" if the student was absent, or "N/A" if the assessment does not apply.'],
     ['  6. Do not add, remove, rename, or reorder grade columns.'],
     ['  7. Student IDs are not shown on the visible sheet. The downloaded example keeps hidden roster metadata for unchanged rows; a pasted/edited roster is still supported through the existing name-matching review flow.'],
+    ['  8. Do NOT sort or reorder the student rows. Rows are identified by their original position; if two students share the same name, keep them in the original row order or their grades may be attached to the wrong student.'],
     [''],
     ['What you must NOT change'],
     ['  • The Student Name header'],
@@ -291,9 +292,22 @@ function normalizeHeader(value: unknown): string {
   return text(value).toLowerCase().replace(/\s+/g, ' ').trim();
 }
 
-function canonicalExpectedHeaders(subjects: string[] | undefined, blocks: AssessmentLabel[] | undefined): string[] {
+function canonicalExpectedColumns(subjects: string[] | undefined, blocks: AssessmentLabel[] | undefined): GradeColumn[] {
   if (!subjects?.length || !blocks?.length) return [];
-  return buildGradeColumns(subjects, blocks).map(column => column.header);
+  return buildGradeColumns(subjects, blocks);
+}
+
+/**
+ * Canonical identity of a grade column: the *canonical* subject (after the
+ * shared alias table in `subjectOrder.ts`, e.g. Mathematics → Math) plus the
+ * assessment label. Comparing identities instead of raw header text means
+ * `Mathematics HW1`, `MATH HW1` and `Math HW1` are all the same column, while
+ * `RandomSubject HW1` still does not match anything that was expected.
+ * Authorization is NOT decided here — the resolver/server still compare the
+ * canonical subject against the teacher's assigned subjects.
+ */
+function gradeColumnKey(subjectName: string, label: AssessmentLabel): string {
+  return `${subjectName.toLowerCase()}|${label}`;
 }
 
 function detectExpectedColumnIssues(
@@ -301,35 +315,38 @@ function detectExpectedColumnIssues(
   headerIdx: number,
   idColumn: number,
   nameColumn: number,
-  expectedHeaders: string[],
+  expectedColumns: GradeColumn[],
 ): WorkbookIssue[] {
-  if (expectedHeaders.length === 0) return [];
+  if (expectedColumns.length === 0) return [];
 
   const issues: WorkbookIssue[] = [];
-  const expectedByKey = new Map(expectedHeaders.map(header => [normalizeHeader(header), header]));
+  const expectedByKey = new Map(expectedColumns.map(column => [gradeColumnKey(column.subjectName, column.block.label), column]));
   const actualByKey = new Map<string, { header: string; columnIndex: number }>();
 
   for (let c = 0; c < headerRow.length; c++) {
     if (c === idColumn || c === nameColumn) continue;
     const header = text(headerRow[c]);
     if (!header) continue;
-    actualByKey.set(normalizeHeader(header), { header, columnIndex: c });
+    // Headers that cannot be parsed are reported as UNKNOWN_COLUMN by the main
+    // column loop; duplicates are reported there as DUPLICATE_COLUMN.
+    const parsed = parseGradeColumnHeader(header);
+    if (!parsed) continue;
+    const key = gradeColumnKey(parsed.subjectName, parsed.block.label);
+    if (!actualByKey.has(key)) actualByKey.set(key, { header, columnIndex: c });
   }
 
-  for (const expectedHeader of expectedHeaders) {
-    if (actualByKey.has(normalizeHeader(expectedHeader))) continue;
+  for (const [key, expected] of expectedByKey.entries()) {
+    if (actualByKey.has(key)) continue;
     issues.push({
       severity: 'error',
       code: 'MISSING_EXPECTED_COLUMN',
-      message: `Missing required grade column "${expectedHeader}". Restore the original template columns or download a fresh Example workbook.`,
+      message: `Missing required grade column "${expected.header}". Restore the original template columns or download a fresh Example workbook.`,
       row: headerIdx + 1,
     });
   }
 
   for (const [key, actual] of actualByKey.entries()) {
     if (expectedByKey.has(key)) continue;
-    const parsed = parseGradeColumnHeader(actual.header);
-    if (!parsed) continue;
     issues.push({
       severity: 'error',
       code: 'UNEXPECTED_COLUMN',
@@ -450,8 +467,8 @@ export function parseRosterWorkbook(file: ArrayBuffer, options: ParseRosterWorkb
     return empty;
   }
 
-  const expectedHeaders = canonicalExpectedHeaders(options.expectedSubjects, options.expectedBlocks);
-  issues.push(...detectExpectedColumnIssues(headerRow, headerIdx, idColumn, nameColumn, expectedHeaders));
+  const expectedColumns = canonicalExpectedColumns(options.expectedSubjects, options.expectedBlocks);
+  issues.push(...detectExpectedColumnIssues(headerRow, headerIdx, idColumn, nameColumn, expectedColumns));
 
   const columns: WorkbookParseColumn[] = [];
   const subjects: string[] = [];
@@ -471,7 +488,7 @@ export function parseRosterWorkbook(file: ArrayBuffer, options: ParseRosterWorkb
       });
       continue;
     }
-    const key = `${parsed.subjectName.toLowerCase()}|${parsed.block.label}`;
+    const key = gradeColumnKey(parsed.subjectName, parsed.block.label);
     if (seenColumnKeys.has(key)) {
       issues.push({
         severity: 'error',

@@ -338,6 +338,75 @@ describe('structural workbook validation against the canonical download contract
   });
 });
 
+describe('expected-column validation is alias-aware (PR #39 + PR #40 integration)', () => {
+  // The alias table in subjectOrder.ts is the single source of truth: the
+  // generator prints MATH / SOCIAL / TARABIYA, but a workbook whose headers use
+  // the database name (Mathematics, Social Studies, Tarbiya) or a different
+  // casing describes exactly the same canonical column and must not be
+  // reported as missing + unexpected at the same time.
+  const MATHEMATICS = subject('math', 'Mathematics');
+  const SOCIAL_STUDIES = subject('social', 'Social Studies');
+
+  function workbookWithHeaders(headers: string[], values: (string | number)[]): ArrayBuffer {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Student Name', ...headers], ['Ahmed Ali', ...values]]), GRADES_SHEET_NAME);
+    return XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+  }
+
+  it.each([
+    ['Mathematics HW1', 'Math', 'HW1', [MATHEMATICS], ['HW1']],
+    ['MATH HW1', 'Math', 'HW1', [MATHEMATICS], ['HW1']],
+    ['Math HW1', 'Math', 'HW1', [MATHEMATICS], ['HW1']],
+    ['Maths HW1', 'Math', 'HW1', [MATHEMATICS], ['HW1']],
+    ['Social Studies CPW1', 'Social', 'CPW1', [SOCIAL_STUDIES], ['CPW1']],
+    ['SOCIAL CPW1', 'Social', 'CPW1', [SOCIAL_STUDIES], ['CPW1']],
+    ['Tarbiya MT', 'Tarabiya', 'MT', [TARBIYA], ['MT']],
+    ['TARABIYA MT', 'Tarabiya', 'MT', [TARBIYA], ['MT']],
+  ] as const)('accepts "%s" as the expected %s / %s column', (header, canonicalSubject, label, subjects, blocks) => {
+    const parsed = parseWithContract(workbookWithHeaders([header], [4.5]), [...subjects], [...blocks]);
+    expect(parsed.issues.filter(issue => issue.severity === 'error')).toEqual([]);
+    expect(parsed.columns.map(column => [column.subjectName, column.block.label])).toEqual([[canonicalSubject, label]]);
+    expect(parsed.students[0].scores[0].score).toBe(4.5);
+  });
+
+  it('still reports a physically missing column even when an alias of another expected column is present', () => {
+    const parsed = parseWithContract(workbookWithHeaders(['Mathematics HW1'], [4]), [MATHEMATICS], ['HW1', 'HW2']);
+    const missing = parsed.issues.filter(issue => issue.code === 'MISSING_EXPECTED_COLUMN').map(issue => issue.message);
+    expect(missing).toEqual([expect.stringContaining('"MATH HW2"')]);
+    expect(parsed.issues.filter(issue => issue.code === 'UNEXPECTED_COLUMN')).toEqual([]);
+  });
+
+  it('rejects an unknown subject header (RandomSubject HW1) as unexpected, never as an alias', () => {
+    const parsed = parseWithContract(workbookWithHeaders(['MATH HW1', 'RandomSubject HW1'], [4, 4]), [MATHEMATICS], ['HW1']);
+    expect(parsed.issues.filter(issue => issue.code === 'MISSING_EXPECTED_COLUMN')).toEqual([]);
+    expect(parsed.issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'UNEXPECTED_COLUMN', severity: 'error', message: expect.stringContaining('"RandomSubject HW1"') }),
+    ]));
+  });
+
+  it('treats an alias of a subject that was NOT selected as unexpected (alias support is not an authorization bypass)', () => {
+    // Teacher selected English + Arabic only; workbook smuggles in Math under two spellings.
+    const parsed = parseWithContract(
+      workbookWithHeaders(['ENGLISH HW1', 'ARABIC HW1', 'Mathematics HW1', 'Maths HW1'], [4, 4, 4, 4]),
+      [ENGLISH, ARABIC],
+      ['HW1'],
+    );
+    const unexpected = parsed.issues.filter(issue => issue.code === 'UNEXPECTED_COLUMN').map(issue => issue.message);
+    expect(unexpected).toEqual([expect.stringContaining('"Mathematics HW1"')]);
+    // The second spelling is the same canonical column → reported as a duplicate, not silently merged.
+    expect(parsed.issues.filter(issue => issue.code === 'DUPLICATE_COLUMN').map(issue => issue.message)).toEqual([
+      expect.stringContaining('"Maths HW1"'),
+    ]);
+  });
+
+  it('reports two spellings of the same expected column as a duplicate, not as missing', () => {
+    const parsed = parseWithContract(workbookWithHeaders(['MATH HW1', 'Mathematics HW1'], [4, 4.5]), [MATHEMATICS], ['HW1']);
+    expect(parsed.issues.filter(issue => issue.code === 'MISSING_EXPECTED_COLUMN')).toEqual([]);
+    expect(parsed.issues.filter(issue => issue.code === 'DUPLICATE_COLUMN')).toHaveLength(1);
+    expect(parsed.students[0].scores.map(score => score.score)).toEqual([4]);
+  });
+});
+
 describe('flat-header + half-point regression tests', () => {
   it('Test 1 — exact English headers', () => {
     const header = buildGradeColumns(['English'], ALL_BLOCKS).map(c => c.header);

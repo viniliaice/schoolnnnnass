@@ -8,7 +8,7 @@ import {
   parseScoreWithin,
 } from '../scores';
 import { interpretScoreCell } from '../excel-parser';
-import { buildRosterWorkbook, parseRosterWorkbook, GRADES_SHEET_NAME } from '../bulk-grades/workbook';
+import { buildRosterWorkbook, parseGradeColumnHeader, parseRosterWorkbook, GRADES_SHEET_NAME } from '../bulk-grades/workbook';
 import type { Student, Subject } from '../../types';
 
 function subject(id: string, name: string): Subject {
@@ -145,6 +145,20 @@ describe('real XLSX round trip with half-point scores', () => {
     assessmentDate: '2026-09-09',
   });
 
+  /**
+   * Locates a grade column by its canonical identity (subject + assessment)
+   * using the production header parser, so the test follows the workbook
+   * contract (currently `ENGLISH HW1`) instead of hard-coding one casing.
+   */
+  function findColumn(header: string[], wanted: string): number {
+    const target = parseGradeColumnHeader(wanted);
+    expect(target, `"${wanted}" is not a valid <Subject> <Assessment> header`).not.toBeNull();
+    return header.findIndex(h => {
+      const parsed = parseGradeColumnHeader(h);
+      return !!parsed && parsed.subjectName === target!.subjectName && parsed.block.label === target!.block.label;
+    });
+  }
+
   /** Fill the generated template with real half-point scores and re-serialize. */
   function fillWorkbook(values: Record<string, number>): ArrayBuffer {
     const wb = XLSX.read(bytes, { type: 'array' });
@@ -152,7 +166,7 @@ describe('real XLSX round trip with half-point scores', () => {
     const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: true });
     const header = (rows[0] || []).map(v => String(v ?? ''));
     for (const [columnHeader, value] of Object.entries(values)) {
-      const c = header.indexOf(columnHeader);
+      const c = findColumn(header, columnHeader);
       expect(c, `missing column "${columnHeader}"`).toBeGreaterThan(-1);
       rows[1]![c] = value; // first roster student
     }
@@ -190,7 +204,10 @@ describe('real XLSX round trip with half-point scores', () => {
     const wb = XLSX.read(filled, { type: 'array' });
     const sheet = wb.Sheets[GRADES_SHEET_NAME];
     const rows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1, defval: null, raw: true });
-    const c = (rows[0] as string[]).indexOf('English HW1');
+    const header = (rows[0] as unknown[]).map(v => String(v ?? ''));
+    expect(header[0]).toBe('Student Name'); // current flat-header contract (PR #40)
+    const c = findColumn(header, 'English HW1');
+    expect(header[c]).toBe('ENGLISH HW1');
     const cell = sheet[XLSX.utils.encode_cell({ r: 1, c })];
     expect(cell.t).toBe('n');
     expect(cell.v).toBe(4.5);

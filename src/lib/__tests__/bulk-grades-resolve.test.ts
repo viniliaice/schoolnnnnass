@@ -164,6 +164,34 @@ function makeLegacyNameOnly(
   return parseRosterWorkbook(out);
 }
 
+describe('resolveWorkbook — subject aliases never bypass authorization', () => {
+  function nameOnlyWorkbook(headers: string[], values: (string | number)[]): ArrayBuffer {
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([['Student ID', 'Student Name', ...headers], ['MBK-1001', 'Ahmed Ali', ...values]]), GRADES_SHEET_NAME);
+    return XLSX.write(wb, { bookType: 'xlsx', type: 'array' }) as ArrayBuffer;
+  }
+
+  it.each(['Mathematics HW1', 'Maths HW1', 'MATH HW1', 'Math HW1'])(
+    'rejects "%s" for a teacher who is not assigned Math',
+    header => {
+      const parsed = parseRosterWorkbook(nameOnlyWorkbook([header], [4.5]));
+      const result = resolveWorkbook(parsed, context({ authorizedSubjects: [ARABIC, TARBIYA] }));
+      expect(result.unauthorizedSubjects).toEqual(['Math']);
+      expect(result.errors.some(error => /not authorized to upload "Math"/.test(error.message))).toBe(true);
+      expect(result.records).toEqual([]);
+    },
+  );
+
+  it('accepts "Mathematics HW1" for a teacher whose assigned subject is stored as "Mathematics"', () => {
+    const mathematics = subject('math', 'Mathematics');
+    const parsed = parseRosterWorkbook(nameOnlyWorkbook(['Mathematics HW1'], [4.5]), { expectedSubjects: ['Mathematics'], expectedBlocks: ['HW1'] });
+    expect(parsed.issues.filter(issue => issue.severity === 'error')).toEqual([]);
+    const result = resolveWorkbook(parsed, context({ authorizedSubjects: [mathematics] }));
+    expect(result.errors).toEqual([]);
+    expect(result.records.map(record => [record.subjectId, record.assessmentLabel, record.score])).toEqual([['math', 'HW1', 4.5]]);
+  });
+});
+
 describe('resolveWorkbook — Needs Review (name-only matching)', () => {
   it('A/B: a name-only row with one candidate is Needs Review, not Valid/Error', () => {
     const parsed = makeLegacyNameOnly([ARABIC], ['HW1'], ROSTER, 2, { B2: 4 });
