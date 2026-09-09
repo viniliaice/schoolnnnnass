@@ -35,7 +35,7 @@ export async function pgliteAvailable(): Promise<boolean> {
   }
 }
 
-function readMigration(name: string): string {
+export function readMigration(name: string): string {
   return fs.readFileSync(path.join(REPO_ROOT, 'supabase', 'migrations', name), 'utf8');
 }
 
@@ -44,7 +44,7 @@ function readMigration(name: string): string {
  * ...;`) statement region from a migration by an anchor substring, so we run the
  * real shipped SQL for the piece under test.
  */
-function extractStatementContaining(sql: string, anchor: string, terminator = '$$;'): string {
+export function extractStatementContaining(sql: string, anchor: string, terminator = '$$;'): string {
   const anchorPos = sql.indexOf(anchor);
   if (anchorPos < 0) throw new Error(`anchor not found: ${anchor}`);
   // Walk back to the start of the CREATE that contains the anchor.
@@ -69,7 +69,7 @@ CREATE TABLE profiles (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   email TEXT NOT NULL UNIQUE,
-  role TEXT NOT NULL CHECK (role IN ('admin','teacher','parent','supervisor')),
+  role TEXT NOT NULL CHECK (role IN ('admin','teacher','parent','supervisor','office')),
   auth_id UUID,
   "createdAt" TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

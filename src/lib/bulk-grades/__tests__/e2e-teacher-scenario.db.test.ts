@@ -2,10 +2,10 @@
 // client resolver, and the REAL submit_bulk_grades RPC (executed via PGlite).
 //
 // Scenario (from the remediation brief):
-//   Teacher A teaches Arabic + Tarbiya in Grade 5-A (5 students).
-//   Build the roster workbook, fill Arabic/Tarbiya HW1/MT/Akhlaaq, upload, and
-//   verify records resolve correctly, Arabic/Tarbiya stay separate, and the
-//   server preview shows old -> new. Then prove class-change + stale-roster.
+//   Teacher A teaches Arabic + Tarabiya in Grade 5-A (5 students).
+//   Build the flat-header workbook, fill Arabic/Tarabiya HW1/MT/Akhlaaq,
+//   upload, and verify records resolve correctly, subjects stay separate, and
+//   the server preview shows old -> new. Then prove class-change + stale-roster.
 
 import { beforeAll, afterAll, describe, expect, it } from 'vitest';
 import * as XLSX from 'xlsx';
@@ -72,12 +72,12 @@ d('E2E teacher scenario (workbook -> resolve -> real RPC)', () => {
   beforeAll(async () => { db = await createBulkGradesTestDb(); await seed(db); await db.setAuthUid(AUTH_A); });
   afterAll(async () => { await db?.close(); });
 
-  it('Arabic + Tarbiya for Grade 5-A commit as subject-scoped, separated records', async () => {
-    // Columns for blocks HW1,MT,AKHLAAQ over [Arabic,Tarbiya]:
-    // C=Arabic HW1, D=Arabic MT, E=Arabic Akhlaaq, F=Tarbiya HW1, G=Tarbiya MT, H=Tarbiya Akhlaaq
-    // Row 2 = S1 (Ahmed).
+  it('Arabic + Tarabiya for Grade 5-A commit as subject-scoped, separated records', async () => {
+    // Visible columns for blocks HW1,MT,AKHLAAQ over [Arabic,Tarabiya]:
+    // A=Student Name, B=Arabic HW1, C=Arabic MT, D=Arabic Akhlaaq,
+    // E=Tarabiya HW1, F=Tarabiya MT, G=Tarabiya Akhlaaq.
     const parsed = fillAndParse([ARABIC, TARBIYA], ROSTER_5A, {
-      C2: 5, D2: 18, E2: 8, F2: 4, G2: 15, H2: 5,
+      B2: 5, C2: 18, D2: 8, E2: 4, F2: 15, G2: 5,
     });
     const res = resolveWorkbook(parsed, {
       className: 'Grade 5-A', authorizedSubjects: [ARABIC, TARBIYA], roster: ROSTER_5A,
@@ -89,7 +89,6 @@ d('E2E teacher scenario (workbook -> resolve -> real RPC)', () => {
     const out = await rpc(db, res.records, 'e2e-arabic-tarbiya-1', true);
     expect(out.insertCount).toBe(6);
 
-    // Arabic Akhlaaq (8) and Tarbiya Akhlaaq (5) are DISTINCT rows in the DB.
     const { rows } = await db.query<{ subjectId: string; score: number }>(
       `SELECT "subjectId",score FROM exams WHERE "studentId"='S1' AND "assessmentLabel"='AKHLAAQ' ORDER BY "subjectId"`,
     );
@@ -100,8 +99,7 @@ d('E2E teacher scenario (workbook -> resolve -> real RPC)', () => {
   });
 
   it('re-upload shows old -> new via server preview, then commits the change', async () => {
-    // Change Ahmed Arabic MT 18 -> 20.
-    const parsed = fillAndParse([ARABIC], ROSTER_5A, { C2: 5, D2: 20, E2: 8 });
+    const parsed = fillAndParse([ARABIC], ROSTER_5A, { B2: 5, C2: 20, D2: 8 });
     const res = resolveWorkbook(parsed, {
       className: 'Grade 5-A', authorizedSubjects: [ARABIC], roster: ROSTER_5A,
       termId: 'term1', month: 'September', date: '2026-09-08',
@@ -113,12 +111,10 @@ d('E2E teacher scenario (workbook -> resolve -> real RPC)', () => {
   });
 
   it('CLASS CHANGE: mover S9 into 5-A appears; stale 5-A workbook w/ 7-A student rejected', async () => {
-    // Admin-style move S9 from 7-A to 5-A (simulate class import result).
     await db.exec(`UPDATE students SET "className"='Grade 5-A' WHERE id='S9'`);
 
-    // Fresh roster now includes S9.
     const freshRoster = [...ROSTER_5A, { id: 'S9', name: 'Mover Kid', className: 'Grade 5-A', parentId: null, createdAt: 'x' } as Student];
-    const parsed = fillAndParse([ARABIC], freshRoster, { C7: 3 }); // S9 is row 7
+    const parsed = fillAndParse([ARABIC], freshRoster, { B7: 3 });
     const res = resolveWorkbook(parsed, {
       className: 'Grade 5-A', authorizedSubjects: [ARABIC], roster: freshRoster,
       termId: 'term1', month: 'September', date: '2026-09-08',
@@ -127,10 +123,7 @@ d('E2E teacher scenario (workbook -> resolve -> real RPC)', () => {
     const out = await rpc(db, res.records, 'e2e-mover-in-000001', true);
     expect(out.insertCount).toBeGreaterThanOrEqual(1);
 
-    // STALE: a workbook still listing S9 under 5-A after they move to 7-C.
     await db.exec(`UPDATE students SET "className"='Grade 7-C' WHERE id='S9'`);
-    // The client resolver (fresh roster no longer has S9) flags it; and the RPC
-    // must reject it because teacherA is not assigned Arabic in Grade 7-C.
     const staleRecord = [{
       studentId: 'S9', subjectId: 'arabic', assessmentLabel: 'HW1', examType: 'Homework',
       score: 5, total: 5, entryState: 'scored', month: 'September', date: '2026-09-08', termId: 'term1',

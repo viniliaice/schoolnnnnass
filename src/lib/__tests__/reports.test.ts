@@ -36,13 +36,13 @@ describe('getMidtermReportFallback', () => {
     mockGetStudentById.mockResolvedValue({ id: 's1', name: 'Asha', className: 'Grade 1-A' });
 
     const studentExams = [
-      { id: 'e1', studentId: 's1', subject: 'Math', score: 45, total: 50 },
+      { id: 'e1', studentId: 's1', subject: 'Math', score: 45, total: 50, examType: 'Midterm', assessmentLabel: null },
     ];
     const classStudents = [{ id: 's1' }, { id: 's2' }, { id: 's3' }];
     const classExams = [
-      { id: 'e1', studentId: 's1', subject: 'Math', score: 45, total: 50 },
-      { id: 'e2', studentId: 's2', subject: 'Math', score: 40, total: 50 },
-      { id: 'e3', studentId: 's3', subject: 'Math', score: 25, total: 50 },
+      { id: 'e1', studentId: 's1', subject: 'Math', score: 45, total: 50, examType: 'Midterm', assessmentLabel: null },
+      { id: 'e2', studentId: 's2', subject: 'Math', score: 40, total: 50, examType: 'Midterm', assessmentLabel: null },
+      { id: 'e3', studentId: 's3', subject: 'Math', score: 25, total: 50, examType: 'Midterm', assessmentLabel: null },
     ];
 
     let examsCall = 0;
@@ -74,6 +74,51 @@ describe('getMidtermReportFallback', () => {
       ],
       overall_rank: 1,
       total_students: 3,
+    });
+  });
+
+  it('treats bulk-uploaded MT rows stored as Quiz + assessmentLabel=MT as midterms', async () => {
+    mockGetStudentById.mockResolvedValue({ id: 's1', name: 'Asha', className: 'Grade 1-A' });
+
+    const studentExams = [
+      { id: 'e1', studentId: 's1', subject: 'Math', score: 17.5, total: 20, examType: 'Quiz', assessmentLabel: 'MT' },
+      { id: 'e-ignore', studentId: 's1', subject: 'Math', score: 5, total: 5, examType: 'Quiz', assessmentLabel: 'HW1' },
+    ];
+    const classStudents = [{ id: 's1' }, { id: 's2' }];
+    const classExams = [
+      { id: 'e1', studentId: 's1', subject: 'Math', score: 17.5, total: 20, examType: 'Quiz', assessmentLabel: 'MT' },
+      { id: 'e2', studentId: 's2', subject: 'Math', score: 15.5, total: 20, examType: 'Quiz', assessmentLabel: 'MT' },
+      { id: 'e-ignore', studentId: 's2', subject: 'Math', score: 4.5, total: 5, examType: 'Quiz', assessmentLabel: 'HW1' },
+    ];
+
+    let examsCall = 0;
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'students') return { select: () => queryReturning(classStudents) };
+      if (table === 'exams') {
+        examsCall += 1;
+        return { select: () => queryReturning(examsCall === 1 ? studentExams : classExams) };
+      }
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const report = await getMidtermReportFallback('s1', 'term-1');
+
+    expect(report).toEqual({
+      scores: [
+        expect.objectContaining({
+          subject: 'Math',
+          score: 17.5,
+          total: 20,
+          percentage: 88,
+          grade: 'B',
+          subject_rank: 1,
+          class_average: 83,
+          highest_in_class: 88,
+          examId: 'e1',
+        }),
+      ],
+      overall_rank: 1,
+      total_students: 2,
     });
   });
 });

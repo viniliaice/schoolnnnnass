@@ -1,9 +1,10 @@
-// Bulk Upload Grades — class-specific, roster-prefilled workflow.
+// Bulk Upload Grades — class-specific flat-header workflow.
 //
 // One class at a time. The teacher selects exactly ONE class, sees only the
 // subjects they are authorized to teach in THAT class, picks assessment blocks,
-// downloads a roster-prefilled workbook (Student IDs already filled in), enters
-// grades, uploads, and reviews server-validated changes before confirming.
+// downloads a flat-header workbook (Student Name first; hidden roster metadata
+// preserves IDs for unchanged rows), enters grades, uploads, and reviews
+// server-validated changes before confirming.
 //
 // The server (submit_bulk_grades RPC) is authoritative for every check. The
 // workbook is never trusted: student identity, current class, teacher/class/
@@ -282,7 +283,10 @@ export function BulkUploadGrades() {
       return;
     }
     try {
-      const result = parseRosterWorkbook(await file.arrayBuffer());
+      const result = parseRosterWorkbook(await file.arrayBuffer(), {
+        expectedSubjects: selectedSubjects.map(subject => subject.name),
+        expectedBlocks: selectedBlocks,
+      });
       setFileName(file.name);
       setParsed(result);
       setUploadKey(createUploadKey());
@@ -351,7 +355,7 @@ export function BulkUploadGrades() {
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Bulk Upload Grades</h1>
         <p className="mt-1 text-slate-500">
-          One class at a time. Download a roster-prefilled workbook for the selected class and subjects, enter grades, and confirm server-validated changes.
+          One class at a time. Download a flat-header workbook for the selected class and subjects, enter grades, and confirm server-validated changes.
         </p>
       </div>
 
@@ -505,13 +509,13 @@ export function BulkUploadGrades() {
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div>
               <h2 className="text-xl font-bold text-slate-900">Upload the completed workbook</h2>
-              <p className="text-sm text-slate-600">Upload the {selectedClass} workbook filled in with grades. Need the template? Download the roster-prefilled example (Student IDs already filled in) — optional.</p>
+              <p className="text-sm text-slate-600">Upload the {selectedClass} workbook filled in with grades. Need the template? Download the flat example with Student Name first and subject-assessment headers — optional.</p>
             </div>
             <button
               onClick={download}
               disabled={!canDownload}
               className={cn('flex shrink-0 items-center gap-2 rounded-xl px-4 py-2 text-sm font-semibold', canDownload ? 'border border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100' : 'cursor-not-allowed border border-slate-200 bg-slate-100 text-slate-400')}
-              title="Download the roster-prefilled example workbook"
+              title="Download the flat bulk-grade example workbook"
             >
               <Download className="h-4 w-4" /> Download example
             </button>
