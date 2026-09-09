@@ -10,22 +10,27 @@ The system generates three types of reports: monthly, midterm, and final. Each a
 
 ## Monthly reports
 
-Shows one month of exam data per subject.
+Shows one month of approved continuous-assessment data per subject.
 
 1. Click **Monthly Report** (parent) or **Exam Reports** (admin/teacher).
 2. Select the **Student** and **Month**.
 3. The report shows per subject:
-   - Each exam type score (CA, Homework, Classwork, Quiz, Attendance)
-   - Average score for the month
+   - Each approved scored assessment in that month (CA, Homework, Classwork, Quiz, Attendance)
+   - Average percentage for the month
    - Class average for comparison
+
+`MT`/midterm entries are excluded from the monthly CA report even when they are stored as `examType='Quiz'` with `assessmentLabel='MT'`.
 
 ### How monthly average is calculated
 
+Each assessment is first converted to a percentage, then those percentages are averaged:
+
 ```
-Monthly Average = Sum of all exam scores / Number of exams
+Assessment Percentage = (score / total) × 100
+Monthly Average = Average of the month's assessment percentages
 ```
 
-Each exam type contributes equally to the monthly average.
+Whole numbers and half-point scores are preserved through the percentage calculation.
 
 ## Midterm reports
 
@@ -42,8 +47,12 @@ Aggregates across multiple months in a term.
 
 ### How midterm score is calculated
 
+Midterm reports use approved scored midterm assessments for the term. This includes legacy rows stored with `examType='Midterm'` and bulk-uploaded `MT` rows stored as `examType='Quiz'` + `assessmentLabel='MT'`.
+
+Each midterm assessment is converted to a percentage:
+
 ```
-Midterm Score = Average of monthly averages for the term
+Midterm Percentage = (score / total) × 100
 ```
 
 ## Final reports
@@ -64,11 +73,15 @@ Combines CA, midterm, and final exam with configurable weights.
 
 ### How final score is calculated
 
+Each component is converted to a percentage first, then weighted using the active `report_config` row:
+
 ```
 Final Score = (CA Average × CA Weight) + (Midterm × Midterm Weight) + (Final Exam × Final Weight)
 ```
 
-Default weights: CA 30%, Midterm 30%, Final 40%.
+The repo-shipped default configuration is currently CA 60%, Midterm 20%, Final 20%, but the report uses whatever weights are stored in `report_config`.
+
+When `Quiz` is included in `report_config.caTypes`, `MT` rows are still excluded from the CA average and counted only as Midterm.
 
 ### Grade scale
 

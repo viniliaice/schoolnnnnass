@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import type { ExamType } from '../types';
+import { parseScoreInput } from './scores';
 
 /**
  * The production grade sheet has one fixed, validated 11-column assessment
@@ -185,9 +186,11 @@ export type ScoreCellOutcome =
  * parseFloat-style "5oops", quarter points like 4.25, negatives) is rejected.
  * A half point is stored as a decimal (the score column is NUMERIC), never
  * rounded, so partial-credit marks survive the round trip.
+ *
+ * The half-step rule itself lives in ONE place — `parseScoreInput` in
+ * `src/lib/scores.ts` — so the Bulk Upload workbook path and the manual entry
+ * screens can never drift apart.
  */
-const HALF_STEP_SCORE = /^\d+(?:\.[05])?$/;
-
 export function interpretScoreCell(raw: unknown, total: number): ScoreCellOutcome {
   const value = text(raw);
   const normalized = normalize(value);
@@ -196,10 +199,10 @@ export function interpretScoreCell(raw: unknown, total: number): ScoreCellOutcom
   if (NOT_APPLICABLE_MARKERS.has(normalized)) return { kind: 'not_applicable' };
 
   // Full-string validation: only whole or half-point (.5) values are accepted.
-  if (!HALF_STEP_SCORE.test(value)) return { kind: 'invalid', reason: 'not_half_step' };
+  const score = parseScoreInput(value);
+  if (score == null) return { kind: 'invalid', reason: 'not_half_step' };
 
-  const score = Number(value);
-  if (!Number.isFinite(score) || score < 0 || score > total) {
+  if (score < 0 || score > total) {
     return { kind: 'invalid', reason: 'out_of_range' };
   }
   return { kind: 'scored', score };

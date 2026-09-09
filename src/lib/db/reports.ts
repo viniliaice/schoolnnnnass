@@ -3,6 +3,10 @@ import { getStudentById } from './students';
 import { supabase } from '../supabase';
 import { warnFallback } from '../logger';
 
+function isMidtermReportExam(exam: Pick<Exam, 'examType' | 'assessmentLabel'>): boolean {
+  return exam.examType === 'Midterm' || (exam.examType === 'Quiz' && exam.assessmentLabel === 'MT');
+}
+
 export async function getReportComment(studentId: string, termId: string, examId?: string): Promise<ReportComment | null> {
   let query = supabase
     .from('report_comments')
@@ -142,10 +146,10 @@ export async function getMidtermReportFallback(studentId: string, termId: string
   const [studentExamsResult, classStudentsResult] = await Promise.all([
     supabase
       .from('exams')
-      .select('id, studentId, subject, score, total')
+      .select('id, studentId, subject, score, total, examType, assessmentLabel')
       .eq('studentId', studentId)
       .eq('termId', termId)
-      .eq('examType', 'Midterm')
+      .in('examType', ['Midterm', 'Quiz'])
       .eq('entryState', 'scored')
       .eq('status', 'approved')
       .returns<Exam[]>(),
@@ -162,15 +166,16 @@ export async function getMidtermReportFallback(studentId: string, termId: string
   if (studentError) throw studentError;
   if (classError) throw classError;
 
+  const filteredStudentExams = (studentExams ?? []).filter(isMidtermReportExam);
   const classStudentIds = classStudents?.map(s => s.id) ?? [];
 
   const { data: classExams, error: classExamsError } = classStudentIds.length > 0
     ? await supabase
         .from('exams')
-        .select('id, studentId, subject, score, total')
+        .select('id, studentId, subject, score, total, examType, assessmentLabel')
         .in('studentId', classStudentIds)
         .eq('termId', termId)
-        .eq('examType', 'Midterm')
+        .in('examType', ['Midterm', 'Quiz'])
         .eq('entryState', 'scored')
         .eq('status', 'approved')
         .returns<Exam[]>()
@@ -178,14 +183,15 @@ export async function getMidtermReportFallback(studentId: string, termId: string
 
   if (classExamsError) throw classExamsError;
 
+  const filteredClassExams = (classExams ?? []).filter(isMidtermReportExam);
   const bySubject = new Map<string, MidtermScore>();
 
-  for (const e of studentExams ?? []) {
+  for (const e of filteredStudentExams) {
     const percentage = e.total > 0 ? Math.round(((e.score ?? 0) / e.total) * 100) : 0;
     const grade = getGrade(percentage);
     const remark = grade === 'A' ? 'Excellent' : grade === 'B' ? 'Very Good' : grade === 'C' ? 'Good' : grade === 'D' ? 'Satisfactory' : 'Needs Improvement';
 
-    const sameSubjectClass = (classExams ?? []).filter(ex => ex.subject === e.subject);
+    const sameSubjectClass = filteredClassExams.filter(ex => ex.subject === e.subject);
     const classAvg = sameSubjectClass.length
       ? Math.round(sameSubjectClass.reduce((sum, ex) => sum + (ex.total > 0 ? ((ex.score ?? 0) / ex.total) * 100 : 0), 0) / sameSubjectClass.length)
       : 0;
@@ -222,7 +228,7 @@ export async function getMidtermReportFallback(studentId: string, termId: string
 
   const classAverages = new Map<string, number>();
   for (const sid of classStudentIds) {
-    const exams = (classExams ?? []).filter(ex => ex.studentId === sid);
+    const exams = filteredClassExams.filter(ex => ex.studentId === sid);
     const pct = exams.length
       ? Math.round(exams.reduce((sum, ex) => sum + (ex.total > 0 ? ((ex.score ?? 0) / ex.total) * 100 : 0), 0) / exams.length)
       : 0;

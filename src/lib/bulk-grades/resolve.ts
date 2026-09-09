@@ -275,7 +275,7 @@ export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveCon
         studentName: row.studentName,
         rowNumber: row.rowNumber,
         removableRow: row.rowNumber,
-        message: `Row ${row.rowNumber}: No roster student matches legacy name "${row.studentName}". Correct the Student ID or remove the row.`,
+        message: `Row ${row.rowNumber}: No roster student matches legacy name "${row.studentName}". Correct the student name/identity or remove the row.`,
       });
       return;
     }
@@ -315,7 +315,7 @@ export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveCon
         severity: 'error',
         studentId,
         studentName: student?.name,
-        message: `Duplicate ${blockDisplayName(label as never)} for ${student?.name || studentId}. Keep one row or correct the Student ID; duplicate rows are not automatically chosen.`,
+        message: `Duplicate ${blockDisplayName(label as never)} for ${student?.name || studentId}. Keep one row or correct the student identity; duplicate rows are not automatically chosen.`,
       });
     }
   }

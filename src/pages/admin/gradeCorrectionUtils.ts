@@ -2,6 +2,10 @@
 // network — the same validation the server enforces, surfaced client-side for
 // immediate feedback (the RPC remains the authority).
 
+import { isHalfStep } from '../../lib/scores';
+
+export { isHalfStep };
+
 export type CorrectionEntryState = 'scored' | 'absent' | 'not_applicable';
 
 export interface CorrectionDraft {
@@ -13,11 +17,6 @@ export interface CorrectionDraft {
 export interface ParsedNewValue {
   score: number | null;
   entryState: CorrectionEntryState;
-}
-
-/** True for whole numbers and half points (multiples of 0.5), e.g. 4 or 4.5. */
-export function isHalfStep(n: number): boolean {
-  return Number.isFinite(n) && Number.isInteger(n * 2);
 }
 
 /** Parse the draft into a concrete {score, entryState}, or an error string. */

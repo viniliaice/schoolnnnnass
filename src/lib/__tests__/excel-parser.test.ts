@@ -25,8 +25,10 @@ function workbook(subjects: string[], data: unknown[][], mutateHeader?: (header:
 }
 
 describe('bulk grade Excel parser', () => {
-  it('keeps the downloadable template aligned to all seven production subject blocks', () => {
-    const bytes = fs.readFileSync('public/BulkUploadExample.xlsx');
+  // Legacy fixed-block layout (pre flat-header). Kept as a test fixture only —
+  // the Bulk Upload Grades page generates its template with buildRosterWorkbook.
+  it('keeps the legacy fixed-block fixture aligned to all seven production subject blocks', () => {
+    const bytes = fs.readFileSync('src/lib/__tests__/fixtures/legacy-fixed-block-template.xlsx');
     const result = parseExcel(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer);
     expect(result.subjects).toEqual(['English', 'Math', 'Science', 'Social', 'Somali', 'Arabic', 'Tarabiya']);
     expect(result.columns).toHaveLength(77);
