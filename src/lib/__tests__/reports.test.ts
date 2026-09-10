@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('../supabase', () => ({
   supabase: {
     from: vi.fn(),
+    rpc: vi.fn(),
   },
 }));
 
@@ -12,16 +13,19 @@ vi.mock('../db/students', () => ({
 
 import { supabase } from '../supabase';
 import { getStudentById } from '../db/students';
-import { getMidtermReportFallback } from '../db/reports';
+import { getMidtermReportFallback, getMonthlyReportFallback } from '../db/reports';
 
 const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
 const mockGetStudentById = getStudentById as unknown as ReturnType<typeof vi.fn>;
 
 function queryReturning(result: unknown) {
+  const resolved = Promise.resolve({ data: result, error: null });
   const query: any = {
     eq: vi.fn(() => query),
     in: vi.fn(() => query),
-    returns: vi.fn(() => Promise.resolve({ data: result, error: null })),
+    maybeSingle: vi.fn(() => resolved),
+    returns: vi.fn(() => resolved),
+    then: (resolve: any, reject: any) => resolved.then(resolve, reject),
   };
   return query;
 }
@@ -120,5 +124,53 @@ describe('getMidtermReportFallback', () => {
       overall_rank: 1,
       total_students: 2,
     });
+  });
+});
+
+describe('getMonthlyReportFallback', () => {
+  it('returns CA 40% + Quiz 60% and keeps Quiz visible', async () => {
+    const exams = [
+      { id: 'e-ca', studentId: 's1', subject: 'Mathematics', score: 70, total: 100, examType: 'CA', assessmentLabel: null, month: 'September', date: '2026-09-01', status: 'approved', entryState: 'scored' },
+      { id: 'e-quiz', studentId: 's1', subject: 'Mathematics', score: 80, total: 100, examType: 'Quiz', assessmentLabel: null, month: 'September', date: '2026-09-02', status: 'approved', entryState: 'scored' },
+    ];
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'exams') return { select: () => queryReturning(exams) };
+      if (table === 'terms') return { select: () => queryReturning({ months: ['September'] }) };
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const report = await getMonthlyReportFallback('s1', 'term-1');
+    expect(report).toHaveLength(1);
+    expect(report[0].subject).toBe('Mathematics');
+    expect(report[0].ca_avg).toBe(70);
+    expect(report[0].quiz_avg).toBe(80);
+    expect(report[0].average).toBe(76);
+    expect(report[0].grade).toBe('C');
+    expect(report[0].quiz_details).toEqual(expect.arrayContaining([
+      expect.objectContaining({ examType: 'Quiz', score: 80, total: 100 }),
+    ]));
+  });
+
+  it('does not treat a missing Quiz as zero', async () => {
+    const exams = [
+      { id: 'e-ca', studentId: 's1', subject: 'Mathematics', score: 70, total: 100, examType: 'CA', assessmentLabel: null, month: 'September', date: '2026-09-01', status: 'approved', entryState: 'scored' },
+    ];
+
+    mockFrom.mockImplementation((table: string) => {
+      if (table === 'exams') return { select: () => queryReturning(exams) };
+      if (table === 'terms') {
+        const query: any = {
+          eq: vi.fn(() => query),
+          maybeSingle: vi.fn(() => Promise.resolve({ data: { months: ['September'] }, error: null })),
+        };
+        return { select: () => query };
+      }
+      throw new Error(`Unexpected table ${table}`);
+    });
+
+    const report = await getMonthlyReportFallback('s1', 'term-1');
+    expect(report[0].quiz_avg).toBeNull();
+    expect(report[0].average).toBeNull();
   });
 });

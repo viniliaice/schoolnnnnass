@@ -317,19 +317,35 @@ export interface Exam {
 }
 
 // Add report types
+export interface MonthlyAssessmentDetail {
+  type: string;
+  score: number;
+  total: number;
+  percentage: number;
+  date: string;
+  examId?: string;
+  examType?: string;
+}
+
 export interface MonthlyScore {
   subject: string;
   month: string;
-  average: number;
+  /** Weighted monthly score (CA 40% + Quiz 60%). Null when a component is missing. */
+  average: number | null;
   assessment_count: number;
-  details: {
-    type: string;
-    score: number;
-    total: number;
-    percentage: number;
-    date: string;
-    examId?: string;
-  }[];
+  details: MonthlyAssessmentDetail[];
+  ca_avg: number | null;
+  quiz_avg: number | null;
+  ca_weight: number;
+  quiz_weight: number;
+  ca_weighted: number | null;
+  quiz_weighted: number | null;
+  grade: string | null;
+  remark: string | null;
+  ca_count: number;
+  quiz_count: number;
+  ca_details: MonthlyAssessmentDetail[];
+  quiz_details: MonthlyAssessmentDetail[];
 }
 
 export interface MidtermScore {

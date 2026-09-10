@@ -10,27 +10,36 @@ The system generates three types of reports: monthly, midterm, and final. Each a
 
 ## Monthly reports
 
-Shows one month of approved continuous-assessment data per subject.
+Shows one month of approved CA and Quiz data per subject.
 
 1. Click **Monthly Report** (parent) or **Exam Reports** (admin/teacher).
 2. Select the **Student** and **Month**.
 3. The report shows per subject:
-   - Each approved scored assessment in that month (CA, Homework, Classwork, Quiz, Attendance)
-   - Average percentage for the month
-   - Class average for comparison
+   - CA average (exam types CA, Homework, Classwork, Attendance)
+   - Quiz average (`examType = 'Quiz'`, including bulk-uploaded `MT` rows)
+   - Weights: CA 40% / Quiz 60%
+   - Monthly score and the letter grade based on that monthly score
 
-`MT`/midterm entries are excluded from the monthly CA report even when they are stored as `examType='Quiz'` with `assessmentLabel='MT'`.
+Monthly reports do **not** use Midterm or Final `report_config` weights.
 
-### How monthly average is calculated
+### How monthly score is calculated
 
-Each assessment is first converted to a percentage, then those percentages are averaged:
+Each CA assessment and each Quiz is converted to a percentage, then averaged **within that component**, then weighted:
 
 ```
 Assessment Percentage = (score / total) × 100
-Monthly Average = Average of the month's assessment percentages
+CA Average   = Average of the month's CA percentages (per subject)
+Quiz Average = Average of the month's Quiz percentages (per subject)
+Monthly Score = (CA Average × 0.40) + (Quiz Average × 0.60)
 ```
 
+Example: CA 70 and Quiz 80 → `(70 × 0.40) + (80 × 0.60) = 76`. Grade is taken from 76, not from CA alone.
+
+If Quiz (or CA) has not been recorded, that component is shown as **Not recorded**. Missing scores are never turned into 0. A recorded Quiz of 0 is a real zero and is used.
+
 Whole numbers and half-point scores are preserved through the percentage calculation.
+
+`MT` bulk-upload rows (`examType='Quiz'`, `assessmentLabel='MT'`) appear in the Monthly Quiz component. Midterm reports still treat those same rows as midterm; that Midterm behaviour is unchanged.
 
 ## Midterm reports
 
