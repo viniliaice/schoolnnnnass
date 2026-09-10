@@ -10,7 +10,7 @@ import {
 } from 'react';
 
 import type { RoleSession } from '../types';
-import { supabase } from '../lib/supabase';
+import { supabase, isPlaceholderEnv } from '../lib/supabase';
 import {
   buildRoleSession,
   getProfileByAuthId,
@@ -112,6 +112,15 @@ export function RoleProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     setError(null);
+    // In preview (placeholder Supabase), accept any credentials as admin demo
+    if (isPlaceholderEnv) {
+      const mockSession: RoleSession = { role: 'admin', userId: 'preview-admin', userName: 'Preview Admin' };
+      setSession(mockSession);
+      setUser({ id: 'preview-admin', authId: 'auth-preview-admin', email: email || 'admin@mbk.edu' });
+      appliedAuthIdRef.current = 'auth-preview-admin';
+      setLoading(false);
+      return;
+    }
     try {
       const restored = await signInProfileSession(email, password);
       console.log('[RoleContext] login success:', { profileId: restored.profile.id, authId: restored.profile.auth_id, role: restored.roleSession.role, email: restored.profile.email });
@@ -143,6 +152,19 @@ export function RoleProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false;
+
+    // Preview mode: no real Supabase — auto-log in as admin so the preview is usable
+    if (isPlaceholderEnv) {
+      const mockSession: RoleSession = { role: 'admin', userId: 'preview-admin', userName: 'Preview Admin' };
+      const timer = setTimeout(() => {
+        if (cancelled) return;
+        setSession(mockSession);
+        setUser({ id: 'preview-admin', authId: 'auth-preview-admin', email: 'admin@mbk.edu' });
+        appliedAuthIdRef.current = 'auth-preview-admin';
+        setLoading(false);
+      }, 150);
+      return () => { cancelled = true; clearTimeout(timer); };
+    }
 
     /**
      * Bootstrap strategy:
