@@ -1,0 +1,4 @@
+# Source-contract tests (e.g. lesson-plan-background-review) scan and hash raw
+# file text using \n markers, so checkouts must keep LF endings — including on
+# Windows, where core.autocrlf=true would otherwise break those tests.
+* text=auto eol=lf

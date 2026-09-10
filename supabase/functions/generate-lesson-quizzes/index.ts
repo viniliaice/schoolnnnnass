@@ -56,10 +56,19 @@ interface ParsedCandidate {
   responseBytes: number;
   attempt: number;
   latencyMs: number;
+  repairs: Array<string>;
 }
 
-type GenerationStrategy = 'initial';
+type GenerationStrategy = 'initial' | 'targeted_retry';
 type ProviderName = 'gemini';
+
+// Which pipeline stage actually failed. Providers returning HTTP 200 + valid
+// JSON must never be reported as provider request failures.
+export type FailurePhase =
+  | 'PROVIDER_REQUEST_FAILED'
+  | 'PROVIDER_RESPONSE_INVALID'
+  | 'QUIZ_SCHEMA_INVALID'
+  | 'QUIZ_SEMANTIC_INVALID';
 
 export interface QuizShapeDiagnostics {
   quizCount: number | null;
@@ -153,18 +162,71 @@ export const QUIZ_VALIDATION_ERROR_CODES = [
 export type QuizValidationErrorCode = typeof QUIZ_VALIDATION_ERROR_CODES[number];
 const QUIZ_VALIDATION_ERROR_CODE_SET = new Set<string>(QUIZ_VALIDATION_ERROR_CODES);
 
+/** Semantic (meaning-level) codes as opposed to structural schema codes. */
+const SEMANTIC_VALIDATION_CODES = new Set<string>([
+  'DUPLICATE_QUESTION',
+  'DUPLICATE_ANSWER_SET',
+  'PLACEHOLDER_OR_TRUNCATION',
+  'FORBIDDEN_CONTEXT',
+  'NUMERIC_DISTRACTOR',
+  'ARITHMETIC_ANSWER',
+]);
+
+/**
+ * Structured, bounded context for a DUPLICATE_ANSWER_SET failure: which
+ * question reused another question's option set. Used ONLY to build the
+ * targeted retry correction (the excerpt goes to the provider, which generated
+ * it); it is never logged and never included in error responses.
+ */
+export interface DuplicateAnswerSetDetail {
+  /** Path of the question that reused an earlier question's option set. */
+  repeatPath: string;
+  repeatQuestion: string;
+  repeatOptions: string[];
+  /** Path of the earlier question whose option set was reused. */
+  originalPath: string;
+  originalQuestion: string;
+  originalOptions: string[];
+}
+
 class QuizValidationError extends Error {
   readonly validationErrorCode: QuizValidationErrorCode;
+  /** Structural location of the failure, e.g. quizzes[1].questions[2].options[3]. */
+  readonly validationPath: string;
+  /** Short allowlisted rule id (FORBIDDEN_CONTEXT rules only), e.g. artifact-worksheet. */
+  readonly validationRule: string | null;
+  /** Bounded DUPLICATE_ANSWER_SET context for the targeted retry; never logged. */
+  readonly duplicateAnswerSet: DuplicateAnswerSetDetail | null;
 
-  constructor(validationErrorCode: QuizValidationErrorCode, message: string) {
+  constructor(
+    validationErrorCode: QuizValidationErrorCode,
+    message: string,
+    validationPath: string,
+    validationRule: string | null = null,
+    duplicateAnswerSet: DuplicateAnswerSetDetail | null = null,
+  ) {
     super(message);
     this.name = 'QuizValidationError';
     this.validationErrorCode = validationErrorCode;
+    this.validationPath = validationPath;
+    this.validationRule = validationRule;
+    this.duplicateAnswerSet = duplicateAnswerSet;
   }
 }
 
-function failQuizValidation(validationErrorCode: QuizValidationErrorCode, message: string): never {
-  throw new QuizValidationError(validationErrorCode, message);
+function failQuizValidation(
+  validationErrorCode: QuizValidationErrorCode,
+  message: string,
+  validationPath: string,
+  validationRule: string | null = null,
+  duplicateAnswerSet: DuplicateAnswerSetDetail | null = null,
+): never {
+  throw new QuizValidationError(validationErrorCode, message, validationPath, validationRule, duplicateAnswerSet);
+}
+
+/** Bounded excerpt of generated text for retry context; never for telemetry. */
+function boundedDetailText(value: unknown, limit = 200): string {
+  return typeof value === 'string' ? value.slice(0, limit) : '';
 }
 
 /** Return only a fixed allowlisted category; never derive telemetry from model content. */
@@ -173,6 +235,75 @@ export function quizValidationErrorCode(error: unknown): QuizValidationErrorCode
   return typeof value === 'string' && QUIZ_VALIDATION_ERROR_CODE_SET.has(value)
     ? value as QuizValidationErrorCode
     : 'UNKNOWN_VALIDATION';
+}
+
+/** Structural failure location only (indices + field names); never model content. */
+export function quizValidationPath(error: unknown): string | null {
+  const value = (error as { validationPath?: unknown })?.validationPath;
+  return typeof value === 'string' && /^[a-zA-Z0-9_.[\]]{0,120}$/.test(value) ? value : null;
+}
+
+/** Short allowlisted rule id for the failure (FORBIDDEN_CONTEXT rules); never content. */
+export function quizValidationRule(error: unknown): string | null {
+  const value = (error as { validationRule?: unknown })?.validationRule;
+  return typeof value === 'string' && /^[a-z0-9-]{1,40}$/.test(value) ? value : null;
+}
+
+/**
+ * Shape-validated, bounded DUPLICATE_ANSWER_SET context. Guards the values
+ * before they can influence the retry prompt; returns null for anything
+ * malformed. Never logged.
+ */
+export function duplicateAnswerSetDetail(error: unknown): DuplicateAnswerSetDetail | null {
+  const value = (error as { duplicateAnswerSet?: unknown })?.duplicateAnswerSet;
+  if (!value || typeof value !== 'object') return null;
+  const candidate = value as Partial<Record<keyof DuplicateAnswerSetDetail, unknown>>;
+  const validOptions = (list: unknown): string[] | null => (
+    Array.isArray(list)
+      && list.length > 0
+      && list.length <= 4
+      && list.every((item) => typeof item === 'string' && item.length > 0 && item.length <= 200)
+      ? list as string[]
+      : null
+  );
+  const repeatOptions = validOptions(candidate.repeatOptions);
+  const originalOptions = validOptions(candidate.originalOptions);
+  if (
+    typeof candidate.repeatPath !== 'string' || typeof candidate.repeatQuestion !== 'string'
+    || typeof candidate.originalPath !== 'string' || typeof candidate.originalQuestion !== 'string'
+    || !repeatOptions || !originalOptions
+  ) {
+    return null;
+  }
+  return {
+    repeatPath: candidate.repeatPath.slice(0, 120),
+    repeatQuestion: candidate.repeatQuestion.slice(0, 300),
+    repeatOptions,
+    originalPath: candidate.originalPath.slice(0, 120),
+    originalQuestion: candidate.originalQuestion.slice(0, 300),
+    originalOptions,
+  };
+}
+
+/** Classify a quiz validation code into schema vs semantic failure. */
+export function failurePhaseForValidationCode(code: QuizValidationErrorCode): FailurePhase {
+  return SEMANTIC_VALIDATION_CODES.has(code) ? 'QUIZ_SEMANTIC_INVALID' : 'QUIZ_SCHEMA_INVALID';
+}
+
+/** Classify any provider/validation error into the pipeline stage that failed. */
+export function failurePhaseForError(err: unknown): FailurePhase {
+  const code = (err as { code?: unknown })?.code;
+  if (code === 'INVALID_QUIZ_RESPONSE') {
+    return failurePhaseForValidationCode(quizValidationErrorCode(err));
+  }
+  if (
+    code === 'INVALID_PROVIDER_ENVELOPE'
+    || code === 'EMPTY_PROVIDER_RESPONSE'
+    || code === 'INVALID_PROVIDER_JSON'
+  ) {
+    return 'PROVIDER_RESPONSE_INVALID';
+  }
+  return 'PROVIDER_REQUEST_FAILED';
 }
 
 function normalizeAssessmentText(value: string): string {
@@ -186,23 +317,30 @@ function normalizeAssessmentText(value: string): string {
     .trim();
 }
 
-function validateGeneratedQuizStructure(input: any, questionsPerQuiz: number, directAnswerMin: number): void {
+function validateGeneratedQuizStructure(
+  input: any,
+  questionsPerQuiz: number,
+  directAnswerMin: number,
+  quizIndex: number,
+): void {
+  const quizPath = `quizzes[${quizIndex}]`;
   if (typeof input?.title !== 'string' || !strip(input.title)) {
-    failQuizValidation('QUIZ_SHAPE', 'Generated quiz is missing a title');
+    failQuizValidation('QUIZ_SHAPE', 'Generated quiz is missing a title', `${quizPath}.title`);
   }
   if (!Array.isArray(input.questions) || input.questions.length !== questionsPerQuiz) {
-    failQuizValidation('QUIZ_SHAPE', `Generated quiz must contain exactly ${questionsPerQuiz} questions`);
+    failQuizValidation('QUIZ_SHAPE', `Generated quiz must contain exactly ${questionsPerQuiz} questions`, `${quizPath}.questions`);
   }
 
   const seen = new Set<string>();
   let directCount = 0;
   input.questions.forEach((q: any, index: number) => {
+    const questionPath = `${quizPath}.questions[${index}]`;
     if (typeof q?.question !== 'string') {
-      failQuizValidation('QUESTION_SHAPE', `Question ${index + 1} is missing question text`);
+      failQuizValidation('QUESTION_SHAPE', `Question ${index + 1} is missing question text`, `${questionPath}.question`);
     }
     const normalized = normalizeAssessmentText(q.question);
     if (!normalized || seen.has(normalized)) {
-      failQuizValidation('DUPLICATE_QUESTION', `Generated quiz has duplicate/empty question at ${index + 1}`);
+      failQuizValidation('DUPLICATE_QUESTION', `Generated quiz has duplicate/empty question at ${index + 1}`, `${questionPath}.question`);
     }
     seen.add(normalized);
 
@@ -210,62 +348,88 @@ function validateGeneratedQuizStructure(input: any, questionsPerQuiz: number, di
     // three multiple-choice questions followed by one direct-answer question.
     const expectedType = index < questionsPerQuiz - directAnswerMin ? 'multiple_choice' : 'direct_answer';
     if (q.type !== expectedType) {
-      failQuizValidation('QUESTION_TYPE', `Question ${index + 1} has invalid type or position`);
+      failQuizValidation('QUESTION_TYPE', `Question ${index + 1} has invalid type or position`, `${questionPath}.type`);
     }
 
     if (q.type === 'multiple_choice') {
       if (!Array.isArray(q.options) || q.options.length !== 4 || q.options.some((o: unknown) => typeof o !== 'string' || !strip(o))) {
-        failQuizValidation('OPTION_SHAPE', `Question ${index + 1} must have exactly 4 non-empty options`);
+        failQuizValidation('OPTION_SHAPE', `Question ${index + 1} must have exactly 4 non-empty options`, `${questionPath}.options`);
       }
       if (new Set(q.options.map((o: string) => normalizeAssessmentText(o))).size !== 4) {
-        failQuizValidation('OPTION_SHAPE', `Question ${index + 1} options are not distinct`);
+        failQuizValidation('OPTION_SHAPE', `Question ${index + 1} options are not distinct`, `${questionPath}.options`);
       }
       if (!Number.isInteger(q.correctIndex) || q.correctIndex < 0 || q.correctIndex > 3) {
-        failQuizValidation('CORRECT_INDEX', `Question ${index + 1} has invalid correctIndex`);
+        failQuizValidation('CORRECT_INDEX', `Question ${index + 1} has invalid correctIndex`, `${questionPath}.correctIndex`);
       }
     } else if (q.type === 'direct_answer') {
       directCount += 1;
       if (q.options && q.options.length > 0) {
-        failQuizValidation('DIRECT_ANSWER_SHAPE', `Direct-answer question ${index + 1} must not have options`);
+        failQuizValidation('DIRECT_ANSWER_SHAPE', `Direct-answer question ${index + 1} must not have options`, `${questionPath}.options`);
       }
       if (typeof q.rubric !== 'string' || !strip(q.rubric)) {
-        failQuizValidation('DIRECT_ANSWER_SHAPE', `Direct-answer question ${index + 1} must have a rubric`);
+        failQuizValidation('DIRECT_ANSWER_SHAPE', `Direct-answer question ${index + 1} must have a rubric`, `${questionPath}.rubric`);
       }
     }
   });
 
   if (directCount !== directAnswerMin) {
-    failQuizValidation('DIRECT_ANSWER_SHAPE', `Generated quiz must include exactly ${directAnswerMin} direct-answer question(s)`);
+    failQuizValidation('DIRECT_ANSWER_SHAPE', `Generated quiz must include exactly ${directAnswerMin} direct-answer question(s)`, `${quizPath}.questions`);
   }
 }
 
 interface ForbiddenAssessmentRule {
+  /** Short allowlisted rule id recorded in validation metadata (never content). */
+  id: string;
   pattern: RegExp;
   /** Closely matching objective language; not a category-wide exemption. */
   objectivePattern: RegExp;
+  /**
+   * 'agent' rules flag teacher-as-delivery-agent phrasing and are rescued when
+   * the question has a narrative/content frame ("the teacher in the story") —
+   * the student is then analysing content, not delivery. 'strict' rules cover
+   * lesson artifacts and administrative metadata and are never frame-rescued.
+   */
+  kind: 'agent' | 'strict';
 }
+
+// The teacher is the one making a pedagogical choice: "... should the teacher
+// use", "what did the teacher plan", "the teacher's strategy", etc. A bare
+// mention of a teacher (a story character, a historical role) is NOT delivery.
+const TEACHER_DELIVERY_AGENT_PATTERN = /\b(?:(?:should|could|would|must|can|will|shall)\s+(?:the\s+|a\s+|an\s+)?(?:teacher|instructor|educator)|(?:what|which|how|when|where|why)\s+(?:should|could|would|must|can|will|did|does|do)\s+(?:the\s+|a\s+|an\s+)?(?:teacher|instructor|educator)|(?:teacher|instructor|educator)(?:'s|s)?\s+(?:should|could|would|must|will|use|uses|used|do|does|did|plan|plans|planned|prepare|prepares|prepared|choose|chooses|chose|assign|assigns|assigned|teach|teaches|taught|deliver|delivers|delivered|present|presents|presented|demonstrate|demonstrates|demonstrated|manage|manages|managed|assess|assesses|assessed|grade|grades|graded|start|starts|started|begin|begins|began|continue|continues|continued)|(?:teacher|instructor|educator)(?:'s)?\s+(?:strateg(?:y|ies)|method|methods|technique|techniques|approach|resources?|materials?|lesson\s+plans?|planning|objective|delivery))\b/i;
+
+// A teacher (or any mentioned person) inside supplied content the student is
+// asked to comprehend: story, passage, history, experiment write-up, etc.
+const NARRATIVE_CONTENT_FRAME = /\bin\s+(?:the\s+)?(?:story|passage|text|reading|novel|poem|book|article|play|scene|film|video|history|interview|conversation)\b/i;
+
 const FORBIDDEN_ASSESSMENT_PATTERNS: ForbiddenAssessmentRule[] = [
-  { pattern: /\b(?:teacher|instructor|educator)(?:'s|s)?\b/i, objectivePattern: /\b(?:teacher|instructor|educator)(?:'s|s)?\b/i },
-  { pattern: /\b(?:teaching|instructional|classroom)\s+(?:method|strategy|technique)\b/i, objectivePattern: /\b(?:teaching|instructional|classroom)\s+(?:method|strategy|technique)\b/i },
-  { pattern: /\bworksheet(?:s)?\b/i, objectivePattern: /\bworksheet(?:s)?\b/i },
-  { pattern: /\bworkbook(?:s)?\b/i, objectivePattern: /\bworkbook(?:s)?\b/i },
-  { pattern: /\btextbook(?:s)?\b/i, objectivePattern: /\btextbook(?:s)?\b/i },
-  { pattern: /\bhandout(?:s)?\b/i, objectivePattern: /\bhandout(?:s)?\b/i },
-  { pattern: /\bresource(?:s)?\b/i, objectivePattern: /\bresource(?:s)?\b/i },
-  { pattern: /\bslide(?:s|\s+number)?\b/i, objectivePattern: /\bslide(?:s|\s+number)?\b/i },
-  { pattern: /\bpage(?:\s+\d+)?\b/i, objectivePattern: /\bpage(?:s|\s+\d+)?\b/i },
-  { pattern: /\bchart(?:s)?\b/i, objectivePattern: /\bchart(?:s)?\b/i },
-  { pattern: /\bdiagram(?:s)?\b/i, objectivePattern: /\bdiagram(?:s)?\b/i },
-  { pattern: /\btable(?:s)?\b/i, objectivePattern: /\btable(?:s)?\b/i },
-  { pattern: /\bimage(?:s)?\b/i, objectivePattern: /\bimage(?:s)?\b/i },
-  { pattern: /\bpassage(?:s)?\b/i, objectivePattern: /\bpassage(?:s)?\b/i },
-  { pattern: /\blesson plan(?:ning)?\b/i, objectivePattern: /\blesson plan(?:ning)?\b/i },
-  { pattern: /\blearning objective(?:s)?\b/i, objectivePattern: /\blearning objective(?:s)?\b/i },
-  { pattern: /\b(?:period number|lesson metadata|database id|identifier|correctindex|quiz generation|json|prompt)\b/i, objectivePattern: /\b(?:period number|lesson metadata|database id|identifier|correctindex|quiz generation|json|prompt)\b/i },
-  { pattern: /\b(?:warm[- ]?up|plenary|lesson|class|period)\s+activit(?:y|ies)\b/i, objectivePattern: /\b(?:warm[- ]?up|plenary|lesson|class|period)\s+activit(?:y|ies)\b/i },
-  { pattern: /\bactivit(?:y|ies)\s+(?:in|during|from)\s+(?:the\s+)?(?:lesson|class|period)\b/i, objectivePattern: /\bactivit(?:y|ies)\s+(?:in|during|from)\s+(?:the\s+)?(?:lesson|class|period)\b/i },
-  { pattern: /\b(?:method|strategy|technique)\s+(?:used|chosen|planned)\s+(?:in|for)\s+(?:the\s+)?(?:lesson|class)\b/i, objectivePattern: /\b(?:method|strategy|technique)\s+(?:used|chosen|planned)\s+(?:in|for)\s+(?:the\s+)?(?:lesson|class)\b/i },
-  { pattern: /\b(?:attendance|group size|due date|submission instructions|grading (?:method|policy)|mark allocation|how many minutes)\b/i, objectivePattern: /\b(?:attendance|group size|due date|submission instructions|grading (?:method|policy)|mark allocation|how many minutes)\b/i },
+  { id: 'teacher-delivery-agent', kind: 'agent', pattern: TEACHER_DELIVERY_AGENT_PATTERN, objectivePattern: /\b(?:teacher|instructor|educator)(?:'s|s)?\b/i },
+  { id: 'teaching-method', kind: 'strict', pattern: /\b(?:teaching|instructional|classroom)\s+(?:method|strategy|technique)\b/i, objectivePattern: /\b(?:teaching|instructional|classroom)\s+(?:method|strategy|technique)\b/i },
+  { id: 'artifact-worksheet', kind: 'strict', pattern: /\bworksheet(?:s)?\b/i, objectivePattern: /\bworksheet(?:s)?\b/i },
+  { id: 'artifact-workbook', kind: 'strict', pattern: /\bworkbook(?:s)?\b/i, objectivePattern: /\bworkbook(?:s)?\b/i },
+  { id: 'artifact-textbook', kind: 'strict', pattern: /\btextbook(?:s)?\b/i, objectivePattern: /\btextbook(?:s)?\b/i },
+  { id: 'artifact-handout', kind: 'strict', pattern: /\bhandout(?:s)?\b/i, objectivePattern: /\bhandout(?:s)?\b/i },
+  // "Resource"/"materials" alone are legitimate academic words (natural
+  // resources, properties of materials, library-skills questions); only the
+  // instructional-delivery collocations are forbidden.
+  { id: 'delivery-resource', kind: 'strict', pattern: /\b(?:teaching|learning|classroom|lesson|school)\s+resources?\b|\bresources?\s+(?:for|used?\s+in|during)\s+(?:the\s+)?(?:lesson|class|period|activity|week)\b/i, objectivePattern: /\b(?:teaching|learning|classroom|lesson|school)\s+resources?\b|\bresources?\s+(?:for|used?\s+in|during)\s+(?:the\s+)?(?:lesson|class|period|activity|week)\b/i },
+  { id: 'delivery-materials', kind: 'strict', pattern: /\b(?:teaching|classroom|lesson)\s+materials?\b|\bmaterials?\s+(?:for|used?\s+in)\s+(?:the\s+)?(?:lesson|class|activity)\b/i, objectivePattern: /\b(?:teaching|classroom|lesson)\s+materials?\b|\bmaterials?\s+(?:for|used?\s+in)\s+(?:the\s+)?(?:lesson|class|activity)\b/i },
+  { id: 'artifact-slide', kind: 'strict', pattern: /\bslide(?:s|\s+number)?\b/i, objectivePattern: /\bslide(?:s|\s+number)?\b/i },
+  { id: 'artifact-page', kind: 'strict', pattern: /\bpage(?:\s+\d+)?\b/i, objectivePattern: /\bpage(?:s|\s+\d+)?\b/i },
+  { id: 'artifact-chart', kind: 'strict', pattern: /\bchart(?:s)?\b/i, objectivePattern: /\bchart(?:s)?\b/i },
+  { id: 'artifact-diagram', kind: 'strict', pattern: /\bdiagram(?:s)?\b/i, objectivePattern: /\bdiagram(?:s)?\b/i },
+  { id: 'artifact-table', kind: 'strict', pattern: /\btable(?:s)?\b/i, objectivePattern: /\btable(?:s)?\b/i },
+  { id: 'artifact-image', kind: 'strict', pattern: /\bimage(?:s)?\b/i, objectivePattern: /\bimage(?:s)?\b/i },
+  // "Passage" is a normal reading-comprehension content word ("main idea of
+  // the passage") and is allowed; delivery phrasing is caught by the agent rule.
+  { id: 'lesson-plan', kind: 'strict', pattern: /\blesson plan(?:ning)?\b/i, objectivePattern: /\blesson plan(?:ning)?\b/i },
+  { id: 'learning-objective', kind: 'strict', pattern: /\blearning objective(?:s)?\b/i, objectivePattern: /\blearning objective(?:s)?\b/i },
+  { id: 'assessment-metadata', kind: 'strict', pattern: /\b(?:period number|lesson metadata|database id|identifier|correctindex|quiz generation|json|prompt)\b/i, objectivePattern: /\b(?:period number|lesson metadata|database id|identifier|correctindex|quiz generation|json|prompt)\b/i },
+  { id: 'lesson-activity', kind: 'strict', pattern: /\b(?:warm[- ]?up|plenary|lesson|class|period)\s+activit(?:y|ies)\b/i, objectivePattern: /\b(?:warm[- ]?up|plenary|lesson|class|period)\s+activit(?:y|ies)\b/i },
+  { id: 'activity-in-lesson', kind: 'strict', pattern: /\bactivit(?:y|ies)\s+(?:in|during|from)\s+(?:the\s+)?(?:lesson|class|period)\b/i, objectivePattern: /\bactivit(?:y|ies)\s+(?:in|during|from)\s+(?:the\s+)?(?:lesson|class|period)\b/i },
+  { id: 'method-for-lesson', kind: 'strict', pattern: /\b(?:method|strategy|technique)\s+(?:used|chosen|planned)\s+(?:in|for)\s+(?:the\s+)?(?:lesson|class)\b/i, objectivePattern: /\b(?:method|strategy|technique)\s+(?:used|chosen|planned)\s+(?:in|for)\s+(?:the\s+)?(?:lesson|class)\b/i },
+  // Subtle instructional-planning phrasing without the word "teacher".
+  { id: 'planning-step', kind: 'strict', pattern: /\bwhat\s+comes\s+next\s+in\s+(?:the\s+)?(?:lesson|plan)\b|\bhow\s+should\s+(?:this|the)\s+lesson\s+be\s+(?:delivered|taught|introduced|presented)\b|\bwhich\s+(?:lesson[- ]?plan|planning)\s+step\b/i, objectivePattern: /\bwhat\s+comes\s+next\s+in\s+(?:the\s+)?(?:lesson|plan)\b|\bhow\s+should\s+(?:this|the)\s+lesson\s+be\s+(?:delivered|taught|introduced|presented)\b|\bwhich\s+(?:lesson[- ]?plan|planning)\s+step\b/i },
+  { id: 'admin-metadata', kind: 'strict', pattern: /\b(?:attendance|group size|due date|submission instructions|grading (?:method|policy)|mark allocation|how many minutes)\b/i, objectivePattern: /\b(?:attendance|group size|due date|submission instructions|grading (?:method|policy)|mark allocation|how many minutes)\b/i },
 ];
 const PLACEHOLDER_PATTERN = /(?:\b(?:tbd|todo|lorem ipsum|placeholder|answer here|fill this in)\b|\[(?:insert|replace|add)[^\]]*\]|\b(?:insert|write)\s+(?:question|answer|option|text)\s+here\b|^\s*(?:question|option)\s*[a-d1-9](?:[.?:\-]|\s*$))/i;
 const TRUNCATION_PATTERN = /(?:\[(?:context\s+)?truncated\]|(?:\.{3}|…|\betc\.)\s*$)/i;
@@ -278,19 +442,86 @@ function objectiveAllows(rule: ForbiddenAssessmentRule, context: QuizQualityCont
 
 interface NumericOption { value: number; kind: string }
 
+// Short intensifier prefixes that keep an option numeric, e.g. "about 100" or
+// "at least 5". Anything longer or free-form stays non-numeric.
+const APPROXIMATE_QUANTITY_PREFIX = /^(?:about|approx\.?|approximately|around|roughly|nearly|almost|exactly|circa|at least|at most|up to|over|under|above|below|more than|less than|fewer than|no more than|no less than)\s+/i;
+const FRACTION_PATTERN = /^([+-]?\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/;
+const MIXED_FRACTION_PATTERN = /^([+-]?\d+)\s+(\d+)\/(\d+)$/;
+const CURRENCY_CODE_PATTERN = /^(usd|eur|gbp|sar|aed|egp|kes|sos|etb|ugx|tzs)$/i;
+const NUMERIC_OPTION_PATTERN = /^([$£€])?\s*([+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d{1,3}(?: \d{3})+|\d+)(?:\.\d+)?|\.\d+))\s*(%|[$£€])?(?:\s*([\p{L}°]{1,16}))?$/u;
+
+/**
+ * Parse an option that is a pure numeric value: 12, 3.5, 0.75, 010, 10.0,
+ * 25%, $15, 10$, 15 USD, 2/5, 1 1/2, -3, 1,200, 10 000, 45°, "10 apples",
+ * "about 100". Free-form sentences that merely contain a number ("World War II
+ * began in 1939") do NOT parse and remain non-numeric.
+ */
 function parseNumericOption(value: string): NumericOption | null {
-  const normalized = strip(value).replace(/[−–—]/g, '-');
-  const match = normalized.match(/^([$£€])?\s*([+-]?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?)(%)?(?:\s*([\p{L}°]+))?$/u);
+  const normalized = strip(value).replace(/[−–—]/g, '-').replace(/^~/, '');
+  const withoutPrefix = normalized.replace(APPROXIMATE_QUANTITY_PREFIX, '');
+
+  let numerator: number | null = null;
+  let denominator: number | null = null;
+  const simple = withoutPrefix.match(FRACTION_PATTERN);
+  const mixed = withoutPrefix.match(MIXED_FRACTION_PATTERN);
+  if (simple) {
+    numerator = Number(simple[1]);
+    denominator = Number(simple[2]);
+  } else if (mixed) {
+    numerator = Number(mixed[1]) * Number(mixed[2]) + Number(mixed[3]);
+    denominator = Number(mixed[2]);
+  }
+  if (numerator !== null && denominator !== null) {
+    if (denominator === 0) return null;
+    const fractionValue = numerator / denominator;
+    return Number.isFinite(fractionValue) ? { value: fractionValue, kind: 'number' } : null;
+  }
+
+  const match = withoutPrefix.match(NUMERIC_OPTION_PATTERN);
   if (!match) return null;
-  const numericValue = Number(match[2].replace(/,/g, ''));
+  const numericValue = Number(match[2].replace(/[ ,]/g, ''));
   if (!Number.isFinite(numericValue)) return null;
-  const unit = (match[4] || '').toLowerCase();
-  const kind = match[1] ? `currency:${match[1]}` : match[3] ? 'percent' : unit ? `unit:${unit}` : 'number';
-  return { value: numericValue, kind };
+
+  const prefixSymbol = match[1] || null;
+  const suffixMark = match[3] || null;
+  const trailingWord = (match[4] || '').trim();
+  const currencyCode = trailingWord ? trailingWord.match(CURRENCY_CODE_PATTERN) : null;
+  const unitWord = trailingWord && !currencyCode ? trailingWord.toLowerCase() : '';
+
+  if (prefixSymbol && suffixMark && prefixSymbol !== suffixMark) return null;
+  if ((prefixSymbol || currencyCode) && suffixMark === '%') return null;
+  if (suffixMark && suffixMark !== '%' && unitWord) return null;
+
+  const bareSymbol = prefixSymbol ?? (suffixMark && suffixMark !== '%' ? suffixMark : null);
+  if (prefixSymbol && currencyCode) return { value: numericValue, kind: `currency:${currencyCode[1].toLowerCase()}` };
+  if (bareSymbol) {
+    return { value: numericValue, kind: `currency:${bareSymbol.toLowerCase()}` };
+  }
+  if (suffixMark === '%' || ['percent', 'percentage', 'pct'].includes(unitWord)) {
+    return { value: numericValue, kind: 'percent' };
+  }
+  if (currencyCode) return { value: numericValue, kind: `currency:${currencyCode[1].toLowerCase()}` };
+  if (unitWord) return { value: numericValue, kind: `unit:${unitWord}` };
+  return { value: numericValue, kind: 'number' };
 }
 
-function parseArithmeticExpression(question: string): { result: number } | null {
+/**
+ * May two parsed numeric kinds share one question's option set? Decimals and
+ * fractions are one abstract numeric type; concrete measurement units (days,
+ * hours, km, m) are legitimately comparable with each other. Percentages and
+ * each currency are their own types and must not be mixed with bare numbers.
+ */
+function compatibleNumericKinds(left: string, right: string): boolean {
+  if (left === right) return true;
+  if (left.startsWith('unit:') && right.startsWith('unit:')) return true;
+  return false;
+}
+
+function parseArithmeticExpression(question: string, questionPath = 'quizzes'): { result: number } | null {
   const normalized = question.replace(/[−–—]/g, '-');
+  // "3/4 of 12" or "25% of 80" are multiplicative phrasings, not division: a
+  // regex cannot reliably solve them, so skip rather than mis-solve them.
+  if (/(?:\d+\s*\/\s*\d+|\d+\s*%)\s+of\s+\d/i.test(normalized)) return null;
   const match = normalized.match(/(?:^|[^\d.])(-?\d+(?:\.\d+)?)\s*([+*×÷/]|\s[xX]\s|-)\s*(-?\d+(?:\.\d+)?)(?!\d|\.\d)/);
   if (!match) return null;
   const left = Number(match[1]);
@@ -301,11 +532,11 @@ function parseArithmeticExpression(question: string): { result: number } | null 
   else if (operator === '-') result = left - right;
   else if (operator === '*' || operator === '×' || operator === 'x') result = left * right;
   else {
-    if (right === 0) failQuizValidation('ARITHMETIC_ANSWER', 'Arithmetic question divides by zero');
+    if (right === 0) failQuizValidation('ARITHMETIC_ANSWER', 'Arithmetic question divides by zero', questionPath);
     result = left / right;
   }
   if (!Number.isFinite(result)) {
-    failQuizValidation('ARITHMETIC_ANSWER', 'Arithmetic question has a non-finite answer');
+    failQuizValidation('ARITHMETIC_ANSWER', 'Arithmetic question has a non-finite answer', questionPath);
   }
   return { result };
 }
@@ -318,49 +549,86 @@ function asksForArithmeticResult(question: string): boolean {
   return /\b(?:what is|calculate|compute|solve|evaluate|find (?:the )?(?:answer|value|result|sum|difference|product|quotient)|how (?:do|would|can|should) (?:you|a student)?\s*solve|explain how to solve)\b|(?:equals|equal to)\s*\?*\s*$/i.test(question);
 }
 
-function validateNumericOptions(question: any, label: string): void {
-  if (question.type !== 'multiple_choice' || !question.options) return;
-  const parsedOptions = question.options.map(parseNumericOption);
+/**
+ * Semantic numeric-distractor rule.
+ *
+ * The question type is decided by the CORRECT ANSWER, not by counting digits:
+ * - If the correct answer is non-numeric (a conceptual/definition question),
+ *   any bare-numeric distractor ("12", "45%") is meaningless → reject.
+ * - If the correct answer is numeric (a genuinely numeric/calculation/date/
+ *   quantity/price question), numeric distractors are expected and allowed;
+ *   the option set must simply stay one comparable numeric type with distinct
+ *   values (fractions and decimals are the same type; different measurement
+ *   units such as "24 hours" and "365 days" may be compared in one set).
+ */
+function validateNumericOptions(question: any, label: string, questionPath: string): void {
+  if (question.type !== 'multiple_choice' || !Array.isArray(question.options)) return;
+  const options: string[] = question.options;
+  const correctIndex: unknown = question.correctIndex;
+  // CORRECT_INDEX shape is validated structurally; guard standalone callers.
+  if (!Number.isInteger(correctIndex) || (correctIndex as number) < 0 || (correctIndex as number) >= options.length) return;
+
+  const parsedOptions = options.map((option) => parseNumericOption(option));
   const numericCount = parsedOptions.filter(Boolean).length;
-  if (numericCount > 0 && numericCount < question.options.length) {
-    failQuizValidation('NUMERIC_DISTRACTOR', `${label} mixes numeric answers with malformed numeric distractors`);
+  if (numericCount === 0) return; // fully non-numeric question: nothing numeric to police
+
+  const correctIsNumeric = parsedOptions[correctIndex as number] !== null;
+  if (!correctIsNumeric) {
+    const firstNumeric = parsedOptions.findIndex((option) => option !== null);
+    failQuizValidation(
+      'NUMERIC_DISTRACTOR',
+      `${label} uses a numeric distractor on a non-numeric question`,
+      `${questionPath}.options[${firstNumeric}]`,
+    );
   }
-  if (numericCount !== question.options.length) return;
+
+  // Numeric question: every option must be numeric (no word-numbers or prose
+  // mixed into an otherwise numeric set — those are malformed distractors).
+  if (numericCount !== options.length) {
+    const firstNonNumeric = parsedOptions.findIndex((option) => option === null);
+    failQuizValidation(
+      'NUMERIC_DISTRACTOR',
+      `${label} mixes numeric answers with malformed numeric distractors`,
+      `${questionPath}.options[${firstNonNumeric}]`,
+    );
+  }
 
   const numericOptions = parsedOptions as NumericOption[];
-  if (new Set(numericOptions.map((option) => option.kind)).size !== 1) {
-    failQuizValidation('NUMERIC_DISTRACTOR', `${label} numeric distractors must use the same value type`);
-  }
   for (let left = 0; left < numericOptions.length; left += 1) {
     for (let right = left + 1; right < numericOptions.length; right += 1) {
-      if (nearlyEqual(numericOptions[left].value, numericOptions[right].value)) {
-        failQuizValidation('NUMERIC_DISTRACTOR', `${label} has duplicate numeric answer values`);
+      if (!compatibleNumericKinds(numericOptions[left].kind, numericOptions[right].kind)) {
+        failQuizValidation('NUMERIC_DISTRACTOR', `${label} numeric distractors must use the same value type`, `${questionPath}.options`);
+      }
+      // Only values with the identical kind/unit are directly comparable.
+      if (numericOptions[left].kind === numericOptions[right].kind
+        && nearlyEqual(numericOptions[left].value, numericOptions[right].value)) {
+        failQuizValidation('NUMERIC_DISTRACTOR', `${label} has duplicate numeric answer values`, `${questionPath}.options`);
       }
     }
   }
 
-  const expression = parseArithmeticExpression(question.question);
+  const expression = parseArithmeticExpression(question.question, questionPath);
   if (!expression || !asksForArithmeticResult(question.question)) return;
   const matching = numericOptions
     .map((option, index) => nearlyEqual(option.value, expression.result) ? index : -1)
     .filter((index) => index >= 0);
   if (matching.length !== 1) {
-    failQuizValidation('ARITHMETIC_ANSWER', `${label} must contain exactly one solved arithmetic answer`);
+    failQuizValidation('ARITHMETIC_ANSWER', `${label} must contain exactly one solved arithmetic answer`, questionPath);
   }
   if (question.correctIndex !== matching[0]) {
-    failQuizValidation('ARITHMETIC_ANSWER', `${label} correctIndex does not match the solved arithmetic answer`);
+    failQuizValidation('ARITHMETIC_ANSWER', `${label} correctIndex does not match the solved arithmetic answer`, `${questionPath}.correctIndex`);
   }
 }
 
-function validateDirectArithmetic(question: any, label: string): void {
+function validateDirectArithmetic(question: any, label: string, questionPath: string): void {
   if (question.type !== 'direct_answer' || !question.rubric || !asksForArithmeticResult(question.question)) return;
-  const expression = parseArithmeticExpression(question.question);
+  const expression = parseArithmeticExpression(question.question, questionPath);
   if (!expression) return;
   const rubricNumbers = question.rubric
     .match(/[+-]?(?:(?:\d{1,3}(?:,\d{3})+)|\d+)(?:\.\d+)?/g)
     ?.map((value: string) => Number(value.replace(/,/g, ''))) || [];
   if (!rubricNumbers.some((value: number) => nearlyEqual(value, expression.result))) {
-    failQuizValidation('ARITHMETIC_ANSWER', `${label} rubric does not include the solved arithmetic answer`);
+    failQuizValidation('ARITHMETIC_ANSWER', `${label} rubric does not include the solved arithmetic answer`, `${questionPath}.rubric`);
   }
 }
 
@@ -368,42 +636,72 @@ function validateDirectArithmetic(question: any, label: string): void {
 export function validateQuizQuality(input: unknown, context: QuizQualityContext = {}): void {
   const quizzes = (input as any)?.quizzes;
   if (!Array.isArray(quizzes)) {
-    failQuizValidation('QUIZ_SHAPE', 'Quiz quality validation requires quizzes');
+    failQuizValidation('QUIZ_SHAPE', 'Quiz quality validation requires quizzes', 'quizzes');
   }
   const seenQuestions = new Set<string>();
-  const seenAnswerSets = new Set<string>();
+  // First use of each normalized option set, retained so a DUPLICATE_ANSWER_SET
+  // failure can name BOTH colliding questions in the targeted retry prompt.
+  const seenAnswerSets = new Map<string, { path: string; question: string; options: string[] }>();
 
   quizzes.forEach((quiz: any, quizIndex: number) => {
+    const quizPath = `quizzes[${quizIndex}]`;
     if (PLACEHOLDER_PATTERN.test(quiz.title) || TRUNCATION_PATTERN.test(quiz.title)) {
-      failQuizValidation('PLACEHOLDER_OR_TRUNCATION', `Quiz ${quizIndex + 1} title contains placeholder or truncated text`);
+      failQuizValidation('PLACEHOLDER_OR_TRUNCATION', `Quiz ${quizIndex + 1} title contains placeholder or truncated text`, `${quizPath}.title`);
     }
     quiz.questions.forEach((question: any, questionIndex: number) => {
       const label = `Quiz ${quizIndex + 1} question ${questionIndex + 1}`;
+      const questionPath = `${quizPath}.questions[${questionIndex}]`;
       const normalizedQuestion = normalizeAssessmentText(question.question);
       if (seenQuestions.has(normalizedQuestion)) {
-        failQuizValidation('DUPLICATE_QUESTION', `${label} duplicates a question from another quiz`);
+        failQuizValidation('DUPLICATE_QUESTION', `${label} duplicates a question from another quiz`, `${questionPath}.question`);
       }
       seenQuestions.add(normalizedQuestion);
 
       const assessmentText = [question.question, ...(question.options || []), question.rubric || ''].filter(Boolean);
       if (assessmentText.some((value: string) => PLACEHOLDER_PATTERN.test(value) || TRUNCATION_PATTERN.test(value))) {
-        failQuizValidation('PLACEHOLDER_OR_TRUNCATION', `${label} contains placeholder or truncated text`);
+        failQuizValidation('PLACEHOLDER_OR_TRUNCATION', `${label} contains placeholder or truncated text`, questionPath);
       }
       for (const rule of FORBIDDEN_ASSESSMENT_PATTERNS) {
-        if (assessmentText.some((value: string) => rule.pattern.test(value)) && !objectiveAllows(rule, context)) {
-          failQuizValidation('FORBIDDEN_CONTEXT', `${label} asks about teacher delivery, resources, or lesson planning`);
-        }
+        if (!assessmentText.some((value: string) => rule.pattern.test(value))) continue;
+        if (objectiveAllows(rule, context)) continue;
+        // A teacher inside content the student is analysing ("the teacher in
+        // the story discovered...") is academic content, not lesson delivery.
+        if (rule.kind === 'agent' && NARRATIVE_CONTENT_FRAME.test(question.question)) continue;
+        failQuizValidation(
+          'FORBIDDEN_CONTEXT',
+          `${label} asks about teacher delivery, resources, or lesson planning`,
+          questionPath,
+          rule.id,
+        );
       }
 
       if (question.type === 'multiple_choice' && question.options) {
         const answerSet = question.options.map(normalizeAssessmentText).sort().join('|');
-        if (seenAnswerSets.has(answerSet)) {
-          failQuizValidation('DUPLICATE_ANSWER_SET', `${label} repeats an answer set from another question`);
+        const original = seenAnswerSets.get(answerSet);
+        if (original) {
+          failQuizValidation(
+            'DUPLICATE_ANSWER_SET',
+            `${label} repeats an answer set from another question`,
+            `${questionPath}.options`,
+            null,
+            {
+              repeatPath: questionPath,
+              repeatQuestion: boundedDetailText(question.question),
+              repeatOptions: question.options.map((option: unknown) => boundedDetailText(option)),
+              originalPath: original.path,
+              originalQuestion: original.question,
+              originalOptions: original.options,
+            },
+          );
         }
-        seenAnswerSets.add(answerSet);
+        seenAnswerSets.set(answerSet, {
+          path: questionPath,
+          question: boundedDetailText(question.question),
+          options: question.options.map((option: unknown) => boundedDetailText(option)),
+        });
       }
-      validateNumericOptions(question, label);
-      validateDirectArithmetic(question, label);
+      validateNumericOptions(question, label, questionPath);
+      validateDirectArithmetic(question, label, questionPath);
     });
   });
 }
@@ -428,9 +726,11 @@ export function validateQuizResponse(
 ): void {
   const quizzes = (input as any)?.quizzes;
   if (!Array.isArray(quizzes) || quizzes.length !== quizCount) {
-    failQuizValidation('QUIZ_COUNT', `LLM must return exactly ${quizCount} quizzes`);
+    failQuizValidation('QUIZ_COUNT', `LLM must return exactly ${quizCount} quizzes`, 'quizzes');
   }
-  quizzes.forEach((quiz: unknown) => validateGeneratedQuizStructure(quiz, questionsPerQuiz, directAnswerMin));
+  quizzes.forEach((quiz: unknown, quizIndex: number) => {
+    validateGeneratedQuizStructure(quiz, questionsPerQuiz, directAnswerMin, quizIndex);
+  });
   validateQuizQuality(input, qualityContext);
 }
 
@@ -449,6 +749,70 @@ export function summarizeQuizShape(input: unknown): QuizShapeDiagnostics {
       Array.isArray(quiz?.questions) ? quiz.questions.length : null
     )),
   };
+}
+
+export type QuizRepairKind =
+  | 'trim_whitespace'
+  | 'numeric_option'
+  | 'correct_index'
+  | 'drop_empty_options';
+
+export interface QuizRepairResult {
+  value: unknown;
+  repairs: QuizRepairKind[];
+}
+
+const CORRECT_INDEX_STRING_PATTERN = /^\s*(?:([0-3])|([A-Da-d]))[).]?\s*$/;
+
+/**
+ * Deterministic, meaning-preserving normalization applied BEFORE validation.
+ * It never invents, reorders, or deletes quiz content: it only trims stray
+ * whitespace, stringifies numeric JSON options (10 → "10"), maps letter or
+ * string indexes ("B" / "1" → 1), and drops empty options arrays from
+ * direct-answer questions. A repaired candidate is still fully validated.
+ */
+export function repairQuizCandidate(input: unknown): QuizRepairResult {
+  const repairs = new Set<QuizRepairKind>();
+  const quizzes = (input as any)?.quizzes;
+  if (!Array.isArray(quizzes)) return { value: input, repairs: [] };
+
+  const cleanString = (value: unknown): string => {
+    const cleaned = typeof value === 'string' ? strip(value) : value;
+    if (typeof cleaned === 'string' && cleaned !== value) repairs.add('trim_whitespace');
+    return cleaned as string;
+  };
+
+  quizzes.forEach((quiz: any) => {
+    if (!quiz || typeof quiz !== 'object' || !Array.isArray(quiz.questions)) return;
+    if (typeof quiz.title === 'string') quiz.title = cleanString(quiz.title);
+    quiz.questions.forEach((question: any) => {
+      if (!question || typeof question !== 'object') return;
+      if (typeof question.question === 'string') question.question = cleanString(question.question);
+      if (typeof question.rubric === 'string') question.rubric = cleanString(question.rubric);
+      if (typeof question.explanation === 'string') question.explanation = cleanString(question.explanation);
+
+      if (question.type === 'multiple_choice' && Array.isArray(question.options)) {
+        question.options = question.options.map((option: unknown) => {
+          if (typeof option === 'number' && Number.isFinite(option)) {
+            repairs.add('numeric_option');
+            return cleanString(String(option));
+          }
+          return cleanString(option);
+        });
+        if (typeof question.correctIndex === 'string') {
+          const match = question.correctIndex.match(CORRECT_INDEX_STRING_PATTERN);
+          if (match) {
+            repairs.add('correct_index');
+            question.correctIndex = match[1] ? Number(match[1]) : (question.correctIndex.trim().toUpperCase().charCodeAt(0) - 65);
+          }
+        }
+      } else if (question.type === 'direct_answer' && Array.isArray(question.options) && question.options.length === 0) {
+        delete question.options;
+        repairs.add('drop_empty_options');
+      }
+    });
+  });
+  return { value: input, repairs: [...repairs] };
 }
 
 /** Drop provider-added metadata and retain only fields consumed by the client. */
@@ -575,7 +939,7 @@ export function buildCompactLessonContext(payload: GeneratePayload, maxChars = M
 }
 
 /** Build a strict prompt whose normal path is below 6,000 chars and can never exceed 8,000. */
-export function buildCompactPrompt(payload: GeneratePayload): string {
+export function buildCompactPrompt(payload: GeneratePayload, maxPromptChars: number = MAX_PROMPT_CHARS): string {
   // Quiz generation is intentionally fixed to the existing client contract.
   const quizCount = 3;
   const questionsPerQuiz = 4;
@@ -594,11 +958,14 @@ The example shows one quiz object only to define its fields. The actual "quizzes
 
 Student-assessment rules:
 - Assess only what STUDENTS know, understand, apply, or reason about from the supplied student topics and learning objectives.
-- NEVER ask about the teacher, lesson administration, planning decisions, activities, teaching methods, resources, worksheets, workbooks, textbook pages, slides, charts/diagrams not supplied here, metadata, IDs, prompts, or quiz construction. A normally forbidden item is allowed only when the student learning objective explicitly asks students to learn that item.
+- NEVER ask about the teacher's job or choices: what a teacher should do, use, prepare, plan, or choose; lesson administration, planning decisions, lesson-plan steps, teaching methods or strategies, classroom resources or materials, worksheets, workbooks, textbook pages, slides, charts/diagrams not supplied here, metadata, IDs, prompts, or quiz construction. A normally forbidden item is allowed only when the student learning objective explicitly asks students to learn that item.
+- Questions assess the STUDENT, never the delivery of the lesson. It IS acceptable to mention an experiment, activity, demonstration, example, lesson, passage, or resource when the question tests the underlying academic concept — e.g. "Which activity produces glucose in a plant?" or "What is the main idea of the passage?".
 - Match the class/grade. Use concrete, simple recall or application for KG and early primary; do not force abstract higher-order reasoning. Use suitably deeper application or reasoning only for older grades.
 - Vary the angle across all 12 questions (knowledge, understanding, application, or reasoning as age-appropriate). Do not repeat or lightly reword a stem or answer set across quizzes.
 - Every multiple_choice has exactly 4 meaningful, pairwise-distinct options and correctIndex 0–3.
+- Give every question its OWN four options: never reuse or lightly reword another question's option set, even across different quizzes. After ignoring capitalization, punctuation, whitespace, and number formatting, no two questions may share the same set of four options.
 - Each wrong option must be a plausible same-type answer based on a different likely student mistake or misconception; never use nonsense, malformed values, or differences only in spacing/punctuation.
+- Distractor typing (decide from the question): if the question genuinely expects a numeric value (calculation, count, date, measurement, price, percentage), make ALL 4 options numeric values in ONE shared type and format — e.g. "What is 7 + 5?" → 10, 11, 12, 13; "How much did it cost?" → $5, $10, $15, $20. If the question is conceptual (definition, vocabulary, science, history, reading), every option must be a meaningful NON-numeric alternative of the same kind as the correct answer — NEVER a bare number such as 12 or 35.
 - For every mathematical question, solve it independently before writing options. Include exactly one correct value, make correctIndex point to it, and re-check the operation. Numeric distractors must be valid, distinct, same-type values caused by plausible errors. For direct arithmetic, state the solved answer in the rubric.
 - Every direct_answer has a non-empty rubric and no options, correctIndex, or explanation. It must assess student learning, not lesson delivery.
 - Do not include explanations or rationales. Keep all questions, options, titles, and rubrics complete and concise; never use placeholders or truncated text.
@@ -608,19 +975,98 @@ Lesson context:
 `;
 
   const targetContextLimit = Math.max(0, TARGET_PROMPT_CHARS - instructions.length - 1);
-  const hardContextLimit = Math.max(0, MAX_PROMPT_CHARS - instructions.length);
+  const hardContextLimit = Math.max(0, Math.min(maxPromptChars, MAX_PROMPT_CHARS) - instructions.length);
   const context = buildCompactLessonContext(payload, Math.min(MAX_CONTEXT_CHARS, targetContextLimit, hardContextLimit));
   const prompt = `${instructions}${context}`;
 
-  if (prompt.length > MAX_PROMPT_CHARS) {
+  if (prompt.length > maxPromptChars) {
     // Defensive invariant: context is already bounded, so reaching this means a
     // future instruction change bypassed the budget and must not hit a provider.
-    throw new Error(`Prompt exceeds hard maximum of ${MAX_PROMPT_CHARS} characters`);
+    throw new Error(`Prompt exceeds hard maximum of ${maxPromptChars} characters`);
   }
   if (prompt.length >= TARGET_PROMPT_CHARS) {
     console.warn('[generate-lesson-quizzes] prompt reached target ceiling', { promptChars: prompt.length });
   }
   return prompt;
+}
+
+/**
+ * Validation-error-specific corrections appended to the retry attempt. Retrying
+ * with the identical prompt tends to reproduce the same invalid structure, so
+ * the second attempt is told exactly which rule it broke.
+ */
+export const TARGETED_RETRY_CORRECTIONS: Record<QuizValidationErrorCode, string> = {
+  NUMERIC_DISTRACTOR: `CORRECTION — your previous quiz response failed validation: a distractor was classified as an invalid numeric distractor (NUMERIC_DISTRACTOR). Regenerate the full quiz set.
+- Numeric options are allowed ONLY when the question genuinely expects a numeric or calculation answer (count, date, measurement, price, percentage). For those questions all 4 options must be numeric values of one shared type and format.
+- For conceptual, vocabulary, reading, science, history, or definition questions, every distractor must be a semantically plausible NON-numeric alternative of the same kind as the correct answer. Never use a bare number as a conceptual distractor.
+- Never repeat the previous response's questions; write a fresh, valid set.
+- Satisfy every schema rule and return JSON only.`,
+  QUIZ_COUNT: `CORRECTION — your previous response had the wrong quiz count. Return EXACTLY 3 quizzes, each with EXACTLY 4 questions. Return JSON only.`,
+  QUIZ_SHAPE: `CORRECTION — your previous response had a malformed quiz object. Every quiz needs a concise non-empty title and exactly 4 questions. Return JSON only.`,
+  QUESTION_SHAPE: `CORRECTION — a question in your previous response was missing its question text. Every question needs a complete, concise stem. Return JSON only.`,
+  QUESTION_TYPE: `CORRECTION — your previous response broke the question order. In EACH quiz, questions 1-3 must be multiple_choice and question 4 must be direct_answer. Return JSON only.`,
+  OPTION_SHAPE: `CORRECTION — a multiple-choice question in your previous response had invalid options. Every multiple_choice question needs EXACTLY 4 non-empty, pairwise-distinct string options. Return JSON only.`,
+  CORRECT_INDEX: `CORRECTION — a question in your previous response had an invalid correctIndex. correctIndex must be the integer 0, 1, 2, or 3 pointing at the correct option. Return JSON only.`,
+  DIRECT_ANSWER_SHAPE: `CORRECTION — a direct-answer question in your previous response was malformed. Question 4 of each quiz must be direct_answer with a non-empty rubric and NO options. Return JSON only.`,
+  DUPLICATE_QUESTION: `CORRECTION — your previous response repeated a question stem across quizzes. Every question stem must be unique across all 3 quizzes. Return JSON only.`,
+  DUPLICATE_ANSWER_SET: `CORRECTION — your previous response reused the same entire answer set for two different questions (DUPLICATE_ANSWER_SET). Regenerate the full quiz set so every multiple-choice question has its OWN option set, different from every other question's. Options must stay distinct even after normalizing capitalization, punctuation, whitespace, and number formatting. Return JSON only.`,
+  PLACEHOLDER_OR_TRUNCATION: `CORRECTION — your previous response contained placeholder or truncated text. Write every title, question, option, and rubric complete and concise with no placeholders or trailing ellipses. Return JSON only.`,
+  FORBIDDEN_CONTEXT: `CORRECTION — your previous quiz response failed validation because it contained a teacher-facing or instructional-delivery question (FORBIDDEN_CONTEXT). Regenerate the ENTIRE quiz set with fresh questions.
+- Every question must test STUDENT learning from the supplied lesson content: what a student knows, understands, applies, or reasons about.
+- Do NOT ask about teacher actions, lesson delivery, teaching strategies or methods, classroom resources or materials, classroom management, lesson planning, or what a teacher should do, use, prepare, or choose.
+- A question MAY mention an experiment, activity, demonstration, lesson, classroom example, or resource when the student is being tested on the underlying academic concept (e.g. "Which activity produces glucose in a plant?").
+- Do not keep or reword the problematic question — write a completely fresh one.
+- Return the exact required JSON structure and nothing else.`,
+  ARITHMETIC_ANSWER: `CORRECTION — an arithmetic question in your previous response had a wrong or ambiguous answer. Solve each calculation independently, place exactly one correct value among the options, make correctIndex point to it, and state the solved answer in the rubric for direct arithmetic. Return JSON only.`,
+  UNKNOWN_VALIDATION: `CORRECTION — your previous response failed quiz validation. Re-read every rule in this prompt, especially the output contract and question shapes, and regenerate a fully valid quiz set. Return JSON only.`,
+};
+
+/**
+ * Targeted repair block for DUPLICATE_ANSWER_SET, naming the exact colliding
+ * questions with a bounded excerpt of the previous response. The excerpt goes
+ * to the provider only (the provider generated it); it is never logged and
+ * never returned to clients.
+ */
+export function duplicateAnswerSetRetryDetail(detail: DuplicateAnswerSetDetail): string {
+  const listOptions = (options: string[]) => options
+    .slice(0, 4)
+    .map((option, index) => `${'ABCD'[index] || '?'}. ${option}`)
+    .join('\n');
+  return `TARGETED REPAIR — DUPLICATE_ANSWER_SET: two questions reused the same answer options.
+- Repeating question at ${detail.repeatPath}: "${detail.repeatQuestion}" with current options:
+${listOptions(detail.repeatOptions)}
+- It repeats the exact option set of the earlier question at ${detail.originalPath}: "${detail.originalQuestion}".
+Required correction:
+- Replace the repeating question's options with four NEW distinct options specific to that question (or write a fresh question on the same subtopic).
+- Preserve the question's topic and the correct answer's meaning.
+- Do not change unrelated questions.
+- Do not repeat normalized option text: options must differ by more than capitalization, punctuation, or whitespace, and numeric options must not normalize to the same value.
+- No two questions may share the same set of four options.
+- Return the complete corrected quiz set as JSON only.`;
+}
+
+/** The correction block appended to a retry prompt for a specific code. */
+export function targetedRetryCorrection(
+  code: QuizValidationErrorCode,
+  duplicateDetail: DuplicateAnswerSetDetail | null = null,
+): string {
+  const text = TARGETED_RETRY_CORRECTIONS[code] || TARGETED_RETRY_CORRECTIONS.UNKNOWN_VALIDATION;
+  const repair = code === 'DUPLICATE_ANSWER_SET' && duplicateDetail
+    ? `\n${duplicateAnswerSetRetryDetail(duplicateDetail)}`
+    : '';
+  return `\n\nVALIDATION FEEDBACK FOR THIS RETRY ATTEMPT\n${text}${repair}`;
+}
+
+/** Append a retry correction while respecting the hard prompt budget. */
+export function buildRetryPrompt(
+  basePrompt: string,
+  payload: GeneratePayload,
+  correction: string,
+): string {
+  if (basePrompt.length + correction.length <= MAX_PROMPT_CHARS) {
+    return `${basePrompt}${correction}`;
+  }
+  return `${buildCompactPrompt(payload, MAX_PROMPT_CHARS - correction.length)}${correction}`;
 }
 
 /** Parse exact JSON or a harmless markdown/prose wrapper around one balanced object. */
@@ -773,7 +1219,7 @@ async function sendProviderRequest(
   const serializedRequest = JSON.stringify({
     model,
     input: prompt,
-    system_instruction: 'Generate rigorous school quizzes and output only the schema-conforming JSON result.',
+    system_instruction: 'Generate rigorous school quizzes and output only the schema-conforming JSON result. Match distractor types to the question: numeric options only when the question expects a numeric answer; plausible non-numeric alternatives for conceptual questions.',
     response_format: {
       type: 'text',
       mime_type: 'application/json',
@@ -906,6 +1352,7 @@ async function callProviderWithTimeout(
       httpStatus: status ?? null,
       validJson: typeof err?.validJson === 'boolean' ? err.validJson : null,
       validationResult: 'not_run',
+      failurePhase: failurePhaseForError(err),
       quizCount: null,
       questionCounts: [],
       responseChars: typeof err?.responseChars === 'number' ? err.responseChars : null,
@@ -940,12 +1387,17 @@ async function requestParsedCandidate(
   const responseBytes = new TextEncoder().encode(output.raw).byteLength;
   try {
     const value = parseQuizJson(output.raw);
+    // Deterministic, meaning-preserving normalization runs before validation so
+    // cosmetic provider drift (untrimmed strings, numeric JSON options, letter
+    // indexes) cannot masquerade as schema/semantic failures.
+    const repaired = repairQuizCandidate(value);
     return {
-      value,
+      value: repaired.value,
       responseChars,
       responseBytes,
       attempt: output.attempt,
       latencyMs: output.latencyMs,
+      repairs: repaired.repairs,
     };
   } catch {
     console.error('[generate-lesson-quizzes] provider output metadata', {
@@ -956,6 +1408,9 @@ async function requestParsedCandidate(
       httpStatus: 200,
       validJson: false,
       validationResult: 'not_run',
+      failurePhase: 'PROVIDER_RESPONSE_INVALID',
+      validationErrorCode: 'INVALID_PROVIDER_JSON',
+      validationPath: null,
       quizCount: null,
       questionCounts: [],
       responseChars,
@@ -993,6 +1448,8 @@ function validateCandidateWithTelemetry(
       validJson: true,
       validationResult: 'passed',
       validationErrorCode: null,
+      validationPath: null,
+      repairs: candidate.repairs,
       ...summarizeQuizShape(candidate.value),
       responseChars: candidate.responseChars,
       responseBytes: candidate.responseBytes,
@@ -1012,6 +1469,10 @@ function validateCandidateWithTelemetry(
       validJson: true,
       validationResult: 'failed',
       validationErrorCode: quizValidationErrorCode(validationError),
+      validationPath: quizValidationPath(validationError),
+      validationRule: quizValidationRule(validationError),
+      failurePhase: failurePhaseForValidationCode(quizValidationErrorCode(validationError)),
+      repairs: candidate.repairs,
       ...summarizeQuizShape(candidate.value),
       responseChars: candidate.responseChars,
       responseBytes: candidate.responseBytes,
@@ -1020,8 +1481,55 @@ function validateCandidateWithTelemetry(
       executionMs: Date.now() - diagnostics.startedAt,
       totalProviderAttempts: diagnostics.providerAttempts,
     });
+    logValidationFailureDiagnostics(candidate.value, validationError);
     throw validationError;
   }
+}
+
+/** Opt-in diagnostics flag (QUIZ_DEBUG_DIAGNOSTICS=1|true|yes) for staging. */
+function debugDiagnosticsEnabled(): boolean {
+  try {
+    const flag = (globalThis as any).Deno?.env?.get?.('QUIZ_DEBUG_DIAGNOSTICS');
+    const value = typeof flag === 'string' ? flag.trim().toLowerCase() : '';
+    return value === '1' || value === 'true' || value === 'yes';
+  } catch {
+    return false;
+  }
+}
+
+const VALIDATION_QUESTION_PATH_PATTERN = /^quizzes\[(\d+)\]\.questions\[(\d+)\](?:\.options\[(\d+)\])?$/;
+
+function boundedDiagnosticText(value: unknown, maxChars: number): string | null {
+  if (typeof value !== 'string') return null;
+  return value.replace(/\s+/g, ' ').trim().slice(0, maxChars);
+}
+
+/**
+ * Identify the exact offending question/choice behind a validation failure.
+ * Disabled by default: opting in logs bounded generated content, so it is for
+ * development/staging diagnosis only — production logs stay content-free.
+ */
+function logValidationFailureDiagnostics(input: unknown, error: unknown): void {
+  if (!debugDiagnosticsEnabled()) return;
+  const path = quizValidationPath(error);
+  const match = path ? path.match(VALIDATION_QUESTION_PATH_PATTERN) : null;
+  if (!match) return;
+  const question = (input as any)?.quizzes?.[Number(match[1])]?.questions?.[Number(match[2])];
+  if (!question || typeof question !== 'object') return;
+  const options = Array.isArray(question.options) ? question.options : [];
+  console.error('[generate-lesson-quizzes] validation failure diagnostics', {
+    validationErrorCode: quizValidationErrorCode(error),
+    validationPath: path,
+    questionIndex: Number(match[2]),
+    choiceIndex: match[3] !== undefined ? Number(match[3]) : null,
+    questionType: typeof question.type === 'string' ? question.type : null,
+    question: boundedDiagnosticText(question.question, 120),
+    correctAnswer: Number.isInteger(question.correctIndex) && options.length > 0
+      ? boundedDiagnosticText(options[question.correctIndex], 80)
+      : null,
+    distractor: match[3] !== undefined ? boundedDiagnosticText(options[Number(match[3])], 80) : null,
+    validationError: quizValidationErrorCode(error),
+  });
 }
 
 /** Make one provider call and validate its complete structured result. */
@@ -1033,6 +1541,7 @@ async function attemptGenerationWithValidation(
   deadline: number,
   diagnostics: RequestDiagnostics,
   qualityContext: QuizQualityContext,
+  strategy: GenerationStrategy = 'initial',
 ): Promise<GeneratedQuizResponse> {
   const provider = providerForUrl(url);
   const candidate = await requestParsedCandidate(
@@ -1043,7 +1552,7 @@ async function attemptGenerationWithValidation(
     AI_ATTEMPT_TIMEOUT_MS,
     deadline,
     diagnostics,
-    'initial',
+    strategy,
   );
 
   try {
@@ -1051,7 +1560,7 @@ async function attemptGenerationWithValidation(
       candidate,
       provider,
       model,
-      'initial',
+      strategy,
       prompt.length,
       diagnostics,
       qualityContext,
@@ -1059,9 +1568,16 @@ async function attemptGenerationWithValidation(
   } catch (validationError) {
     const err: any = new Error('Quiz generation returned invalid structured output');
     err.code = 'INVALID_QUIZ_RESPONSE';
-    // Preserve only the allowlisted category across the generic public-facing
-    // wrapper. Raw validator messages and generated content are discarded.
+    // Preserve only the allowlisted category (and structural path) across the
+    // generic public-facing wrapper. Raw validator messages and generated
+    // content are discarded; the public error stays INVALID_QUIZ_RESPONSE.
     err.validationErrorCode = quizValidationErrorCode(validationError);
+    err.validationPath = quizValidationPath(validationError);
+    err.validationRule = quizValidationRule(validationError);
+    // Bounded DUPLICATE_ANSWER_SET context so the retry can name the exact
+    // colliding questions. Goes into the retry prompt only — never logged.
+    err.duplicateAnswerSet = duplicateAnswerSetDetail(validationError);
+    err.failurePhase = failurePhaseForValidationCode(err.validationErrorCode);
     throw err;
   }
 }
@@ -1143,6 +1659,13 @@ export async function handleRequest(req: Request): Promise<Response> {
     const gemini36Deadline = deadline - FINAL_GOOGLE_ATTEMPT_RESERVED_BUDGET_MS;
     const reportedMissingSecrets = new Set<string>();
     let lastError: unknown;
+    // Root validation cause of the previous attempt (allowlisted code only).
+    // The fallback attempt receives a correction targeting this exact error
+    // instead of a byte-identical prompt that reproduces the same defect.
+    let lastValidationErrorCode: QuizValidationErrorCode | null = null;
+    // Bounded collision context for a DUPLICATE_ANSWER_SET retry. Used only to
+    // build the targeted repair prompt; never logged or returned.
+    let lastDuplicateSetDetail: DuplicateAnswerSetDetail | null = null;
 
     const prompt = buildCompactPrompt(payload);
     const qualityContext = qualityContextFromPayload(payload);
@@ -1191,28 +1714,47 @@ export async function handleRequest(req: Request): Promise<Response> {
       }
 
       try {
+        const strategy: GenerationStrategy = lastValidationErrorCode ? 'targeted_retry' : 'initial';
+        const attemptPrompt = lastValidationErrorCode
+          ? buildRetryPrompt(prompt, payload, targetedRetryCorrection(lastValidationErrorCode, lastDuplicateSetDetail))
+          : prompt;
         const result = await attemptGenerationWithValidation(
-          prompt,
+          attemptPrompt,
           route.apiKey,
           route.url,
           route.model,
           route.attemptDeadline,
           diagnostics,
           qualityContext,
+          strategy,
         );
         console.log('[generate-lesson-quizzes] success', {
           provider: route.provider,
           model: route.model,
+          strategy,
           executionMs: Date.now() - diagnostics.startedAt,
           totalProviderAttempts: diagnostics.providerAttempts,
         });
         return returnResponse(result, 200, undefined, diagnostics);
       } catch (err: any) {
         lastError = err;
+        if (err?.code === 'INVALID_QUIZ_RESPONSE') {
+          lastValidationErrorCode = typeof err.validationErrorCode === 'string'
+            && QUIZ_VALIDATION_ERROR_CODE_SET.has(err.validationErrorCode)
+            ? err.validationErrorCode as QuizValidationErrorCode
+            : 'UNKNOWN_VALIDATION';
+          lastDuplicateSetDetail = lastValidationErrorCode === 'DUPLICATE_ANSWER_SET'
+            ? duplicateAnswerSetDetail(err)
+            : null;
+        }
         console.error('[generate-lesson-quizzes] provider failed final', {
           provider: route.provider,
           model: route.model,
           errorCode: diagnosticErrorCode(err),
+          failurePhase: failurePhaseForError(err),
+          validationErrorCode: typeof err?.validationErrorCode === 'string' ? err.validationErrorCode : null,
+          validationPath: typeof err?.validationPath === 'string' ? err.validationPath : null,
+          validationRule: typeof err?.validationRule === 'string' ? err.validationRule : null,
           totalProviderAttempts: diagnostics.providerAttempts,
           executionMs: Date.now() - diagnostics.startedAt,
         });
@@ -1221,9 +1763,16 @@ export async function handleRequest(req: Request): Promise<Response> {
 
     const detail =
       lastError instanceof Error ? lastError.message.slice(0, 500) : 'No quiz generation provider configured';
+    const lastValidationCode = typeof (lastError as any)?.validationErrorCode === 'string'
+      && QUIZ_VALIDATION_ERROR_CODE_SET.has((lastError as any).validationErrorCode)
+      ? (lastError as any).validationErrorCode as QuizValidationErrorCode
+      : null;
     console.error('[generate-lesson-quizzes] failed all providers', {
       provider: 'all',
       errorCode: diagnosticErrorCode(lastError),
+      failurePhase: failurePhaseForError(lastError),
+      validationErrorCode: lastValidationCode,
+      validationRule: quizValidationRule(lastError),
       totalProviderAttempts: diagnostics.providerAttempts,
       executionMs: Date.now() - diagnostics.startedAt,
     });
@@ -1232,6 +1781,9 @@ export async function handleRequest(req: Request): Promise<Response> {
         error: detail,
         code: 'QUIZ_GENERATION_FAILED',
         provider: 'all',
+        // Allowlisted category only (never generated content); lets the client
+        // show the real cause instead of a hardcoded guess.
+        validationErrorCode: lastValidationCode,
       },
       502,
       undefined,
