@@ -30,17 +30,23 @@ export async function getReportComment(studentId: string, termId: string, examId
   return (data as ReportComment) || null;
 }
 
-export async function upsertReportComment(payload: Partial<ReportComment> & { studentId: string; termId: string; examId?: string; teacherId?: string; teacherComment?: string }): Promise<ReportComment> {
-  if (!payload.examId) throw new Error('examId is required for upserting a report comment');
+export async function upsertReportComment(payload: Partial<ReportComment> & { studentId: string; termId: string; examId?: string | null; teacherId?: string; teacherComment?: string; principalComment?: string }): Promise<ReportComment> {
+  const normalizedExamId = payload.examId ?? null;
 
-  // Check existing
-  const { data: existing, error: err1 } = await supabase
+  // Check existing — examId may be null for general term comments
+  let existingQuery = supabase
     .from('report_comments')
     .select('*')
     .eq('studentId', payload.studentId)
-    .eq('termId', payload.termId)
-    .eq('examId', payload.examId)
-    .maybeSingle();
+    .eq('termId', payload.termId);
+
+  if (normalizedExamId) {
+    existingQuery = existingQuery.eq('examId', normalizedExamId);
+  } else {
+    existingQuery = existingQuery.is('examId', null);
+  }
+
+  const { data: existing, error: err1 } = await existingQuery.maybeSingle();
   if (err1) throw err1;
 
   if (existing) {
@@ -65,9 +71,9 @@ export async function upsertReportComment(payload: Partial<ReportComment> & { st
     id,
     studentId: payload.studentId,
     termId: payload.termId,
-    examId: payload.examId,
+    examId: normalizedExamId,
     teacherComment: payload.teacherComment ?? null,
-    principalComment: payload.principalComment ?? null,
+    principalComment: (payload as any).principalComment ?? null,
     teacherId: payload.teacherId ?? null,
   };
 
