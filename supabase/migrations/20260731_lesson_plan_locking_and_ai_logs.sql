@@ -10,7 +10,28 @@
 -- ============================================================================
 -- 1. NEW STATUS: revision_requested
 -- ============================================================================
-ALTER TABLE lesson_plans DROP CONSTRAINT IF EXISTS lesson_plans_status_check;
+-- The original constraint was declared inline and therefore auto-named. Drop
+-- every CHECK constraint on lesson_plans that references `status` by name
+-- lookup, so this works no matter what Postgres called it. Assuming the name
+-- would risk silently leaving the old constraint in place, which would keep
+-- rejecting 'revision_requested'.
+DO $$
+DECLARE
+  c RECORD;
+BEGIN
+  FOR c IN
+    SELECT con.conname
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    WHERE rel.relname = 'lesson_plans'
+      AND con.contype = 'c'
+      AND pg_get_constraintdef(con.oid) ILIKE '%status%'
+  LOOP
+    EXECUTE format('ALTER TABLE lesson_plans DROP CONSTRAINT %I', c.conname);
+  END LOOP;
+END;
+$$;
+
 ALTER TABLE lesson_plans ADD CONSTRAINT lesson_plans_status_check
   CHECK (status IN (
     'draft', 'submitted', 'in_review', 'approved',
@@ -84,6 +105,10 @@ BEGIN
 
   SELECT status INTO v_status FROM lesson_plans WHERE id = v_plan_id;
 
+  -- v_status IS NULL means the parent plan no longer exists. That happens during
+  -- an ON DELETE CASCADE (Postgres removes the parent row before cascading to
+  -- children), so we must allow it — otherwise deleting a submitted plan would
+  -- fail. Only block writes while a live parent says the plan is locked.
   IF v_status IS NOT NULL AND NOT lesson_plan_is_editable(v_status) THEN
     RAISE EXCEPTION
       'Lesson plan % is locked (status: %). Its periods cannot be modified.',
