@@ -6,6 +6,8 @@ import { getMonthlyReport } from '../../lib/db/reports';
 import { Student, MonthlyScore, MONTHS } from '../../types';
 import { Calendar } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { formatReportPercent, overallMonthlyAverage } from '../../lib/monthlyReport';
+import { MonthlyScoresTable } from '../reports/MonthlyScoresTable';
 
 export function MonthlyReport() {
   const { session } = useRole();
@@ -42,9 +44,7 @@ export function MonthlyReport() {
   // Filter by selected month
   const monthlyData = reportData.filter(d => d.month === selectedMonth);
 
-  const overallAvg = monthlyData.length > 0
-    ? Math.round(monthlyData.reduce((s, d) => s + d.average, 0) / monthlyData.length)
-    : 0;
+  const overallAvg = overallMonthlyAverage(monthlyData);
 
   const child = children.find(c => c.id === selectedChild);
 
@@ -55,7 +55,7 @@ export function MonthlyReport() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Monthly Reports</h1>
-        <p className="text-slate-500 mt-1">Continuous Assessment performance per month (CA, Homework, Classwork, Quizzes)</p>
+        <p className="text-slate-500 mt-1">Monthly score = CA 40% + Quiz 60%, calculated per subject</p>
       </div>
 
       {/* Filters */}
@@ -93,57 +93,18 @@ export function MonthlyReport() {
                 <p className="text-sm text-white/80">{child.name} · {child.className}</p>
               </div>
               <div className="text-right">
-                <p className="text-3xl font-bold text-white">{overallAvg}%</p>
+                <p className="text-3xl font-bold text-white">{formatReportPercent(overallAvg)}</p>
                 <p className="text-xs text-white/70">Monthly Average</p>
               </div>
             </div>
           </div>
 
           {monthlyData.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200">
-                    <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject</th>
-                    <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">CA Scores</th>
-                    <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Monthly Average</th>
-                    <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Remarks</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {monthlyData.map(row => (
-                    <tr key={row.subject} className="hover:bg-slate-50">
-                      <td className="px-5 py-4 font-semibold text-slate-800 text-sm">{row.subject}</td>
-                      <td className="px-5 py-4 text-center">
-                        <div className="flex flex-wrap gap-1.5 justify-center">
-                          {row.details.map((sc, i) => (
-                            <span key={i} className="bg-slate-100 text-slate-700 px-2 py-0.5 rounded-md text-xs font-medium">
-                              {sc.type}: {sc.score}/{sc.total}
-                            </span>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="px-5 py-4 text-center">
-                        <span className={cn("text-lg font-bold",
-                          row.average >= 80 ? 'text-emerald-600' : row.average >= 60 ? 'text-amber-600' : 'text-red-600'
-                        )}>{row.average}%</span>
-                      </td>
-                      <td className="px-5 py-4 text-center text-sm">
-                        {row.average >= 90 ? <span className="text-emerald-600 font-medium">Excellent</span> :
-                         row.average >= 80 ? <span className="text-emerald-600 font-medium">Very Good</span> :
-                         row.average >= 70 ? <span className="text-blue-600 font-medium">Good</span> :
-                         row.average >= 60 ? <span className="text-amber-600 font-medium">Satisfactory</span> :
-                         <span className="text-red-600 font-medium">Needs Improvement</span>}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <MonthlyScoresTable rows={monthlyData} month={selectedMonth} />
           ) : (
             <div className="text-center py-12 text-slate-400">
               <Calendar className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p className="font-medium">No CA data available for {selectedMonth}</p>
+              <p className="font-medium">No CA or Quiz data available for {selectedMonth}</p>
               <p className="text-xs mt-1">Available months: {availableMonths.join(', ') || 'None'}</p>
             </div>
           )}

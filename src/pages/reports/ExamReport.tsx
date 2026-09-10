@@ -23,8 +23,10 @@ import type { ReportComment } from '../../types';
 import { Student, MONTHS, MonthlyScore, AcademicYear, Term } from '../../types';
 import { PDFDownloadLink, Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer';
 import type { MidtermReport, FinalReport } from '../../types';
-import { Calendar, FileBarChart, FileText, Award } from 'lucide-react';
+import { FileBarChart } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { formatReportPercent, overallMonthlyAverage } from '../../lib/monthlyReport';
+import { MonthlyScoresTable } from './MonthlyScoresTable';
 
 const pdfStyles = StyleSheet.create({
   page: { padding: 24, fontFamily: 'Helvetica', fontSize: 11, color: '#0f172a', backgroundColor: '#f8fafc' },
@@ -304,11 +306,9 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
     loadParent();
   }, [student]);
 
-  // Monthly UI
+  // Monthly UI — CA and Quiz are filtered to the same selected month.
   const monthlyFiltered = monthlyData.filter(d => d.month === selectedMonth);
-  const overallMonthly = monthlyFiltered.length
-    ? Math.round(monthlyFiltered.reduce((s, d) => s + d.average, 0) / monthlyFiltered.length)
-    : 0;
+  const overallMonthly = overallMonthlyAverage(monthlyFiltered);
 
   const overallMidterm = Array.isArray(midtermData?.scores) && midtermData.scores.length > 0
     ? Math.round(midtermData.scores.reduce((s, sc) => s + sc.percentage, 0) / midtermData.scores.length)
@@ -396,7 +396,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
         addToast({ type: 'error', title: 'Share failed', description: 'Parent has no phone number selected' });
         return;
       }
-      const overall = reportType === 'Monthly' ? `${overallMonthly}%` : reportType === 'Midterm' ? `${overallMidterm}%` : `${overallFinal}%`;
+      const overall = reportType === 'Monthly' ? formatReportPercent(overallMonthly) : reportType === 'Midterm' ? `${overallMidterm}%` : `${overallFinal}%`;
       const text = `Exam report for ${student.name} (${student.className}) - ${reportType} overall: ${overall}. parent: ${parentName || ''}, phone: ${phone}.`;
       const wa = `https://wa.me/${phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(text)}`;
       window.open(wa, '_blank');
@@ -450,7 +450,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
             </div>
             <div className="text-right flex flex-col sm:flex-row sm:items-center gap-3">
               <div>
-                <p className="text-3xl font-bold text-white">{reportType === 'Monthly' ? `${overallMonthly}%` : reportType === 'Midterm' ? `${overallMidterm}%` : `${overallFinal}%`}</p>
+                <p className="text-3xl font-bold text-white">{reportType === 'Monthly' ? formatReportPercent(overallMonthly) : reportType === 'Midterm' ? `${overallMidterm}%` : `${overallFinal}%`}</p>
                 <p className="text-xs text-white/70">{reportType === 'Monthly' ? 'Monthly Avg' : reportType === 'Midterm' ? 'Midterm Avg' : 'Final Avg'}</p>
               </div>
               <div className="flex gap-2 flex-wrap items-center">
@@ -464,7 +464,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
                     parentPhone={selectedParentPhone}
                     summary={`${reportType} report for ${student?.name || ''}`}
                     details={
-                      reportType === 'Monthly' ? monthlyFiltered.map(m => ({label: m.subject, value: `${m.average}%`})) :
+                      reportType === 'Monthly' ? monthlyFiltered.map(m => ({label: m.subject, value: `CA ${formatReportPercent(m.ca_avg)} · Quiz ${formatReportPercent(m.quiz_avg)} · Monthly ${formatReportPercent(m.average)}`})) :
                       reportType === 'Midterm' ? midtermData?.scores.map(s => ({label: s.subject, value: `${s.percentage}%`})) || [] :
                       (Array.isArray(finalData?.results) ? finalData.results.map(r => ({ label: r.subject, value: `${r.total}` })) : [])
                     }
@@ -507,43 +507,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
         <div id="report-content">
           {/* Details */}
           {reportType === 'Monthly' && (
-            monthlyFiltered.length > 0 ? (
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200">
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Subject</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">Avg</th>
-                      <th className="px-4 py-3 text-center text-xs font-semibold text-slate-500 uppercase">Assessments</th>
-                      <th className="px-4 py-3 text-left text-xs font-semibold text-slate-500 uppercase">Details</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {monthlyFiltered.map(m => (
-                      <tr key={m.subject} className="border-b last:border-b-0">
-                        <td className="px-4 py-3">{m.subject}</td>
-                        <td className="px-4 py-3 text-center font-semibold">{m.average}%</td>
-                        <td className="px-4 py-3 text-center">{m.assessment_count}</td>
-                        <td className="px-4 py-3">
-                          <div className="text-xs text-slate-600">
-                            {m.details.map((d, i) => (
-                              <div key={i} className="mb-1">
-                                <span className="font-semibold">{d.type}</span>: {d.score}/{d.total} ({d.percentage}%) — <span className="text-slate-500">{d.date}</span>
-                              </div>
-                            ))}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <div className="text-center py-12 text-slate-400">
-                <Calendar className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p className="font-medium">No CA data available for {selectedMonth}</p>
-              </div>
-            )
+            <MonthlyScoresTable rows={monthlyFiltered} month={selectedMonth} />
           )}
           {reportType === 'Midterm' && (
             midtermData && midtermData.scores.length > 0 ? (

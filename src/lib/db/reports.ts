@@ -2,9 +2,18 @@ import { Exam, FinalReport, GradeScale, MidtermReport, MidtermScore, MonthlyScor
 import { getStudentById } from './students';
 import { supabase } from '../supabase';
 import { warnFallback } from '../logger';
+import { aggregateMonthlyReport, normalizeMonthlyReport } from '../monthlyReport';
 
 function isMidtermReportExam(exam: Pick<Exam, 'examType' | 'assessmentLabel'>): boolean {
   return exam.examType === 'Midterm' || (exam.examType === 'Quiz' && exam.assessmentLabel === 'MT');
+}
+
+function isMissingReportRpc(error: { code?: string; message?: string; details?: string; status?: number } | null, fn: string): boolean {
+  if (!error) return false;
+  return error.code === 'PGRST202'
+    || (error as { status?: number }).status === 404
+    || (typeof error.message === 'string' && error.message.includes('Not Found'))
+    || (typeof error.details === 'string' && error.details.includes(fn));
 }
 
 export async function getReportComment(studentId: string, termId: string, examId?: string): Promise<ReportComment | null> {
@@ -109,8 +118,58 @@ export async function getMonthlyReport(
     p_student_id: studentId,
     p_term_id: termId,
   });
-  if (error) throw error;
-  return data;
+
+  if (!error) return normalizeMonthlyReport(data);
+
+  if (isMissingReportRpc(error, 'get_monthly_report')) {
+    warnFallback('get_monthly_report RPC missing; using client fallback', error);
+    return getMonthlyReportFallback(studentId, termId);
+  }
+
+  throw error;
+}
+
+export async function getMonthlyReportFallback(
+  studentId: string,
+  termId: string
+): Promise<MonthlyScore[]> {
+  const [examsResult, termResult] = await Promise.all([
+    supabase
+      .from('exams')
+      .select('id, studentId, subject, score, total, examType, assessmentLabel, month, date, status, entryState')
+      .eq('studentId', studentId)
+      .eq('termId', termId)
+      .eq('status', 'approved')
+      .in('examType', ['CA', 'Homework', 'Classwork', 'Quiz', 'Attendance']),
+    supabase
+      .from('terms')
+      .select('months')
+      .eq('id', termId)
+      .maybeSingle(),
+  ]);
+
+  if (examsResult.error) throw examsResult.error;
+  if (termResult.error) throw termResult.error;
+
+  const exams = (examsResult.data || []).filter((exam: any) =>
+    exam.score != null && (exam.entryState == null || exam.entryState === 'scored')
+  );
+
+  return aggregateMonthlyReport(
+    exams.map((exam: any) => ({
+      id: exam.id,
+      subject: exam.subject,
+      month: exam.month,
+      examType: exam.examType,
+      assessmentLabel: exam.assessmentLabel,
+      score: exam.score,
+      total: exam.total,
+      date: exam.date,
+      entryState: exam.entryState,
+      status: exam.status,
+    })),
+    { termMonths: (termResult.data as { months?: string[] } | null)?.months },
+  );
 }
 
 export async function getMidtermReport(
@@ -124,12 +183,7 @@ export async function getMidtermReport(
 
   if (!error) return data;
 
-  const isMissingRpc = error.code === 'PGRST202'
-    || (error as any).status === 404
-    || (typeof error.message === 'string' && error.message.includes('Not Found'))
-    || (typeof error.details === 'string' && error.details.includes('get_midterm_report'));
-
-  if (isMissingRpc) {
+  if (isMissingReportRpc(error, 'get_midterm_report')) {
     warnFallback('get_midterm_report RPC missing; using client fallback', error);
     return getMidtermReportFallback(studentId, termId);
   }

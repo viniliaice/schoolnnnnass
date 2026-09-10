@@ -75,6 +75,7 @@ async function installReportSchemaAndRpcs(db: PgTestDb) {
   await db.exec(extractStatementContaining(historicalHelpers, 'FUNCTION public.class_for_term', '$$;'));
 
   await db.exec(readMigration('20260912_report_rpc_remediation.sql'));
+  await db.exec(readMigration('20260913_monthly_ca_quiz_weights.sql'));
 }
 
 async function seed(db: PgTestDb) {
@@ -330,15 +331,25 @@ d('report RPC remediation — real Postgres via PGlite', () => {
     expect(monthlyReport).toHaveLength(1);
     expect(monthlyReport[0].subject).toBe('English');
     expect(monthlyReport[0].month).toBe('May');
-    expect(monthlyReport[0].assessment_count).toBe(2);
-    expectClose(Number(monthlyReport[0].average), 86.67);
-    expect(monthlyReport[0].details).toEqual(expect.arrayContaining([
+    expect(monthlyReport[0].ca_count).toBe(2);
+    expect(monthlyReport[0].quiz_count).toBe(1);
+    expect(monthlyReport[0].assessment_count).toBe(3);
+    expect(Number(monthlyReport[0].ca_weight)).toBe(40);
+    expect(Number(monthlyReport[0].quiz_weight)).toBe(60);
+    expectClose(Number(monthlyReport[0].ca_avg), 86.67);
+    expectClose(Number(monthlyReport[0].quiz_avg), 87.5);
+    // (86.67 × 0.40) + (87.5 × 0.60) = 34.668 + 52.5 = 87.168 → 87.17
+    expectClose(Number(monthlyReport[0].average), 87.17);
+    expect(monthlyReport[0].grade).toBe('B');
+    expect(monthlyReport[0].ca_details).toEqual(expect.arrayContaining([
       expect.objectContaining({ type: 'HW1', score: 4.5, total: 5, percentage: 90 }),
       expect.objectContaining({ type: 'CPW1', score: 12.5, total: 15 }),
     ]));
-    expect(monthlyReport[0].details).toHaveLength(2);
-    expect(monthlyReport[0].details.some((detail: { type: string }) => detail.type === 'MT')).toBe(false);
-    const cpw1Detail = monthlyReport[0].details.find((detail: { type: string }) => detail.type === 'CPW1');
+    expect(monthlyReport[0].quiz_details).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: 'MT', examType: 'Quiz', score: 17.5, total: 20, percentage: 87.5 }),
+    ]));
+    expect(monthlyReport[0].ca_details.some((detail: { type: string }) => detail.type === 'MT')).toBe(false);
+    const cpw1Detail = monthlyReport[0].ca_details.find((detail: { type: string }) => detail.type === 'CPW1');
     expect(cpw1Detail).toBeTruthy();
     expectClose(Number(cpw1Detail.percentage), 83.33);
 
@@ -379,6 +390,100 @@ d('report RPC remediation — real Postgres via PGlite', () => {
     expectClose(Number(finalReport.results[0].final_score), 85);
     expectClose(Number(finalReport.results[0].final_weighted), 34.0);
     expectClose(Number(finalReport.results[0].total), 86.25);
+  });
+
+  it('computes Monthly as CA 40% + Quiz 60% per subject and does not change Midterm/Final', async () => {
+    await db.setAuthUid(AUTH_TEACHER_A);
+    await db.exec(`
+      INSERT INTO public.exams(
+        id, "studentId", "subjectId", subject, score, total, "examType", "assessmentLabel",
+        "entryState", "termId", month, status, date, "teacherId"
+      ) VALUES
+        ('ca-math','S1','english','Mathematics',70,100,'CA',NULL,'scored','term1','May','approved','2026-05-01','teacherA'),
+        ('quiz-math','S1','english','Mathematics',80,100,'Quiz',NULL,'scored','term1','May','approved','2026-05-02','teacherA'),
+        ('ca-eng','S1','english','English',50,100,'CA',NULL,'scored','term1','May','approved','2026-05-01','teacherA'),
+        ('quiz-eng','S1','english','English',90,100,'Quiz',NULL,'scored','term1','May','approved','2026-05-02','teacherA'),
+        ('mid-math','S1','english','Mathematics',17.5,20,'Midterm',NULL,'scored','term1','May','approved','2026-05-15','teacherA'),
+        ('final-math','S1','english','Mathematics',85,100,'Final',NULL,'scored','term1','May','approved','2026-05-28','teacherA');
+    `);
+
+    const { rows: monthlyRows } = await db.query<{ result: any }>(
+      'SELECT public.get_monthly_report($1, $2) AS result',
+      ['S1', 'term1'],
+    );
+    const monthly = monthlyRows[0].result as Array<Record<string, any>>;
+    const math = monthly.find(row => row.subject === 'Mathematics');
+    const english = monthly.find(row => row.subject === 'English');
+    expect(math).toBeTruthy();
+    expect(english).toBeTruthy();
+    expectClose(Number(math!.average), 76);
+    expect(math!.grade).toBe('C');
+    expectClose(Number(english!.average), 74);
+    expect(math!.quiz_details.some((detail: { examType: string }) => detail.examType === 'Quiz')).toBe(true);
+
+    const { rows: midtermRows } = await db.query<{ result: any }>(
+      'SELECT public.get_midterm_report($1, $2) AS result',
+      ['S1', 'term1'],
+    );
+    const midterm = midtermRows[0].result as Record<string, any>;
+    expectClose(Number(midterm.scores[0].percentage), 87.5);
+    expect(midterm.scores[0].percentage).not.toBe(76);
+
+    const { rows: finalRows } = await db.query<{ result: any }>(
+      'SELECT public.get_final_report($1, $2) AS result',
+      ['S1', 'term1'],
+    );
+    const finalReport = finalRows[0].result as Record<string, any>;
+    expect(finalReport.weights).toEqual({ ca: 30, midterm: 30, final: 40 });
+    const mathFinal = finalReport.results.find((row: { subject: string }) => row.subject === 'Mathematics');
+    expect(mathFinal).toBeTruthy();
+    // Final still uses report_config 30/30/40, not monthly 40/60.
+    expect(Number(mathFinal.total)).not.toBe(76);
+  });
+
+  it('averages multiple quizzes then applies the 60% Quiz weight', async () => {
+    await db.setAuthUid(AUTH_TEACHER_A);
+    await db.exec(`
+      INSERT INTO public.exams(
+        id, "studentId", "subjectId", subject, score, total, "examType",
+        "entryState", "termId", month, status, date, "teacherId"
+      ) VALUES
+        ('ca1','S1','english','Mathematics',70,100,'CA','scored','term1','May','approved','2026-05-01','teacherA'),
+        ('q1','S1','english','Mathematics',70,100,'Quiz','scored','term1','May','approved','2026-05-02','teacherA'),
+        ('q2','S1','english','Mathematics',80,100,'Quiz','scored','term1','May','approved','2026-05-03','teacherA'),
+        ('q3','S1','english','Mathematics',90,100,'Quiz','scored','term1','May','approved','2026-05-04','teacherA');
+    `);
+
+    const { rows } = await db.query<{ result: any }>(
+      'SELECT public.get_monthly_report($1, $2) AS result',
+      ['S1', 'term1'],
+    );
+    const math = rows[0].result[0];
+    expectClose(Number(math.quiz_avg), 80);
+    expectClose(Number(math.average), 76);
+    expect(math.quiz_count).toBe(3);
+  });
+
+  it('does not coerce a missing Quiz to zero', async () => {
+    await db.setAuthUid(AUTH_TEACHER_A);
+    await db.exec(`
+      INSERT INTO public.exams(
+        id, "studentId", "subjectId", subject, score, total, "examType",
+        "entryState", "termId", month, status, date, "teacherId"
+      ) VALUES
+        ('ca-only','S1','english','Mathematics',70,100,'CA','scored','term1','May','approved','2026-05-01','teacherA');
+    `);
+
+    const { rows } = await db.query<{ result: any }>(
+      'SELECT public.get_monthly_report($1, $2) AS result',
+      ['S1', 'term1'],
+    );
+    const math = rows[0].result[0];
+    expectClose(Number(math.ca_avg), 70);
+    expect(math.quiz_avg).toBeNull();
+    expect(math.average).toBeNull();
+    expect(math.grade).toBeNull();
+    expect(math.quiz_count).toBe(0);
   });
 });
 

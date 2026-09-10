@@ -15,15 +15,19 @@ Waxay tusaysaa hal bil oo imtixaan ah maaddiiba.
 1. Guji **Monthly Report** (waalid) ama **Exam Reports** (admin/macallin).
 2. Xulo **Student** iyo **Month**.
 3. Warbixintu waxay tusaysaa maaddiiba:
-   - Buundo kasta oo imtixaan ah (CA, Homework, Classwork, Quiz, Attendance)
-   - Celcelis buundo bisha
-   - Celcelis fasalka isbarbardhig
+   - Celcelis CA (40%)
+   - Celcelis Quiz (60%)
+   - Buundada bisha iyo darajada ka timid buundada bisha
 
-### Sida celceliska bisha loo xisaabiyo
+### Sida buundada bisha loo xisaabiyo
 
-Celcelis Bishii = Wadarta dhamaan buundooyinka imtixaanka / Tirada imtixaannada
+```
+Buundo Bishii = (Celcelis CA × 0.40) + (Celcelis Quiz × 0.60)
+```
 
-Imtixaan kastaa wuxuu si siman ugu kaa qayb qaataa celceliska bisha.
+Tusaale: CA 70, Quiz 80 → 76. Darajada waxaa laga soo saaraa 76, ma aha CA keliya.
+
+Haddii Quiz (ama CA) aan la diiwaangelin, qaybtaas waxaa loo muujiyaa "Not recorded" — looma beddelo eber.
 
 ## Warbixinta xilliyeed (midterm)
 
