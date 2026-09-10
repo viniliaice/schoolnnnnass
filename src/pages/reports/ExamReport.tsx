@@ -537,8 +537,8 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
   const [selectedClass, setSelectedClass] = useState('All');
   const isSingleView = Boolean(initialStudentId);
 
-  // UI states
-  const [filtersOpen, setFiltersOpen] = useState(true);
+  // UI states — collapsed by default when report is loaded (reduces scrolling)
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(() => new Set());
   const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [saveError, setSaveError] = useState<string>('');
@@ -1195,11 +1195,11 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
   const assessmentsDisplay = String(summaryStats.assessments);
 
   return (
-    <div className="space-y-4 max-w-6xl mx-auto">
-      {/* Page header */}
-      <div className="space-y-1">
-        <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Exam Reports</h1>
-        <p className="text-sm text-slate-600">View Monthly, Midterm or Final reports for your students</p>
+    <div className="space-y-3 max-w-6xl mx-auto">
+      {/* Page header — compact for mobile */}
+      <div className="space-y-0.5">
+        <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">Exam Reports</h1>
+        <p className="text-xs sm:text-sm text-slate-600 leading-tight">View Monthly, Midterm or Final reports for your students</p>
       </div>
 
       {/* Filters — collapsible */}
@@ -1397,258 +1397,255 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
           <p className="text-sm text-slate-500 mt-1">Adjust filters to find students.</p>
         </div>
       ) : (
-        <div className="space-y-4">
-          {/* Polished report header — mobile compact, desktop richer */}
+        <div className="space-y-3">
+          {/* Polished report header — high-contrast royal blue, mobile-first */}
           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-            {/* Top gradient bar */}
-            <div className="bg-gradient-to-br from-indigo-700 via-indigo-600 to-violet-600 px-4 sm:px-6 py-5">
-              {/* Mobile header layout — stacked, no horizontal scroll */}
-              <div className="space-y-4">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="text-[11px] font-semibold tracking-widest uppercase text-indigo-200">MBK International School</p>
-                    <p className="text-xs text-indigo-100 -mt-0.5">Dr. Abdishakuur Secondary College</p>
-                    <h2 className="text-lg sm:text-xl font-bold text-white mt-3 leading-tight">
+            {/* Royal blue header — solid, not pale gradient */}
+            <div style={{ backgroundColor: '#1e3a8a', backgroundImage: 'none' }} className="px-4 sm:px-6 py-5">
+              <div className="space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <p style={{ color: '#ffffff' }} className="text-[11px] font-bold tracking-[0.14em] uppercase leading-none">MBK International School</p>
+                    <p style={{ color: 'rgba(255,255,255,0.92)' }} className="text-xs font-medium mt-1 leading-none">Dr. Abdishakuur Secondary College</p>
+                    <h2 style={{ color: '#ffffff' }} className="text-[13px] font-bold tracking-[0.12em] uppercase mt-3 leading-tight">
                       {reportType} Academic Report
                     </h2>
-                    {reportType === 'Monthly' ? (
-                      <p className="text-sm text-white/80 mt-1">
-                        {selectedMonth} • {selectedTerm?.name || 'Term'} • {selectedYear?.name || ''}
-                      </p>
-                    ) : (
-                      <p className="text-sm text-white/80 mt-1">
-                        {selectedTerm?.name || 'Term'} • {selectedYear?.name || ''} • {reportType}
-                      </p>
-                    )}
-                    <div className="mt-3 space-y-1">
-                      <p className="text-sm font-semibold text-white leading-tight">{student.name}</p>
-                      <p className="text-xs text-white/75">{student.className}</p>
+                    <p style={{ color: 'rgba(255,255,255,0.92)' }} className="text-sm font-medium mt-1">
+                      {reportType === 'Monthly' ? `${selectedMonth} • ${selectedTerm?.name || 'Term 1'} • ${selectedYear?.name || '2026/2027'}` : `${selectedTerm?.name || 'Term 1'} • ${selectedYear?.name || '2026/2027'} • ${reportType}`}
+                    </p>
+                    <div className="mt-3">
+                      <p style={{ color: '#ffffff' }} className="text-[15px] font-bold leading-tight truncate">{student.name}</p>
+                      <p style={{ color: 'rgba(255,255,255,0.88)' }} className="text-xs font-medium mt-0.5">{student.className}</p>
                     </div>
                   </div>
 
-                  {/* Prominent percentage — stacked vertically on mobile, strong visual */}
-                  <div className="shrink-0 text-center bg-white/10 backdrop-blur rounded-2xl border border-white/15 px-4 py-3 min-w-[92px]">
-                    <p className="text-2xl sm:text-3xl font-extrabold text-white leading-none tracking-tight">{overallDisplay}</p>
-                    <p className="text-[10px] font-semibold tracking-widest uppercase text-white/70 mt-1.5 leading-none">
+                  {/* Prominent average — solid white card for high contrast */}
+                  <div style={{ backgroundColor: '#ffffff', borderColor: '#e2e8f0' }} className="shrink-0 text-center rounded-2xl border px-4 py-3 min-w-[92px] shadow-sm">
+                    <p style={{ color: '#1e3a8a' }} className="text-2xl sm:text-3xl font-extrabold leading-none tracking-tight">{overallDisplay}</p>
+                    <p style={{ color: '#475569' }} className="text-[10px] font-bold tracking-widest uppercase mt-1.5 leading-none">
                       {reportType === 'Monthly' ? 'Monthly Avg' : reportType === 'Midterm' ? 'Midterm Avg' : 'Final Avg'}
                     </p>
                     {summaryStats.subjects > 0 && (
-                      <p className="text-[11px] text-white/60 mt-1">
-                        {summaryStats.subjects} subjects • {noPhoneAvailable ? '' : hasValidPhone ? '✓ Parent linked' : 'Parent phone missing'}
+                      <p style={{ color: '#64748b' }} className="text-[11px] font-medium mt-1">
+                        {summaryStats.subjects} subjects
                       </p>
                     )}
                   </div>
-                </div>
-
-                {/* Action bar — mobile-first, no 4 large side-by-side buttons */}
-                <div className="flex flex-col gap-2.5">
-                  {/* Primary row: Save + Download */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      onClick={handleSave}
-                      disabled={saveState === 'saving' || !student}
-                      className={cn(
-                        'h-11 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-all',
-                        saveState === 'saved'
-                          ? 'bg-emerald-500 text-white'
-                          : saveState === 'error'
-                            ? 'bg-red-500 text-white'
-                            : 'bg-white text-indigo-700 hover:bg-indigo-50 shadow-sm',
-                      )}
-                    >
-                      {saveState === 'saving' ? (
-                        <>
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                          Saving…
-                        </>
-                      ) : saveState === 'saved' ? (
-                        <>
-                          <Check className="w-4 h-4" />
-                          Saved ✓
-                        </>
-                      ) : saveState === 'error' ? (
-                        <>
-                          <AlertCircle className="w-4 h-4" />
-                          Retry
-                        </>
-                      ) : (
-                        <>
-                          <Save className="w-4 h-4" />
-                          Save
-                        </>
-                      )}
-                    </button>
-
-                    <button
-                      onClick={handleDownloadPdf}
-                      disabled={pdfGenerating || !student}
-                      className="h-11 rounded-xl bg-white/15 backdrop-blur border border-white/20 text-white font-semibold text-sm flex items-center justify-center gap-2 hover:bg-white/20 transition-colors disabled:opacity-60"
-                    >
-                      {pdfGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-                      {pdfGenerating ? 'Generating…' : 'Download PDF'}
-                    </button>
-                  </div>
-
-                  {/* Secondary row: Share / WhatsApp / More */}
-                  <div className="grid grid-cols-2 gap-2">
-                    <button
-                      onClick={openWhatsAppModal}
-                      disabled={noPhoneAvailable}
-                      className={cn(
-                        'h-10 rounded-xl font-medium text-sm flex items-center justify-center gap-2 border transition-colors',
-                        hasValidPhone
-                          ? 'bg-emerald-500 text-white border-emerald-400 hover:bg-emerald-600'
-                          : noPhoneAvailable
-                            ? 'bg-white/10 text-white/50 border-white/10 cursor-not-allowed'
-                            : 'bg-amber-500 text-white border-amber-400 hover:bg-amber-600',
-                      )}
-                      title={noPhoneAvailable ? 'No parent phone available' : normalizedPhone}
-                    >
-                      <MessageCircle className="w-4 h-4" />
-                      {hasValidPhone ? 'Send WhatsApp' : noPhoneAvailable ? 'No Phone' : 'Fix Phone'}
-                    </button>
-
-                    <div className="relative">
-                      <button
-                        onClick={() => setShowMoreMenu(v => !v)}
-                        className="w-full h-10 rounded-xl bg-white text-slate-700 font-medium text-sm flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50"
-                      >
-                        <MoreVertical className="w-4 h-4" />
-                        More
-                        <ChevronDown className={cn('w-3.5 h-3.5 transition-transform', showMoreMenu && 'rotate-180')} />
-                      </button>
-                      {showMoreMenu && (
-                        <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden z-30">
-                          <button
-                            onClick={() => {
-                              setShowMoreMenu(false);
-                              handleExportPreview();
-                            }}
-                            className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
-                          >
-                            <Eye className="w-4 h-4 text-slate-500" />
-                            Preview / Export PDF
-                          </button>
-                          <button
-                            onClick={() => {
-                              setShowMoreMenu(false);
-                              handlePrint();
-                            }}
-                            className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
-                          >
-                            <Printer className="w-4 h-4 text-slate-500" />
-                            Print
-                          </button>
-                          <button
-                            onClick={() => {
-                              setShowMoreMenu(false);
-                              handleShare();
-                            }}
-                            className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
-                          >
-                            <Share2 className="w-4 h-4 text-slate-500" />
-                            Share (System)
-                          </button>
-                          <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100">
-                            <p className="text-[11px] text-slate-500">
-                              Parent: {noPhoneAvailable ? 'No phone' : normalizedPhone || digitsForCheck}
-                            </p>
-                            {selectedParentPhone && parentPhones.length > 1 && (
-                              <select
-                                value={selectedParentPhone}
-                                onChange={e => setSelectedParentPhone(e.target.value)}
-                                className="mt-2 w-full h-8 rounded-lg border border-slate-200 bg-white text-xs px-2"
-                              >
-                                {parentPhones.map(p => (
-                                  <option key={p} value={p}>
-                                    {formatInternationalPhone(p)} ({p})
-                                  </option>
-                                ))}
-                              </select>
-                            )}
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Status line */}
-                  {(saveState === 'saved' || pdfError || saveError || waError) && (
-                    <div className="rounded-xl bg-white/10 border border-white/15 px-3 py-2">
-                      {saveState === 'saved' && savedAt && (
-                        <p className="text-xs text-white/90 flex items-center gap-1.5">
-                          <Check className="w-3.5 h-3.5 text-emerald-300" />
-                          Report Saved — {reportType === 'Monthly' ? `${selectedMonth} monthly` : reportType} report saved at {new Date(savedAt).toLocaleTimeString()} ✓
-                        </p>
-                      )}
-                      {(pdfError || saveError) && (
-                        <p className="text-xs text-red-100 flex items-center gap-1.5">
-                          <AlertCircle className="w-3.5 h-3.5" />
-                          {pdfError || saveError} —{' '}
-                          <button onClick={() => (pdfError ? handleDownloadPdf() : handleSave())} className="underline font-semibold">
-                            Retry
-                          </button>
-                        </p>
-                      )}
-                    </div>
-                  )}
-                  {noPhoneAvailable && (
-                    <p className="text-xs text-amber-200 bg-amber-500/15 border border-amber-300/20 rounded-xl px-3 py-2">No parent phone number available — ask admin to add parent contact to enable WhatsApp.</p>
-                  )}
                 </div>
               </div>
             </div>
 
-            {/* Report summary — shown first per spec */}
-            <div className="px-4 sm:px-6 py-4 bg-white">
-              <div className="flex items-center gap-2 mb-3">
+            {/* Action bar — immediately under header, on white for contrast hierarchy */}
+            <div style={{ backgroundColor: '#ffffff' }} className="px-4 sm:px-6 py-3 border-t border-slate-100">
+              <div className="flex flex-col gap-2">
+                {/* Primary row: Save + Download */}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={handleSave}
+                    disabled={saveState === 'saving' || !student}
+                    style={
+                      saveState === 'saved'
+                        ? { backgroundColor: '#16a34a', color: '#ffffff', border: '1px solid #16a34a' }
+                        : saveState === 'error'
+                          ? { backgroundColor: '#dc2626', color: '#ffffff', border: '1px solid #dc2626' }
+                          : { backgroundColor: '#ffffff', color: '#1e3a8a', border: '1px solid #cbd5e1' }
+                    }
+                    className="h-11 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-sm disabled:opacity-60"
+                  >
+                    {saveState === 'saving' ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Saving…
+                      </>
+                    ) : saveState === 'saved' ? (
+                      <>
+                        <Check className="w-4 h-4" />
+                        Saved ✓
+                      </>
+                    ) : saveState === 'error' ? (
+                      <>
+                        <AlertCircle className="w-4 h-4" />
+                        Retry
+                      </>
+                    ) : (
+                      <>
+                        <Save className="w-4 h-4" />
+                        Save
+                      </>
+                    )}
+                  </button>
+
+                  <button
+                    onClick={handleDownloadPdf}
+                    disabled={pdfGenerating || !student}
+                    style={{ backgroundColor: '#1e3a8a', color: '#ffffff', border: '1px solid #1e3a8a' }}
+                    className="h-11 rounded-xl font-bold text-sm flex items-center justify-center gap-2 shadow-sm hover:opacity-[0.95] transition-opacity disabled:opacity-60"
+                  >
+                    {pdfGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                    {pdfGenerating ? 'Generating…' : 'Download PDF'}
+                  </button>
+                </div>
+
+                {/* Secondary row: WhatsApp + More */}
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={openWhatsAppModal}
+                    disabled={noPhoneAvailable}
+                    style={
+                      hasValidPhone
+                        ? { backgroundColor: '#16a34a', color: '#ffffff', border: '1px solid #16a34a' }
+                        : noPhoneAvailable
+                          ? { backgroundColor: '#f1f5f9', color: '#94a3b8', border: '1px solid #e2e8f0' }
+                          : { backgroundColor: '#f59e0b', color: '#ffffff', border: '1px solid #f59e0b' }
+                    }
+                    className="h-10 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-colors disabled:cursor-not-allowed shadow-sm"
+                    title={noPhoneAvailable ? 'No parent phone available' : normalizedPhone}
+                  >
+                    <MessageCircle className="w-4 h-4" />
+                    {hasValidPhone ? 'Send WhatsApp' : noPhoneAvailable ? 'No Phone' : 'Fix Phone'}
+                  </button>
+
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowMoreMenu(v => !v)}
+                      style={{ backgroundColor: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1' }}
+                      className="w-full h-10 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 hover:bg-slate-50 shadow-sm"
+                    >
+                      <MoreVertical className="w-4 h-4" />
+                      More
+                      <ChevronDown className={cn('w-3.5 h-3.5 transition-transform', showMoreMenu && 'rotate-180')} />
+                    </button>
+                    {showMoreMenu && (
+                      <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden z-30">
+                        <button
+                          onClick={() => {
+                            setShowMoreMenu(false);
+                            handleExportPreview();
+                          }}
+                          className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
+                        >
+                          <Eye className="w-4 h-4 text-slate-500" />
+                          Preview / Export PDF
+                        </button>
+                        <button
+                          onClick={() => {
+                            setShowMoreMenu(false);
+                            handlePrint();
+                          }}
+                          className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
+                        >
+                          <Printer className="w-4 h-4 text-slate-500" />
+                          Print
+                        </button>
+                        <button
+                          onClick={() => {
+                            setShowMoreMenu(false);
+                            handleShare();
+                          }}
+                          className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
+                        >
+                          <Share2 className="w-4 h-4 text-slate-500" />
+                          Share (System)
+                        </button>
+                        <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100">
+                          <p className="text-[11px] text-slate-500">
+                            Parent: {noPhoneAvailable ? 'No phone' : normalizedPhone || digitsForCheck}
+                          </p>
+                          {selectedParentPhone && parentPhones.length > 1 && (
+                            <select
+                              value={selectedParentPhone}
+                              onChange={e => setSelectedParentPhone(e.target.value)}
+                              className="mt-2 w-full h-8 rounded-lg border border-slate-200 bg-white text-xs px-2"
+                            >
+                              {parentPhones.map(p => (
+                                <option key={p} value={p}>
+                                  {formatInternationalPhone(p)} ({p})
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Status line — on white, high contrast */}
+                {(saveState === 'saved' || pdfError || saveError) && (
+                  <div style={{ backgroundColor: '#f8fafc', borderColor: '#e2e8f0' }} className="rounded-xl border px-3 py-2">
+                    {saveState === 'saved' && savedAt && (
+                      <p className="text-xs font-medium flex items-center gap-1.5" style={{ color: '#166534' }}>
+                        <Check className="w-3.5 h-3.5" style={{ color: '#16a34a' }} />
+                        Report Saved — {reportType === 'Monthly' ? `${selectedMonth} monthly` : reportType} report saved at {new Date(savedAt).toLocaleTimeString()} ✓
+                      </p>
+                    )}
+                    {(pdfError || saveError) && (
+                      <p className="text-xs font-medium flex items-center gap-1.5" style={{ color: '#991b1b' }}>
+                        <AlertCircle className="w-3.5 h-3.5" />
+                        {pdfError || saveError} —{' '}
+                        <button onClick={() => (pdfError ? handleDownloadPdf() : handleSave())} className="underline font-bold">
+                          Retry
+                        </button>
+                      </p>
+                    )}
+                  </div>
+                )}
+                {noPhoneAvailable && (
+                  <p style={{ backgroundColor: '#fef3c7', color: '#92400e', borderColor: '#fde68a' }} className="text-xs font-medium border rounded-xl px-3 py-2">No parent phone number available — ask admin to add parent contact to enable WhatsApp.</p>
+                )}
+              </div>
+            </div>
+
+            {/* Report summary — compact 2×2, consistent heights */}
+            <div className="px-4 sm:px-6 py-3.5 bg-white">
+              <div className="flex items-center gap-2 mb-2.5">
                 <Award className="w-4 h-4 text-indigo-600" />
-                <h3 className="text-sm font-bold text-slate-900">Report Summary</h3>
+                <h3 className="text-[13px] font-bold tracking-wide uppercase text-slate-900">Report Summary</h3>
                 {loading && <Loader2 className="w-3.5 h-3.5 animate-spin text-slate-400 ml-2" />}
               </div>
 
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div className="rounded-2xl border border-slate-200 p-3 bg-gradient-to-br from-indigo-50 to-white">
-                  <p className="text-[11px] font-semibold tracking-wide uppercase text-slate-500">{reportType} Average</p>
-                  <p className="text-xl font-extrabold text-indigo-700 mt-1">{overallDisplay}</p>
-                  <p className="text-xs text-slate-500 mt-1">{reportType === 'Monthly' ? 'CA 40% + Quiz 60%' : reportType}</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+                <div className="rounded-xl border border-slate-200 p-2.5 bg-gradient-to-br from-indigo-50 to-white flex flex-col justify-between min-h-[86px]">
+                  <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 leading-none">{reportType === 'Monthly' ? 'Monthly Average' : `${reportType} Average`}</p>
+                  <p className="text-[20px] font-extrabold text-indigo-700 leading-none mt-2">{overallDisplay}</p>
+                  <p className="text-[11px] font-medium text-slate-500 leading-none mt-1.5">{reportType === 'Monthly' ? 'CA 40% + Quiz 60%' : reportType}</p>
                 </div>
-                <div className="rounded-2xl border border-slate-200 p-3 bg-white">
-                  <p className="text-[11px] font-semibold tracking-wide uppercase text-slate-500 flex items-center gap-1.5">
-                    <BookOpen className="w-3.5 h-3.5" />
-                    Subjects
+                <div className="rounded-xl border border-slate-200 p-2.5 bg-white flex flex-col justify-between min-h-[86px]">
+                  <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 leading-none flex items-center gap-1">
+                    <BookOpen className="w-3 h-3" />
+                    Subjects reported
                   </p>
-                  <p className="text-xl font-bold text-slate-900 mt-1">{subjectsDisplay}</p>
-                  <p className="text-xs text-slate-500 mt-1">Total enrolled</p>
+                  <p className="text-[20px] font-bold text-slate-900 leading-none mt-2">{subjectsDisplay}</p>
+                  <p className="text-[11px] font-medium text-slate-500 leading-none mt-1.5">Subjects reported</p>
                 </div>
-                <div className="rounded-2xl border border-slate-200 p-3 bg-white">
-                  <p className="text-[11px] font-semibold tracking-wide uppercase text-slate-500 flex items-center gap-1.5">
-                    <CalendarIcon className="w-3.5 h-3.5" />
+                <div className="rounded-xl border border-slate-200 p-2.5 bg-white flex flex-col justify-between min-h-[86px]">
+                  <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 leading-none flex items-center gap-1">
+                    <CalendarIcon className="w-3 h-3" />
                     Attendance
                   </p>
-                  <p className="text-xl font-bold text-slate-900 mt-1">{attendanceDisplay}</p>
-                  <p className="text-xs text-slate-500 mt-1">{summaryStats.attendance != null ? 'Avg across subjects' : 'No data'}</p>
+                  <p className="text-[20px] font-bold text-slate-900 leading-none mt-2">{attendanceDisplay}</p>
+                  <p className="text-[11px] font-medium text-slate-500 leading-none mt-1.5">{summaryStats.attendance != null ? 'Avg across subjects' : 'No data'}</p>
                 </div>
-                <div className="rounded-2xl border border-slate-200 p-3 bg-white">
-                  <p className="text-[11px] font-semibold tracking-wide uppercase text-slate-500 flex items-center gap-1.5">
-                    <FileText className="w-3.5 h-3.5" />
-                    Assessments
+                <div className="rounded-xl border border-slate-200 p-2.5 bg-white flex flex-col justify-between min-h-[86px]">
+                  <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 leading-none flex items-center gap-1">
+                    <FileText className="w-3 h-3" />
+                    Recorded assessments
                   </p>
-                  <p className="text-xl font-bold text-slate-900 mt-1">{assessmentsDisplay}</p>
-                  <p className="text-xs text-slate-500 mt-1">Recorded entries</p>
+                  <p className="text-[20px] font-bold text-slate-900 leading-none mt-2">{assessmentsDisplay}</p>
+                  <p className="text-[11px] font-medium text-slate-500 leading-none mt-1.5">Recorded assessments</p>
                 </div>
               </div>
 
-              {/* Subject performance chips */}
+              {/* Subject performance chips — smaller for 320px wrap */}
               {reportType === 'Monthly' && monthlyFiltered.length > 0 && (
-                <div className="mt-4">
-                  <p className="text-xs font-semibold text-slate-700 mb-2">Subject Performance</p>
-                  <div className="flex flex-wrap gap-1.5">
+                <div className="mt-3">
+                  <p className="text-[11px] font-bold tracking-wide uppercase text-slate-600 mb-1.5">Subject Performance</p>
+                  <div className="flex flex-wrap gap-1">
                     {monthlyFiltered.map(r => (
                       <span
                         key={r.subject}
                         className={cn(
-                          'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border',
+                          'inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold border leading-none',
                           r.average == null
                             ? 'bg-slate-50 text-slate-500 border-slate-200'
                             : r.average >= 80
@@ -1665,14 +1662,14 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
                 </div>
               )}
               {reportType === 'Midterm' && midtermData?.scores.length ? (
-                <div className="mt-4">
-                  <p className="text-xs font-semibold text-slate-700 mb-2">Subject Performance</p>
-                  <div className="flex flex-wrap gap-1.5">
+                <div className="mt-3">
+                  <p className="text-[11px] font-bold tracking-wide uppercase text-slate-600 mb-1.5">Subject Performance</p>
+                  <div className="flex flex-wrap gap-1">
                     {midtermData.scores.map(s => (
                       <span
                         key={s.subject}
                         className={cn(
-                          'inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border',
+                          'inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold border leading-none',
                           s.percentage >= 80
                             ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                             : s.percentage >= 60
@@ -1687,13 +1684,13 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
                 </div>
               ) : null}
               {reportType === 'Final' && finalData?.results.length ? (
-                <div className="mt-4">
-                  <p className="text-xs font-semibold text-slate-700 mb-2">Subject Performance</p>
-                  <div className="flex flex-wrap gap-1.5">
+                <div className="mt-3">
+                  <p className="text-[11px] font-bold tracking-wide uppercase text-slate-600 mb-1.5">Subject Performance</p>
+                  <div className="flex flex-wrap gap-1">
                     {finalData.results.map((r: any) => (
                       <span
                         key={r.subject}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold border bg-slate-50 text-slate-700 border-slate-200"
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-semibold border leading-none bg-slate-50 text-slate-700 border-slate-200"
                       >
                         {r.subject} <span className="font-bold">{r.total}</span>
                       </span>
@@ -1704,12 +1701,12 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
             </div>
           </div>
 
-          {/* Detailed subjects — mobile cards / desktop table */}
+          {/* Detailed subjects — mobile cards / desktop table — compact */}
           <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-            <div className="px-4 sm:px-6 py-3 flex items-center justify-between border-b border-slate-100 bg-slate-50">
-              <h3 className="text-sm font-bold text-slate-900">Subject Details</h3>
-              <span className="text-xs text-slate-500 hidden sm:inline">Expandable —tap to view assessments</span>
-              <span className="text-xs text-slate-500 sm:hidden">Tap to expand</span>
+            <div className="px-4 sm:px-6 py-2.5 flex items-center justify-between border-b border-slate-100 bg-slate-50">
+              <h3 className="text-[13px] font-bold tracking-wide uppercase text-slate-900">Subject Details</h3>
+              <span className="text-[11px] font-medium text-slate-500 hidden sm:inline">Expandable — tap to view</span>
+              <span className="text-[11px] font-medium text-slate-500 sm:hidden">Tap to expand</span>
             </div>
 
             {/* Monthly via MonthlyScoresTable (mobile cards + desktop table) */}
@@ -1720,70 +1717,70 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
               <>
                 {midtermData && midtermData.scores.length > 0 ? (
                   <>
-                    {/* Mobile cards */}
+                    {/* Mobile cards — compact */}
                     <div className="md:hidden divide-y divide-slate-100">
                       {midtermData.scores.map(s => {
                         const isExpanded = expandedSubjects.has(s.subject);
                         return (
                           <div key={s.subject} className="bg-white">
-                            <div className="px-4 py-3 flex items-center justify-between gap-3">
+                            <div className="px-3.5 py-2.5 flex items-center justify-between gap-2">
                               <div className="min-w-0 flex-1">
-                                <p className="font-bold text-sm text-slate-900 uppercase tracking-wide truncate">{s.subject}</p>
-                                <p className="text-xs text-slate-500 mt-0.5">
+                                <p className="font-bold text-[13px] text-slate-900 uppercase tracking-[0.03em] leading-none truncate">{s.subject}</p>
+                                <p className="text-[11px] text-slate-500 mt-1 leading-none truncate">
                                   Rank {s.subject_rank} • Avg {s.class_average}% • Top {s.highest_in_class}%
                                 </p>
                               </div>
-                              <div className="text-right shrink-0">
-                                <p className={cn('text-lg font-bold leading-none', s.percentage >= 80 ? 'text-emerald-600' : s.percentage >= 60 ? 'text-amber-600' : 'text-red-600')}>
+                              <div className="text-right shrink-0 min-w-[64px]">
+                                <p className={cn('text-[18px] font-extrabold leading-none tracking-tight', s.percentage >= 80 ? 'text-emerald-600' : s.percentage >= 60 ? 'text-amber-600' : 'text-red-600')}>
                                   {s.percentage}%
                                 </p>
-                                <p className="text-[11px] font-semibold text-slate-500 mt-1">
+                                <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 mt-1 leading-none">
                                   {s.grade} • {s.score}/{s.total}
                                 </p>
                               </div>
                             </div>
-                            <div className="px-4 pb-3">
+                            <div className="px-3.5 pb-2.5">
                               <button
                                 onClick={() => toggleSubject(s.subject)}
                                 aria-expanded={isExpanded}
-                                className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-xs font-medium text-slate-700"
+                                className="w-full flex items-center justify-center gap-1 h-8 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-[11px] font-semibold text-slate-700"
                               >
                                 {isExpanded ? 'Hide Details' : 'View Details'}
-                                <ChevronDown className={cn('w-3.5 h-3.5 transition-transform', isExpanded && 'rotate-180')} />
+                                <ChevronDown className={cn('w-3 h-3 transition-transform', isExpanded && 'rotate-180')} />
                               </button>
                               {isExpanded && (
-                                <div className="mt-3 rounded-xl border border-slate-200 overflow-hidden">
+                                <div className="mt-2.5 rounded-xl border border-slate-200 overflow-hidden">
                                   <div className="grid grid-cols-3 gap-px bg-slate-200">
                                     <div className="bg-slate-50 px-3 py-2 text-center">
-                                      <p className="text-[10px] font-semibold text-slate-500 uppercase">Score</p>
-                                      <p className="text-sm font-bold text-slate-900">
+                                      <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 leading-none">Score</p>
+                                      <p className="text-[13px] font-bold text-slate-900 mt-1 leading-none">
                                         {s.score}/{s.total}
                                       </p>
                                     </div>
                                     <div className="bg-slate-50 px-3 py-2 text-center">
-                                      <p className="text-[10px] font-semibold text-slate-500 uppercase">Grade</p>
-                                      <p className="text-sm font-bold text-slate-900">{s.grade}</p>
+                                      <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 leading-none">Grade</p>
+                                      <p className="text-[13px] font-bold text-slate-900 mt-1 leading-none">{s.grade}</p>
                                     </div>
                                     <div className="bg-slate-50 px-3 py-2 text-center">
-                                      <p className="text-[10px] font-semibold text-slate-500 uppercase">Remark</p>
-                                      <p className="text-xs font-medium text-slate-700">{s.remark}</p>
+                                      <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 leading-none">Remark</p>
+                                      <p className="text-[11px] font-semibold text-slate-700 mt-1 leading-none truncate">{s.remark}</p>
                                     </div>
                                   </div>
-                                  <div className="px-3 py-2.5 text-xs text-slate-600 space-y-1.5 bg-white">
-                                    <div className="flex justify-between">
+                                  <div className="px-3 py-2 text-[11px] text-slate-600 space-y-1 bg-white leading-none">
+                                    <div className="flex justify-between py-1">
                                       <span>Class average</span>
                                       <span className="font-semibold">{s.class_average}%</span>
                                     </div>
-                                    <div className="flex justify-between">
+                                    <div className="flex justify-between py-1">
                                       <span>Highest in class</span>
                                       <span className="font-semibold">{s.highest_in_class}%</span>
                                     </div>
-                                    <div className="flex justify-between">
+                                    <div className="flex justify-between py-1">
                                       <span>Your rank</span>
                                       <span className="font-semibold">{s.subject_rank}</span>
                                     </div>
                                     {s.examId && reportComments[s.examId] && (
-                                      <div className="mt-2 text-xs text-slate-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5">Comment: {reportComments[s.examId]?.teacherComment}</div>
+                                      <div className="mt-2 text-[11px] text-slate-700 bg-amber-50 border border-amber-200 rounded-lg p-2 leading-tight">Comment: {reportComments[s.examId]?.teacherComment}</div>
                                     )}
                                   </div>
                                 </div>
@@ -1854,48 +1851,48 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
                         const isExpanded = expandedSubjects.has(r.subject);
                         return (
                           <div key={r.subject} className="bg-white">
-                            <div className="px-4 py-3 flex items-center justify-between gap-3">
+                            <div className="px-3.5 py-2.5 flex items-center justify-between gap-2">
                               <div className="min-w-0 flex-1">
-                                <p className="font-bold text-sm text-slate-900 uppercase tracking-wide truncate">{r.subject}</p>
-                                <p className="text-xs text-slate-500 mt-0.5">
+                                <p className="font-bold text-[13px] text-slate-900 uppercase tracking-[0.03em] leading-none truncate">{r.subject}</p>
+                                <p className="text-[11px] text-slate-500 mt-1 leading-none truncate">
                                   CA {r.ca_avg} • MT {r.midterm_score} • Final {r.final_score}
                                 </p>
                               </div>
-                              <div className="text-right shrink-0">
-                                <p className="text-lg font-bold leading-none text-indigo-700">{r.total}</p>
-                                <p className="text-[11px] font-semibold text-slate-500 mt-1">{r.grade || '—'}</p>
+                              <div className="text-right shrink-0 min-w-[64px]">
+                                <p className="text-[18px] font-extrabold leading-none tracking-tight text-indigo-700">{r.total}</p>
+                                <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 mt-1 leading-none">{r.grade || '—'}</p>
                               </div>
                             </div>
-                            <div className="px-4 pb-3">
+                            <div className="px-3.5 pb-2.5">
                               <button
                                 onClick={() => toggleSubject(r.subject)}
                                 aria-expanded={isExpanded}
-                                className="w-full flex items-center justify-center gap-1.5 py-2 rounded-lg bg-slate-50 hover:bg-slate-100 border border-slate-200 text-xs font-medium text-slate-700"
+                                className="w-full flex items-center justify-center gap-1 h-8 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 text-[11px] font-semibold text-slate-700"
                               >
                                 {isExpanded ? 'Hide Details' : 'View Details'}
-                                <ChevronDown className={cn('w-3.5 h-3.5 transition-transform', isExpanded && 'rotate-180')} />
+                                <ChevronDown className={cn('w-3 h-3 transition-transform', isExpanded && 'rotate-180')} />
                               </button>
                               {isExpanded && (
-                                <div className="mt-3 rounded-xl border border-slate-200 overflow-hidden bg-slate-50">
+                                <div className="mt-2.5 rounded-xl border border-slate-200 overflow-hidden bg-slate-50">
                                   <div className="grid grid-cols-3 gap-px bg-slate-200">
-                                    <div className="bg-white px-3 py-2.5 text-center">
-                                      <p className="text-[10px] font-semibold text-slate-500 uppercase">CA Weighted</p>
-                                      <p className="text-sm font-bold text-slate-900">{r.ca_weighted}</p>
-                                      <p className="text-xs text-slate-500">{r.ca_avg}</p>
+                                    <div className="bg-white px-3 py-2 text-center">
+                                      <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 leading-none">CA Weighted</p>
+                                      <p className="text-[13px] font-bold text-slate-900 mt-1 leading-none">{r.ca_weighted}</p>
+                                      <p className="text-[11px] text-slate-500 mt-1 leading-none">{r.ca_avg}</p>
                                     </div>
-                                    <div className="bg-white px-3 py-2.5 text-center">
-                                      <p className="text-[10px] font-semibold text-slate-500 uppercase">Midterm W</p>
-                                      <p className="text-sm font-bold text-slate-900">{r.midterm_weighted}</p>
-                                      <p className="text-xs text-slate-500">{r.midterm_score}</p>
+                                    <div className="bg-white px-3 py-2 text-center">
+                                      <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 leading-none">Midterm W</p>
+                                      <p className="text-[13px] font-bold text-slate-900 mt-1 leading-none">{r.midterm_weighted}</p>
+                                      <p className="text-[11px] text-slate-500 mt-1 leading-none">{r.midterm_score}</p>
                                     </div>
-                                    <div className="bg-white px-3 py-2.5 text-center">
-                                      <p className="text-[10px] font-semibold text-slate-500 uppercase">Final W</p>
-                                      <p className="text-sm font-bold text-slate-900">{r.final_weighted}</p>
-                                      <p className="text-xs text-slate-500">{r.final_score}</p>
+                                    <div className="bg-white px-3 py-2 text-center">
+                                      <p className="text-[10px] font-bold tracking-widest uppercase text-slate-500 leading-none">Final W</p>
+                                      <p className="text-[13px] font-bold text-slate-900 mt-1 leading-none">{r.final_weighted}</p>
+                                      <p className="text-[11px] text-slate-500 mt-1 leading-none">{r.final_score}</p>
                                     </div>
                                   </div>
                                   {teacherComment && (
-                                    <div className="m-3 text-xs text-slate-700 bg-white border rounded-lg p-2.5">Comment: {teacherComment}</div>
+                                    <div className="m-2.5 text-[11px] text-slate-700 bg-white border rounded-lg p-2 leading-tight">Comment: {teacherComment}</div>
                                   )}
                                 </div>
                               )}
@@ -1990,11 +1987,11 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
             </div>
           )}
 
-          {/* Branding footer inside report */}
-          <div className="bg-slate-900 rounded-2xl p-4 sm:p-5 text-center">
-            <p className="text-sm font-bold text-white">MBK International School</p>
-            <p className="text-xs text-white/70">Dr. Abdishakuur Secondary College</p>
-            <p className="text-[11px] text-white/50 mt-2">Generated on {new Date().toLocaleDateString()} • Academic Year {selectedYear?.name || ''} • {selectedTerm?.name || ''}</p>
+          {/* Branding footer inside report — compact */}
+          <div className="bg-slate-900 rounded-2xl px-4 py-3 text-center">
+            <p className="text-[13px] font-bold text-white leading-none">MBK International School</p>
+            <p className="text-[11px] font-medium text-white/70 mt-1 leading-none">Dr. Abdishakuur Secondary College</p>
+            <p className="text-[10px] text-white/45 mt-2 leading-none">Generated {new Date().toLocaleDateString()} • {selectedYear?.name || ''} • {selectedTerm?.name || ''}</p>
           </div>
         </div>
       )}
