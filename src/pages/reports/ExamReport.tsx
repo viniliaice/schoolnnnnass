@@ -540,9 +540,6 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
   // UI states — collapsed by default when report is loaded (reduces scrolling)
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [expandedSubjects, setExpandedSubjects] = useState<Set<string>>(() => new Set());
-  const [saveState, setSaveState] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
-  const [saveError, setSaveError] = useState<string>('');
-  const [savedAt, setSavedAt] = useState<string | null>(null);
 
   // PDF states
   const [pdfGenerating, setPdfGenerating] = useState(false);
@@ -754,9 +751,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
     if (!selectedStudent || !selectedTermId) return;
     const loadReport = async () => {
       setLoading(true);
-      // reset save/pdfs on student change
-      setSaveState('idle');
-      setSavedAt(null);
+      // reset PDF state on student change (report is live read-only — no snapshot to reset)
       setPdfBlob(null);
       if (pdfUrl) {
         URL.revokeObjectURL(pdfUrl);
@@ -853,85 +848,6 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
     const blob = await pdf(doc).toBlob();
     return blob;
   }, [student, selectedYear, selectedTerm, overallDisplay, reportType, selectedMonth, monthlyFiltered, midtermData, finalData, teacherComment]);
-
-  // Save handler — persists snapshot to localStorage with success/error states
-  const handleSave = async () => {
-    if (!student || !selectedTermId) {
-      addToast({ type: 'error', title: 'Save failed', description: 'No student or term selected' });
-      return;
-    }
-    // Prevent duplicate saves if already saved and data hasn't changed (within 2 minutes)
-    if (saveState === 'saved' && savedAt) {
-      const last = new Date(savedAt).getTime();
-      if (Date.now() - last < 2 * 60 * 1000) {
-        addToast({ type: 'info', title: 'Already saved', description: 'This report was just saved. No need to save again.' });
-        return;
-      }
-    }
-    setSaveState('saving');
-    setSaveError('');
-    try {
-      // Simulate persisting report state — store snapshot in localStorage
-      // In a real app this could be a DB snapshot; localStorage satisfies "persist report state" for demo
-      await new Promise(res => setTimeout(res, 700));
-      const snapshot = {
-        studentId: student.id,
-        studentName: student.name,
-        className: student.className,
-        academicYearId: selectedYearId,
-        academicYearName: selectedYear?.name || '',
-        termId: selectedTermId,
-        termName: selectedTerm?.name || '',
-        reportType,
-        month: selectedMonth,
-        average: overallDisplay,
-        monthlyFiltered,
-        midtermData,
-        finalData,
-        teacherComment,
-        parentName,
-        savedAt: new Date().toISOString(),
-      };
-      const key = `exam-report-saved-${student.id}-${selectedTermId}-${reportType}-${reportType === 'Monthly' ? selectedMonth : 'all'}`;
-      try {
-        localStorage.setItem(key, JSON.stringify(snapshot));
-      } catch (e) {
-        console.warn('localStorage save failed', e);
-        // Fallback — still consider saved in memory
-      }
-      // Also persist teacher comment if teacher role and comment present
-      if (session?.role === 'teacher' && teacherComment.trim()) {
-        try {
-          await upsertReportComment({
-            studentId: student.id,
-            termId: selectedTermId,
-            examId: null as any,
-            teacherComment: teacherComment.trim(),
-            teacherId: session.userId,
-          });
-        } catch (cErr) {
-          console.warn('Teacher comment save failed', cErr);
-          // still succeed overall save, but warn
-          addToast({ type: 'warning', title: 'Report saved, but comment not persisted', description: String(cErr) });
-        }
-      }
-      const now = new Date().toISOString();
-      setSavedAt(now);
-      setSaveState('saved');
-      addToast({
-        type: 'success',
-        title: 'Report Saved',
-        description: `${reportType === 'Monthly' ? selectedMonth + ' monthly' : reportType} report for ${student.name} saved successfully.`,
-      });
-      // Reset to idle after 3s to allow re-save, but keep savedAt
-      setTimeout(() => setSaveState('idle'), 3500);
-    } catch (err: any) {
-      setSaveState('error');
-      setSaveError(err?.message || 'Unable to save report');
-      addToast({ type: 'error', title: 'Unable to save report', description: err?.message || 'Please try again.' });
-      setTimeout(() => setSaveState('idle'), 4000);
-    }
-  };
 
   // Download PDF handler — generates and triggers download
   const handleDownloadPdf = async () => {
@@ -1155,11 +1071,11 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
 
   const saveTeacherComment = async () => {
     if (!selectedStudent) {
-      addToast({ type: 'error', title: 'Save failed', description: 'No student selected' });
+      addToast({ type: 'error', title: 'Comment not saved', description: 'No student selected' });
       return;
     }
     if (!selectedTermId) {
-      addToast({ type: 'error', title: 'Save failed', description: 'No term selected' });
+      addToast({ type: 'error', title: 'Comment not saved', description: 'No term selected' });
       return;
     }
     setCommentLoading(true);
@@ -1173,12 +1089,12 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
       } as any;
       const res = await upsertReportComment(payload);
       if (res) {
-        addToast({ type: 'success', title: 'Saved', description: 'Teacher comment saved' });
+        addToast({ type: 'success', title: 'Comment saved', description: 'Teacher comment saved' });
       } else {
-        addToast({ type: 'error', title: 'Save failed', description: 'Could not save comment' });
+        addToast({ type: 'error', title: 'Comment not saved', description: 'Could not save comment' });
       }
     } catch (err: any) {
-      addToast({ type: 'error', title: 'Save failed', description: err?.message || String(err) });
+      addToast({ type: 'error', title: 'Comment save failed', description: err?.message || String(err) });
     } finally {
       setCommentLoading(false);
     }
@@ -1438,43 +1354,8 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
             {/* Action bar — immediately under header, on white for contrast hierarchy */}
             <div style={{ backgroundColor: '#ffffff' }} className="px-4 sm:px-6 py-3 border-t border-slate-100">
               <div className="flex flex-col gap-2">
-                {/* Primary row: Save + Download */}
+                {/* Primary row: Download PDF + Send WhatsApp */}
                 <div className="grid grid-cols-2 gap-2">
-                  <button
-                    onClick={handleSave}
-                    disabled={saveState === 'saving' || !student}
-                    style={
-                      saveState === 'saved'
-                        ? { backgroundColor: '#16a34a', color: '#ffffff', border: '1px solid #16a34a' }
-                        : saveState === 'error'
-                          ? { backgroundColor: '#dc2626', color: '#ffffff', border: '1px solid #dc2626' }
-                          : { backgroundColor: '#ffffff', color: '#1e3a8a', border: '1px solid #cbd5e1' }
-                    }
-                    className="h-11 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all shadow-sm disabled:opacity-60"
-                  >
-                    {saveState === 'saving' ? (
-                      <>
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Saving…
-                      </>
-                    ) : saveState === 'saved' ? (
-                      <>
-                        <Check className="w-4 h-4" />
-                        Saved ✓
-                      </>
-                    ) : saveState === 'error' ? (
-                      <>
-                        <AlertCircle className="w-4 h-4" />
-                        Retry
-                      </>
-                    ) : (
-                      <>
-                        <Save className="w-4 h-4" />
-                        Save
-                      </>
-                    )}
-                  </button>
-
                   <button
                     onClick={handleDownloadPdf}
                     disabled={pdfGenerating || !student}
@@ -1484,10 +1365,7 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
                     {pdfGenerating ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
                     {pdfGenerating ? 'Generating…' : 'Download PDF'}
                   </button>
-                </div>
 
-                {/* Secondary row: WhatsApp + More */}
-                <div className="grid grid-cols-2 gap-2">
                   <button
                     onClick={openWhatsAppModal}
                     disabled={noPhoneAvailable}
@@ -1498,96 +1376,88 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
                           ? { backgroundColor: '#f1f5f9', color: '#94a3b8', border: '1px solid #e2e8f0' }
                           : { backgroundColor: '#f59e0b', color: '#ffffff', border: '1px solid #f59e0b' }
                     }
-                    className="h-10 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 transition-colors disabled:cursor-not-allowed shadow-sm"
+                    className="h-11 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-colors disabled:cursor-not-allowed shadow-sm"
                     title={noPhoneAvailable ? 'No parent phone available' : normalizedPhone}
                   >
                     <MessageCircle className="w-4 h-4" />
                     {hasValidPhone ? 'Send WhatsApp' : noPhoneAvailable ? 'No Phone' : 'Fix Phone'}
                   </button>
-
-                  <div className="relative">
-                    <button
-                      onClick={() => setShowMoreMenu(v => !v)}
-                      style={{ backgroundColor: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1' }}
-                      className="w-full h-10 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 hover:bg-slate-50 shadow-sm"
-                    >
-                      <MoreVertical className="w-4 h-4" />
-                      More
-                      <ChevronDown className={cn('w-3.5 h-3.5 transition-transform', showMoreMenu && 'rotate-180')} />
-                    </button>
-                    {showMoreMenu && (
-                      <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden z-30">
-                        <button
-                          onClick={() => {
-                            setShowMoreMenu(false);
-                            handleExportPreview();
-                          }}
-                          className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
-                        >
-                          <Eye className="w-4 h-4 text-slate-500" />
-                          Preview / Export PDF
-                        </button>
-                        <button
-                          onClick={() => {
-                            setShowMoreMenu(false);
-                            handlePrint();
-                          }}
-                          className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
-                        >
-                          <Printer className="w-4 h-4 text-slate-500" />
-                          Print
-                        </button>
-                        <button
-                          onClick={() => {
-                            setShowMoreMenu(false);
-                            handleShare();
-                          }}
-                          className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
-                        >
-                          <Share2 className="w-4 h-4 text-slate-500" />
-                          Share (System)
-                        </button>
-                        <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100">
-                          <p className="text-[11px] text-slate-500">
-                            Parent: {noPhoneAvailable ? 'No phone' : normalizedPhone || digitsForCheck}
-                          </p>
-                          {selectedParentPhone && parentPhones.length > 1 && (
-                            <select
-                              value={selectedParentPhone}
-                              onChange={e => setSelectedParentPhone(e.target.value)}
-                              className="mt-2 w-full h-8 rounded-lg border border-slate-200 bg-white text-xs px-2"
-                            >
-                              {parentPhones.map(p => (
-                                <option key={p} value={p}>
-                                  {formatInternationalPhone(p)} ({p})
-                                </option>
-                              ))}
-                            </select>
-                          )}
-                        </div>
-                      </div>
-                    )}
-                  </div>
                 </div>
 
-                {/* Status line — on white, high contrast */}
-                {(saveState === 'saved' || pdfError || saveError) && (
+                {/* Secondary row: full-width More menu */}
+                <div className="relative">
+                  <button
+                    onClick={() => setShowMoreMenu(v => !v)}
+                    style={{ backgroundColor: '#ffffff', color: '#1e293b', border: '1px solid #cbd5e1' }}
+                    className="w-full h-10 rounded-xl font-semibold text-sm flex items-center justify-center gap-2 hover:bg-slate-50 shadow-sm"
+                  >
+                    <MoreVertical className="w-4 h-4" />
+                    More
+                    <ChevronDown className={cn('w-3.5 h-3.5 transition-transform', showMoreMenu && 'rotate-180')} />
+                  </button>
+                  {showMoreMenu && (
+                    <div className="absolute right-0 mt-2 w-56 bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden z-30">
+                      <button
+                        onClick={() => {
+                          setShowMoreMenu(false);
+                          handleExportPreview();
+                        }}
+                        className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
+                      >
+                        <Eye className="w-4 h-4 text-slate-500" />
+                        Preview / Export PDF
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowMoreMenu(false);
+                          handlePrint();
+                        }}
+                        className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
+                      >
+                        <Printer className="w-4 h-4 text-slate-500" />
+                        Print
+                      </button>
+                      <button
+                        onClick={() => {
+                          setShowMoreMenu(false);
+                          handleShare();
+                        }}
+                        className="w-full text-left px-4 py-3 text-sm hover:bg-slate-50 flex items-center gap-3"
+                      >
+                        <Share2 className="w-4 h-4 text-slate-500" />
+                        Share (System)
+                      </button>
+                      <div className="px-4 py-2.5 bg-slate-50 border-t border-slate-100">
+                        <p className="text-[11px] text-slate-500">
+                          Parent: {noPhoneAvailable ? 'No phone' : normalizedPhone || digitsForCheck}
+                        </p>
+                        {selectedParentPhone && parentPhones.length > 1 && (
+                          <select
+                            value={selectedParentPhone}
+                            onChange={e => setSelectedParentPhone(e.target.value)}
+                            className="mt-2 w-full h-8 rounded-lg border border-slate-200 bg-white text-xs px-2"
+                          >
+                            {parentPhones.map(p => (
+                              <option key={p} value={p}>
+                                {formatInternationalPhone(p)} ({p})
+                              </option>
+                            ))}
+                          </select>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {/* Status line — PDF errors only (report is live read-only, nothing to save) */}
+                {pdfError && (
                   <div style={{ backgroundColor: '#f8fafc', borderColor: '#e2e8f0' }} className="rounded-xl border px-3 py-2">
-                    {saveState === 'saved' && savedAt && (
-                      <p className="text-xs font-medium flex items-center gap-1.5" style={{ color: '#166534' }}>
-                        <Check className="w-3.5 h-3.5" style={{ color: '#16a34a' }} />
-                        Report Saved — {reportType === 'Monthly' ? `${selectedMonth} monthly` : reportType} report saved at {new Date(savedAt).toLocaleTimeString()} ✓
-                      </p>
-                    )}
-                    {(pdfError || saveError) && (
-                      <p className="text-xs font-medium flex items-center gap-1.5" style={{ color: '#991b1b' }}>
-                        <AlertCircle className="w-3.5 h-3.5" />
-                        {pdfError || saveError} —{' '}
-                        <button onClick={() => (pdfError ? handleDownloadPdf() : handleSave())} className="underline font-bold">
-                          Retry
-                        </button>
-                      </p>
-                    )}
+                    <p className="text-xs font-medium flex items-center gap-1.5" style={{ color: '#991b1b' }}>
+                      <AlertCircle className="w-3.5 h-3.5" />
+                      {pdfError} —{' '}
+                      <button onClick={() => handleDownloadPdf()} className="underline font-bold">
+                        Retry
+                      </button>
+                    </p>
                   </div>
                 )}
                 {noPhoneAvailable && (
