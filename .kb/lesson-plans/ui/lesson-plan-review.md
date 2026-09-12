@@ -10,6 +10,8 @@ timestamp: 2026-09-12T00:00:00Z
 
 `LessonPlanReview` is the supervisor's dashboard for managing submitted lesson plans. It lives at `/supervisor/lesson-plans`.
 
+It is reachable at `/supervisor/lesson-plans` (supervisor and admin) and `/admin/lesson-plans` (admin) — both render the same component, because the database grants admin and supervisor identical lesson-plan rights.
+
 The page is **week-first**: the supervisor picks a week, and only that week's submissions are loaded and listed. There is no "all weeks" list and no scrolling through history to reach the current week.
 
 ## Features

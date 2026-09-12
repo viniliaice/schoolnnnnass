@@ -119,6 +119,14 @@ function AppContent() {
             case '/admin/announcements': return <ClassAnnouncements />;
             case '/admin/promotion': return <ClassPromotion />;
             case '/admin/unit-plans': return <UnitPlans />;
+            // Admin reviews lesson plans exactly like a supervisor: the DB
+            // already grants both roles the same rights (admin_all_plans RLS
+            // plus the ('supervisor','admin') checks in decide_lesson_plan_review,
+            // request_lesson_plan_revision, retry_lesson_plan_ai_review and the
+            // quiz-replacement RPC). The supervisor URL is honoured too, so a
+            // link shared by a supervisor opens for an admin.
+            case '/admin/lesson-plans': return <LessonPlanReview />;
+            case '/supervisor/lesson-plans': return <LessonPlanReview />;
             case '/admin/attendance': return <RecordAttendance />;
             case '/admin/homework': return <AssignHomework />;
             case '/admin/quizzes': return <CreateQuiz />;

@@ -10,3 +10,4 @@
 * **Creation**: `src/lib/lessonPlanWeeks.ts` — groups stored `week_label` values into selectable weeks (newest first, date ranges, legacy spellings merged per week).
 * **Creation**: `list_lesson_plan_weeks(TEXT[])` RPC + `(status, week_label)` index (migration `20260914_supervisor_lesson_plan_week_selector.sql`).
 * **Creation**: `fetchSupervisorPlanWeeks()` and `fetchPlansBySupervisorForWeek(weekLabels)` in `src/lib/db/lessonPlans.ts`; matching `useSupervisorPlanWeeks()` / `useSupervisorPlansForWeek()` hooks.
+* **Update**: Admin can now open the review page — `/admin/lesson-plans` (sidebar entry + route) and the supervisor path; both render `LessonPlanReview`. The database already granted admin the same rights, only the client routes were missing.

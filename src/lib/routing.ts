@@ -36,6 +36,16 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   // apply_student_class_import RPC (which re-checks the role in SQL).
   '/admin/class-import': ['admin'],
 
+  // Lesson Plan Review. Admin reviews plans exactly like a supervisor: the
+  // database already grants both roles identical rights (`admin_all_plans` RLS
+  // plus the `('supervisor','admin')` checks inside decide_lesson_plan_review,
+  // request_lesson_plan_revision, retry_lesson_plan_ai_review and the
+  // quiz-replacement RPC), so admin gets the same page — not a wider one.
+  // Admin's own path is /admin/lesson-plans; the supervisor path is open to
+  // admin as well so a link shared by a supervisor still opens.
+  '/admin/lesson-plans': ['admin'],
+  '/supervisor/lesson-plans': ['admin', 'supervisor'],
+
   // Read-only student directory (name, grade, transport, family ID).
   '/directory': ['admin', 'supervisor', 'office'],
 };

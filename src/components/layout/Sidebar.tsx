@@ -26,6 +26,8 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Class Updates / Import', icon: ArrowLeftRight, path: '/admin/class-import' },
     { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
     { label: 'Unit Plans', icon: Layers, path: '/admin/unit-plans' },
+    // Admin reviews lesson plans with the same rights as a supervisor.
+    { label: 'Lesson Plans', icon: NotepadText, path: '/admin/lesson-plans' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
     { label: 'Bulk Upload Grades', icon: FileSpreadsheet, path: '/admin/bulk-grades' },
     { label: 'Announcements', icon: BellRing, path: '/admin/announcements' },
