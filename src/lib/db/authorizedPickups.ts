@@ -10,6 +10,10 @@
 // the object path ("photoPath"); the UI renders a short-lived signed URL
 // produced by createSignedUrl(), which requires staff storage SELECT access.
 //
+// A driver photo is OPTIONAL (photoPath may be null). Camera capture and
+// gallery upload both write the SAME single photoPath — there are no separate
+// fields for the two capture methods.
+//
 // De-dupe: drivers are matched on normalized phone (the same normalize_phone()
 // the family generator uses). The UI checks findAuthorizedPickupByPhone() (or
 // findDriverByPhone() against an already-loaded list) before creating, offers
@@ -28,8 +32,8 @@ export interface AuthorizedPickup {
   name: string;
   phoneNumber: string;
   relationship: string | null;
-  /** Object path within the private bucket (e.g. 'pickup-abc123.jpg'). */
-  photoPath: string;
+  /** Object path within the private bucket (e.g. 'pickup-abc123.jpg'), or null when the driver has no photo. */
+  photoPath: string | null;
   addedAt: string;
   /** Student ids this person may pick up (within the queried family). */
   studentIds: string[];
@@ -53,7 +57,7 @@ export interface ManagedDriver {
   name: string;
   phoneNumber: string;
   relationship: string | null;
-  photoPath: string;
+  photoPath: string | null;
   addedAt: string;
   studentCount: number;
   familyCount: number;
@@ -66,7 +70,8 @@ export async function createAuthorizedPickup(input: {
   name: string;
   phoneNumber: string;
   relationship: string;
-  photoPath: string;
+  /** Object path for the photo, or null when the driver is saved without one. */
+  photoPath: string | null;
   studentIds: string[];
   /** Explicitly allow a second driver with the same (normalized) phone. */
   allowDuplicatePhone?: boolean;
@@ -76,9 +81,23 @@ export async function createAuthorizedPickup(input: {
     p_name: input.name,
     p_phone_number: input.phoneNumber,
     p_relationship: input.relationship,
-    p_photo_path: input.photoPath,
+    p_photo_path: input.photoPath ?? null,
     p_student_ids: input.studentIds,
     p_allow_duplicate_phone: input.allowDuplicatePhone ?? false,
+  });
+  if (error) throw error;
+  return data as AuthorizedPickup;
+}
+
+/** Replace (or remove, with null) an existing driver's photo. Admin/office only in SQL. */
+export async function updateAuthorizedPickupPhoto(
+  pickupId: string,
+  photoPath: string | null,
+): Promise<AuthorizedPickup> {
+  if (!pickupId) throw new Error('A driver is required.');
+  const { data, error } = await supabase.rpc('update_authorized_pickup_photo', {
+    p_pickup_id: pickupId,
+    p_photo_path: photoPath ?? null,
   });
   if (error) throw error;
   return data as AuthorizedPickup;
@@ -179,7 +198,8 @@ export async function getFamilyPickups(familyId: string): Promise<FamilyPickup[]
 }
 
 /** Short-lived signed URL for a private-bucket photo (for <img> rendering). */
-export async function getPickupPhotoSignedUrl(photoPath: string): Promise<string | null> {
+export async function getPickupPhotoSignedUrl(photoPath: string | null): Promise<string | null> {
+  if (!photoPath) return null;
   const { data, error } = await supabase.storage
     .from(PICKUP_BUCKET)
     .createSignedUrl(photoPath, PICKUP_PHOTO_TTL_SECONDS);
@@ -190,9 +210,10 @@ export async function getPickupPhotoSignedUrl(photoPath: string): Promise<string
 /**
  * Resolve signed photo URLs for a list of pickups (parallel, per render).
  * Accepts any record carrying id + photoPath, so it serves both the per-family
- * gate list (FamilyPickup) and the management list (ManagedDriver).
+ * gate list (FamilyPickup) and the management list (ManagedDriver). Drivers
+ * without a photo simply have no map entry (callers fall back to an avatar).
  */
-export async function resolvePickupPhotoUrls<T extends { id: string; photoPath: string }>(
+export async function resolvePickupPhotoUrls<T extends { id: string; photoPath: string | null }>(
   pickups: T[],
 ): Promise<Map<string, string>> {
   const entries = await Promise.all(

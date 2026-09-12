@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { normalizePhone } from './transport';
 
 const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const rawSupabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -64,6 +65,72 @@ const demoProfiles: any[] = [
   { id: 'teacher-3', name: 'Ms. Hodan', email: 'hodan@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 3-B'], assignedSubjects: ['Science'], createdAt: '2026-06-01', auth_id: 'auth-teacher-3' },
   { id: 'supervisor-1', name: 'Mr. Bashir (Supervisor)', email: 'supervisor@mbk.edu', role: 'supervisor', phone1: null, phone2: null, assignedClasses: [], assignedSubjects: [], createdAt: '2026-06-01', auth_id: 'auth-supervisor-1' },
 ];
+
+// --- Demo authorized-pickup (driver) data for the Manage Drivers preview ---
+type DemoDriverStudent = {
+  id: string;
+  name: string;
+  className: string;
+  familyId: string | null;
+  transport?: string | null;
+};
+type DemoDriver = {
+  id: string;
+  name: string;
+  phoneNumber: string;
+  relationship: string | null;
+  photoPath: string | null;
+  addedAt: string;
+  students: DemoDriverStudent[];
+};
+
+function avatarDataUrl(initials: string, bg: string, fg = '#ffffff'): string {
+  const svg = `<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><rect width='160' height='160' fill='${bg}'/><text x='80' y='104' font-family='Arial, sans-serif' font-size='64' font-weight='700' fill='${fg}' text-anchor='middle'>${initials}</text></svg>`;
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Could not read the image.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+const demoDriversSeed: DemoDriver[] = [
+  {
+    id: 'pickup-demo-1',
+    name: 'Xasan Cali',
+    phoneNumber: '+252 61 2345678',
+    relationship: 'Adeer',
+    photoPath: 'pickup-demo-1.jpg',
+    addedAt: '2026-09-01T08:00:00Z',
+    students: [
+      { id: 'stu-barwaaqo', name: 'Barwaaqo Maxamed Heeban', className: 'Grade 2-C', familyId: '0001', transport: 'Bus 3' },
+      { id: 'stu-sara', name: 'Sara Abdullahi', className: 'Grade 1-A', familyId: '0004', transport: 'Bus 2' },
+    ],
+  },
+  {
+    id: 'pickup-demo-2',
+    name: 'Cali Yusuf',
+    phoneNumber: '0619999999',
+    relationship: null,
+    photoPath: null,
+    addedAt: '2026-09-02T08:00:00Z',
+    students: [
+      { id: 'stu-ahmed', name: 'Ahmed Ali Yusuf', className: 'Grade 2-C', familyId: '0002', transport: 'WALKER' },
+    ],
+  },
+];
+
+// Mutable preview state (persists for the page session).
+const pickupDrivers: DemoDriver[] = demoDriversSeed.map(d => ({ ...d, students: d.students.map(s => ({ ...s })) }));
+
+// path -> data URL for the private-bucket photos in preview.
+const pickupPhotoStore = new Map<string, string>([
+  ['pickup-demo-1.jpg', avatarDataUrl('XC', '#065f46')],
+]);
 
 function demoMonthlyRowsFor(studentId: string, termId: string): any[] {
   if (studentId !== 'stu-barwaaqo') {
@@ -427,14 +494,115 @@ function createMockSupabase(): SupabaseClient {
     if (fn === 'get_students_by_classes' || fn === 'get_students' || fn === 'create_student' || fn === 'update_student') {
       return { data: null, error: { message: 'Not implemented in mock', code: 'PGRST202' } };
     }
+
+    // ── Authorized pickups ("drivers") — full preview implementation ────────
+    const studentObj = (id: string): DemoDriverStudent => {
+      const s = demoStudents.find(x => x.id === id);
+      return { id, name: s?.name ?? id, className: s?.className ?? '', familyId: s?.familyId ?? null, transport: s?.transport ?? null };
+    };
+    const driverSummary = (d: DemoDriver) => ({
+      id: d.id, name: d.name, phoneNumber: d.phoneNumber, relationship: d.relationship,
+      photoPath: d.photoPath, addedAt: d.addedAt,
+    });
+    const listDrivers = () =>
+      pickupDrivers.map(d => ({
+        ...driverSummary(d),
+        studentCount: d.students.length,
+        familyCount: new Set(d.students.map(s => s.familyId).filter(Boolean)).size,
+        students: d.students.map(s => ({ ...s })),
+      }));
+
+    if (fn === 'list_authorized_pickups') {
+      return { data: listDrivers(), error: null };
+    }
+    if (fn === 'create_authorized_pickup') {
+      const p = params;
+      const phone = (p.p_phone_number ?? '').trim();
+      if (!p.p_allow_duplicate_phone && normalizePhone(phone) && pickupDrivers.some(d => normalizePhone(d.phoneNumber) === normalizePhone(phone))) {
+        return { data: null, error: { message: 'A driver with this phone number already exists.' } };
+      }
+      const students: DemoDriverStudent[] = (p.p_student_ids ?? []).map(studentObj);
+      const driver: DemoDriver = {
+        id: p.p_id,
+        name: (p.p_name ?? '').trim(),
+        phoneNumber: phone,
+        relationship: (p.p_relationship ?? '').trim() || null,
+        photoPath: p.p_photo_path || null,
+        addedAt: new Date().toISOString(),
+        students,
+      };
+      pickupDrivers.push(driver);
+      return { data: { ...driverSummary(driver), studentIds: students.map(s => s.id) }, error: null };
+    }
+    if (fn === 'attach_students_to_authorized_pickup') {
+      const d = pickupDrivers.find(x => x.id === params.p_pickup_id);
+      if (!d) return { data: null, error: { message: 'Driver not found.' } };
+      for (const id of params.p_student_ids ?? []) {
+        if (!d.students.some(s => s.id === id)) d.students.push(studentObj(id));
+      }
+      return { data: { ...driverSummary(d), studentIds: d.students.map(s => s.id) }, error: null };
+    }
+    if (fn === 'remove_student_from_authorized_pickup') {
+      const d = pickupDrivers.find(x => x.id === params.p_pickup_id);
+      if (!d) return { data: null, error: { message: 'Driver not found.' } };
+      d.students = d.students.filter(s => s.id !== params.p_student_id);
+      return { data: { personId: params.p_pickup_id, studentId: params.p_student_id, removed: true }, error: null };
+    }
+    if (fn === 'update_authorized_pickup_photo') {
+      const d = pickupDrivers.find(x => x.id === params.p_pickup_id);
+      if (!d) return { data: null, error: { message: 'Driver not found.' } };
+      d.photoPath = params.p_photo_path || null;
+      return { data: driverSummary(d), error: null };
+    }
+    if (fn === 'find_authorized_pickup_by_phone') {
+      const phone = params.p_phone ?? '';
+      const d = pickupDrivers.find(x => normalizePhone(x.phoneNumber) === normalizePhone(phone) && normalizePhone(phone) !== '');
+      return { data: d ? driverSummary(d) : null, error: null };
+    }
+    if (fn === 'search_authorized_pickups') {
+      const q = (params.p_query ?? '').trim().toLowerCase();
+      const list = pickupDrivers
+        .filter(d => !q || d.name.toLowerCase().includes(q) || d.phoneNumber.includes(q))
+        .map(driverSummary);
+      return { data: list, error: null };
+    }
+    if (fn === 'get_family_pickups') {
+      return { data: [], error: null };
+    }
+
     // For class_students_for_term etc fallback
     return { data: null, error: { message: `Mock RPC ${fn} not implemented`, code: 'PGRST202' } };
+  };
+
+  const mockStorage = {
+    from: (_bucket: string) => ({
+      upload: async (path: string, blob: Blob) => {
+        try {
+          const dataUrl = await blobToDataUrl(blob);
+          pickupPhotoStore.set(path, dataUrl);
+          return { data: { path }, error: null };
+        } catch {
+          return { data: null, error: { message: 'Could not upload the photo.' } };
+        }
+      },
+      remove: async (paths: string[]) => {
+        for (const p of paths) pickupPhotoStore.delete(p);
+        return { data: paths, error: null };
+      },
+      createSignedUrl: async (path: string) => {
+        const url = pickupPhotoStore.get(path);
+        return url
+          ? { data: { signedUrl: url }, error: null }
+          : { data: null, error: { message: 'Object not found' } };
+      },
+    }),
   };
 
   return {
     auth: mockAuth as any,
     from: mockFrom as any,
     rpc: mockRpc as any,
+    storage: mockStorage as any,
   } as unknown as SupabaseClient;
 }
 
