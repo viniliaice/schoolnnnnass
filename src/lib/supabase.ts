@@ -601,6 +601,20 @@ function createMockSupabase(): SupabaseClient {
     return { data: null, error: { message: `Mock RPC ${fn} not implemented`, code: 'PGRST202' } };
   };
 
+  // Realtime is how the lesson-plan detail, message, and announcement pages
+  // stay live in production. The preview has no Postgres to subscribe to, so
+  // channels become inert no-ops: pages render from the demo tables and
+  // simply never receive push updates. Without these, any page that opens a
+  // channel — e.g. selecting a lesson plan on Lesson Plan Review, which the
+  // submission tracker's View action does — crashes with
+  // "supabase.channel is not a function".
+  const makeChannel = () => {
+    const builder: Record<string, unknown> = {};
+    builder.on = () => builder;
+    builder.subscribe = () => builder;
+    return builder;
+  };
+
   const mockStorage = {
     from: (_bucket: string) => ({
       upload: async (path: string, blob: Blob) => {
@@ -630,6 +644,17 @@ function createMockSupabase(): SupabaseClient {
     from: mockFrom as any,
     rpc: mockRpc as any,
     storage: mockStorage as any,
+    channel: (_name?: string) => makeChannel(),
+    removeChannel: async () => 'ok' as const,
+    // Edge functions only run against a real backend; answer honestly so a
+    // preview click on "submit" reports a failure instead of crashing on
+    // `supabase.functions is undefined`.
+    functions: {
+      invoke: async () => ({
+        data: null,
+        error: { message: 'Preview mode — edge functions are disabled.' },
+      }),
+    },
   } as unknown as SupabaseClient;
 }
 
