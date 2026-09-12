@@ -16,7 +16,7 @@ import {
   attachStudentsToAuthorizedPickup, createAuthorizedPickup, findAuthorizedPickupByPhone,
   findDriverByPhone, getFamilyPickups, listAuthorizedPickups, removeStudentDriver,
   removeStudentFromAuthorizedPickup, searchAuthorizedPickups,
-  resolvePickupPhotoUrls, PICKUP_BUCKET, type ManagedDriver,
+  resolvePickupPhotoUrls, updateAuthorizedPickupPhoto, PICKUP_BUCKET, type ManagedDriver,
 } from '../db/authorizedPickups';
 
 const rpc = supabase.rpc as unknown as ReturnType<typeof vi.fn>;
@@ -77,18 +77,57 @@ describe('createAuthorizedPickup', () => {
     expect(rpc).toHaveBeenCalledWith('create_authorized_pickup', expect.objectContaining({ p_allow_duplicate_phone: true }));
   });
 
-  it('throws the RPC error (e.g. missing required photo)', async () => {
-    rpc.mockResolvedValue({ data: null, error: { message: 'A photo is required.' } });
+  it('sends p_photo_path: null when the driver is saved without a photo', async () => {
+    rpc.mockResolvedValue({ data: { id: 'p', studentIds: ['s1'] }, error: null });
+    await createAuthorizedPickup({
+      id: 'p',
+      name: 'X',
+      phoneNumber: '123',
+      relationship: '',
+      photoPath: null,
+      studentIds: ['s1'],
+    });
+    expect(rpc).toHaveBeenCalledWith('create_authorized_pickup', expect.objectContaining({ p_photo_path: null }));
+  });
+
+  it('throws the RPC error (e.g. duplicate phone) and sends a null photo path', async () => {
+    rpc.mockResolvedValue({ data: null, error: { message: 'A driver with this phone number already exists.' } });
     await expect(
       createAuthorizedPickup({
         id: 'p',
         name: 'X',
         phoneNumber: '123',
         relationship: '',
-        photoPath: '',
+        photoPath: null,
         studentIds: ['s1'],
       }),
-    ).rejects.toThrow(/photo is required/);
+    ).rejects.toThrow(/phone number already exists/);
+    expect(rpc).toHaveBeenCalledWith('create_authorized_pickup', expect.objectContaining({ p_photo_path: null }));
+  });
+});
+
+describe('updateAuthorizedPickupPhoto', () => {
+  it('replaces a driver photo via the RPC', async () => {
+    rpc.mockResolvedValue({ data: { id: 'pickup-1', photoPath: 'pickup-1.jpg' }, error: null });
+    await updateAuthorizedPickupPhoto('pickup-1', 'pickup-1.jpg');
+    expect(rpc).toHaveBeenCalledWith('update_authorized_pickup_photo', {
+      p_pickup_id: 'pickup-1',
+      p_photo_path: 'pickup-1.jpg',
+    });
+  });
+
+  it('removes a driver photo when given null', async () => {
+    rpc.mockResolvedValue({ data: { id: 'pickup-1', photoPath: null }, error: null });
+    await updateAuthorizedPickupPhoto('pickup-1', null);
+    expect(rpc).toHaveBeenCalledWith('update_authorized_pickup_photo', {
+      p_pickup_id: 'pickup-1',
+      p_photo_path: null,
+    });
+  });
+
+  it('rejects a missing driver id WITHOUT calling the RPC', async () => {
+    await expect(updateAuthorizedPickupPhoto('', 'p.jpg')).rejects.toThrow(/required/);
+    expect(rpc).not.toHaveBeenCalled();
   });
 });
 
@@ -295,5 +334,11 @@ describe('resolvePickupPhotoUrls', () => {
     expect(urls.has('good')).toBe(true);
     expect(urls.has('bad')).toBe(false);
     expect(PICKUP_BUCKET).toBe('authorized-pickups');
+  });
+
+  it('skips drivers without a photo (null photoPath) without signing', async () => {
+    const urls = await resolvePickupPhotoUrls([{ id: 'nophoto', photoPath: null }]);
+    expect(urls.has('nophoto')).toBe(false);
+    expect(createSignedUrl).not.toHaveBeenCalled();
   });
 });

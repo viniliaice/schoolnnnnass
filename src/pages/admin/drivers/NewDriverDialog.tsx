@@ -1,8 +1,10 @@
 // "New driver" dialog for the management screen — create a driver without a
 // gate lookup first. This is the ONLY place a driver is created (the gate's
 // AssignDriverPanel searches and assigns, never creates). Required fields:
-// name, phone, photo, and at least one student; students are picked with a
-// school-wide search instead of a fixed family's checkbox list.
+// name, phone, and at least one student (students are picked with a
+// school-wide search instead of a fixed family's checkbox list). The photo is
+// OPTIONAL and can be added either by taking it with the device camera or by
+// uploading an image — both feed the same single photoPath.
 //
 // De-dupe: when the phone matches an existing driver (normalized), staff are
 // offered "attach to existing" instead of creating a duplicate. Attaching
@@ -13,7 +15,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Loader2, X } from 'lucide-react';
 import { Dialog } from '../../../components/ui/Dialog';
-import { PhotoCapture } from '../../../components/photo/PhotoCapture';
+import { DriverPhotoField } from '../../../components/photo/DriverPhotoField';
 import { useToast } from '../../../context/ToastContext';
 import { supabase } from '../../../lib/supabase';
 import {
@@ -113,10 +115,6 @@ export function NewDriverDialog({
       setError('Name and phone number are required.');
       return;
     }
-    if (!photoBlob) {
-      setError('Photo is required.');
-      return;
-    }
     if (selected.size === 0) {
       setError('Select at least one student.');
       return;
@@ -125,12 +123,16 @@ export function NewDriverDialog({
     setSaving(true);
     setError(null);
     const id = `pickup-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const path = `${id}.jpg`;
+    // One photo path whether the photo came from the camera or a gallery
+    // upload — null when the driver is saved without a photo.
+    const path = photoBlob ? `${id}.jpg` : null;
     try {
-      const { error: uploadError } = await supabase.storage
-        .from(PICKUP_BUCKET)
-        .upload(path, photoBlob, { contentType: 'image/jpeg', upsert: true });
-      if (uploadError) throw uploadError;
+      if (photoBlob && path) {
+        const { error: uploadError } = await supabase.storage
+          .from(PICKUP_BUCKET)
+          .upload(path, photoBlob, { contentType: 'image/jpeg', upsert: true });
+        if (uploadError) throw uploadError;
+      }
 
       await createAuthorizedPickup({
         id,
@@ -146,10 +148,12 @@ export function NewDriverDialog({
       onSaved();
       onClose();
     } catch (err) {
-      try {
-        await supabase.storage.from(PICKUP_BUCKET).remove([path]);
-      } catch {
-        /* non-critical */
+      if (path) {
+        try {
+          await supabase.storage.from(PICKUP_BUCKET).remove([path]);
+        } catch {
+          /* non-critical */
+        }
       }
       const message = err instanceof Error ? err.message : String(err);
       setError(message);
@@ -261,11 +265,11 @@ export function NewDriverDialog({
           />
         </div>
 
-        {/* Required photo — captured once at creation. */}
+        {/* Optional driver photo — camera capture or gallery upload (one shared field). */}
         {!showBanner && (
           <div>
-            <label className="mb-1 block text-xs font-bold text-slate-500">Photo (required)</label>
-            <PhotoCapture onChange={setPhotoBlob} takeLabel="Take photo" retakeLabel="Retake" />
+            <label className="mb-1 block text-xs font-bold text-slate-500">Driver Photo</label>
+            <DriverPhotoField onChange={setPhotoBlob} />
           </div>
         )}
 

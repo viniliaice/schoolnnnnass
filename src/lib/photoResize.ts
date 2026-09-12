@@ -1,11 +1,13 @@
 // Client-side photo resize for driver pickup photos.
 //
-// Captures via <input type="file" accept="image/*" capture="environment">
-// then center-crops to a square and scales to a ~400×400 canvas before upload,
-// keeping the stored file in the ~30–80KB range (the requirement's target).
+// Driver photos come from EITHER the camera (a video frame or a `capture`
+// file input) OR a gallery upload — both funnel through resizeImageToSquare(),
+// which center-crops to a square and scales to a ~400×400 canvas before upload
+// (JPEG ~30–80KB), keeping the stored file small and the driver list fast.
 //
 // Only computeSquareCrop() is pure (unit-testable). The DOM/Canvas helpers
-// (loadImage / canvasToBlob / resizeImageToSquare) run in the browser.
+// (loadImage / canvasToBlob / resizeImageToSquare / videoFrameToSquare) run in
+// the browser.
 
 export interface SquareCrop {
   sx: number;
@@ -31,9 +33,9 @@ export interface ResizedPhoto {
   height: number;
 }
 
-function loadImage(file: File): Promise<HTMLImageElement> {
+function loadImage(source: Blob): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
-    const url = URL.createObjectURL(file);
+    const url = URL.createObjectURL(source);
     const image = new Image();
     image.onload = () => {
       URL.revokeObjectURL(url);
@@ -47,7 +49,7 @@ function loadImage(file: File): Promise<HTMLImageElement> {
   });
 }
 
-function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob> {
+export function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number): Promise<Blob> {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       blob => (blob ? resolve(blob) : reject(new Error('Could not encode the image.'))),
@@ -57,9 +59,9 @@ function canvasToBlob(canvas: HTMLCanvasElement, type: string, quality: number):
   });
 }
 
-/** Resize a captured photo to a square JPEG (default 400×400) for upload. */
-export async function resizeImageToSquare(file: File, targetSize = 400): Promise<ResizedPhoto> {
-  const image = await loadImage(file);
+/** Resize a photo (file, blob, or camera frame) to a square JPEG (default 400×400) for upload. */
+export async function resizeImageToSquare(source: Blob, targetSize = 400): Promise<ResizedPhoto> {
+  const image = await loadImage(source);
   const { sx, sy, size } = computeSquareCrop(image.naturalWidth, image.naturalHeight);
 
   const canvas = document.createElement('canvas');
@@ -79,4 +81,22 @@ export async function resizeImageToSquare(file: File, targetSize = 400): Promise
 
   const dataUrl = canvas.toDataURL('image/jpeg', quality);
   return { blob, dataUrl, width: targetSize, height: targetSize };
+}
+
+/**
+ * Snapshot a <video> camera frame and normalize it exactly like an uploaded
+ * photo (center-crop + resize to a square JPEG). Browser-only (canvas).
+ */
+export async function videoFrameToSquare(video: HTMLVideoElement, targetSize = 400): Promise<ResizedPhoto> {
+  if (!video.videoWidth || !video.videoHeight) {
+    throw new Error('The camera did not produce a frame.');
+  }
+  const canvas = document.createElement('canvas');
+  canvas.width = video.videoWidth;
+  canvas.height = video.videoHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas is not supported in this browser.');
+  ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  const frame = await canvasToBlob(canvas, 'image/jpeg', 0.9);
+  return resizeImageToSquare(frame, targetSize);
 }
