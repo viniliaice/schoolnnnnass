@@ -3,6 +3,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   fetchPlansByTeacher,
   fetchPlansBySupervisor,
+  fetchPlansBySupervisorForWeek,
+  fetchSupervisorPlanWeeks,
   fetchPlanById,
   createPlan,
   deletePlan,
@@ -64,6 +66,34 @@ export function useSupervisorPlans() {
   return useQuery({
     queryKey: ['lessonPlans', 'supervisor'],
     queryFn: fetchPlansBySupervisor,
+    staleTime: 1000 * 60 * 3,
+    gcTime: 1000 * 60 * 10,
+  });
+}
+
+/**
+ * The weeks that have at least one reviewable submission.
+ * This is the supervisor's entry point: pick a week, then review it.
+ */
+export function useSupervisorPlanWeeks() {
+  return useQuery({
+    queryKey: ['lessonPlans', 'supervisor', 'weeks'],
+    queryFn: fetchSupervisorPlanWeeks,
+    staleTime: 1000 * 60 * 3,
+    gcTime: 1000 * 60 * 10,
+  });
+}
+
+/**
+ * Only the plans stored under the selected week — the week filter runs in the
+ * database, so switching weeks replaces the list instead of re-filtering a
+ * preloaded history in the browser.
+ */
+export function useSupervisorPlansForWeek(weekKey: string | null, weekLabels: string[] | undefined) {
+  return useQuery({
+    queryKey: ['lessonPlans', 'supervisor', 'week', weekKey],
+    queryFn: () => fetchPlansBySupervisorForWeek(weekLabels ?? []),
+    enabled: !!weekKey && !!weekLabels?.length,
     staleTime: 1000 * 60 * 3,
     gcTime: 1000 * 60 * 10,
   });

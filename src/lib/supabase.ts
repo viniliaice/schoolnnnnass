@@ -60,6 +60,9 @@ const demoProfiles: any[] = [
   { id: 'parent-2', name: 'Ali Yusuf', email: 'parent2@example.com', role: 'parent', phone1: '252634511111', phone2: null, createdAt: '2026-06-01', auth_id: 'auth-parent-2' },
   { id: 'parent-3', name: 'Farah Mohamed', email: 'parent3@example.com', role: 'parent', phone1: '252634500000', phone2: null, createdAt: '2026-06-01', auth_id: 'auth-parent-3' },
   { id: 'teacher-1', name: 'Ms. Fatima', email: 'fatima@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 2-C'], assignedSubjects: ['English','Mathematics'], createdAt: '2026-06-01', auth_id: 'auth-teacher-1' },
+  { id: 'teacher-2', name: 'Mr. Omar', email: 'omar@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 1-A'], assignedSubjects: ['Mathematics'], createdAt: '2026-06-01', auth_id: 'auth-teacher-2' },
+  { id: 'teacher-3', name: 'Ms. Hodan', email: 'hodan@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 3-B'], assignedSubjects: ['Science'], createdAt: '2026-06-01', auth_id: 'auth-teacher-3' },
+  { id: 'supervisor-1', name: 'Mr. Bashir (Supervisor)', email: 'supervisor@mbk.edu', role: 'supervisor', phone1: null, phone2: null, assignedClasses: [], assignedSubjects: [], createdAt: '2026-06-01', auth_id: 'auth-supervisor-1' },
 ];
 
 function demoMonthlyRowsFor(studentId: string, termId: string): any[] {
@@ -136,6 +139,102 @@ function demoMonthlyRowsFor(studentId: string, termId: string): any[] {
   ];
 }
 
+// Demo lesson plans for the supervisor's weekly Lesson Plan Review preview.
+// `week_label` is what the app really stores (and what the week selector groups
+// by); `title` is free text the teacher types, so the preview deliberately mixes
+// spellings ("week 7", "Week7", "Week 05", "week6") to show that the week
+// dropdown follows the stored week, not the title.
+const demoLessonPlanTeachers = [
+  { id: 'teacher-1', name: 'Ms. Fatima' },
+  { id: 'teacher-2', name: 'Mr. Omar' },
+  { id: 'teacher-3', name: 'Ms. Hodan' },
+];
+
+const demoLessonPlans: any[] = (() => {
+  const classes = ['Grade 1-A', 'Grade 2-C', 'Grade 3-B', 'Foundation-KG'];
+  // Oldest week first. 2026-W04..W07 mirror the real submissions the supervisor
+  // complained about; 2026-W15 is "this week" for the demo academic year.
+  const weeks: Array<{ label: string; titles: string[]; statuses: string[] }> = [
+    {
+      label: '2026-W04',
+      titles: ['Week 2026-W04', 'Week 2026-W04', 'Week 2026-W04', 'Week 2026-W04', 'Week 2026-W04'],
+      statuses: ['approved', 'approved', 'approved', 'in_review', 'rejected'],
+    },
+    {
+      label: '2026-W05',
+      titles: ['Week 05', 'week 5', 'Week 05', 'week 5'],
+      statuses: ['approved', 'in_review', 'in_review', 'approved'],
+    },
+    {
+      label: '2026-W06',
+      titles: ['week6', 'week6', 'week6', 'week6', 'week6', 'week6'],
+      statuses: ['rejected', 'rejected', 'in_review', 'approved', 'in_review', 'rejected'],
+    },
+    {
+      label: '2026-W07',
+      titles: ['week 7', 'Week7', 'week 7', 'Week7', 'week 7', 'Week7', 'week 7', 'Week7'],
+      statuses: ['in_review', 'in_review', 'approved', 'approved', 'rejected', 'submitted', 'in_review', 'approved'],
+    },
+    {
+      label: '2026-W15',
+      titles: ['Week 2026-W15', 'Week 2026-W15', 'Week 2026-W15'],
+      statuses: ['submitted', 'in_review', 'submitted'],
+    },
+  ];
+
+  const rows: any[] = [];
+  weeks.forEach(({ label, titles, statuses }) => {
+    statuses.forEach((status, index) => {
+      const teacher = demoLessonPlanTeachers[index % demoLessonPlanTeachers.length];
+      const className = classes[index % classes.length];
+      const stamp = `2026-09-${String(1 + index).padStart(2, '0')}T08:00:00.000Z`;
+      rows.push({
+        id: `plan-${label}-${index + 1}`,
+        teacher_id: teacher.id,
+        subject_id: null,
+        class_name: className,
+        week_label: label,
+        title: `${titles[index]} - ${className}`,
+        status,
+        period_count: 5,
+        previous_score: null,
+        previous_reviewed_at: null,
+        created_at: stamp,
+        updated_at: stamp,
+        ai_started_at: status === 'submitted' ? stamp : null,
+        ai_failure_reason: null,
+        revision_requested_at: null,
+        // The real query embeds profiles through the teacher FK.
+        profiles: { name: teacher.name },
+      });
+    });
+  });
+  return rows;
+})();
+
+const demoLessonPlanPeriods: any[] = demoLessonPlans.flatMap((plan: any) =>
+  ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday'].map((day, index) => ({
+    id: `period-${plan.id}-${day}-1`,
+    plan_id: plan.id,
+    day,
+    period_number: 1,
+    class_name: plan.class_name,
+    subject: 'Mathematics',
+    is_free: false,
+    topic: `${plan.week_label} — ${day} topic`,
+    objective: 'Students explain the concept in their own words.',
+    activities: '1. Warm-up (10min) [] @Board | 2. Guided practice (25min) [] @Desks',
+    slide_number: null,
+    details: [
+      { activity: 'Warm-up', time: '10min', resource: 'Board', place: 'Desks' },
+      { activity: 'Guided practice', time: '25min', resource: 'Workbook', place: 'Desks' },
+    ],
+    sort_order: index,
+    created_at: plan.created_at,
+    updated_at: plan.created_at,
+  }))
+);
+
 function createMockSupabase(): SupabaseClient {
   const demoClasses = Array.from(new Set(demoStudents.map(s => s.className))).sort();
 
@@ -162,6 +261,12 @@ function createMockSupabase(): SupabaseClient {
         case 'exams': return [];
         case 'grade_scales': return [];
         case 'report_config': return [{ id: 'default', caWeight: 60, midtermWeight: 20, finalWeight: 20, caTypes: ['CA','Homework','Classwork','Quiz','Attendance'], updatedAt: new Date().toISOString() }];
+        case 'lesson_plans': return [...demoLessonPlans];
+        case 'lesson_plan_periods': return [...demoLessonPlanPeriods];
+        case 'ai_reviews': return [];
+        case 'lesson_period_ai_reviews': return [];
+        case 'lesson_plan_quizzes': return [];
+        case 'unit_plans': return [];
         default: return [];
       }
     };
@@ -265,8 +370,13 @@ function createMockSupabase(): SupabaseClient {
     },
     getSession: async () => ({ data: { session: null }, error: null }),
     signInWithPassword: async ({ email, password }: any) => {
-      // In preview, accept any login as admin for demo
-      const mockUser = { id: 'auth-preview-admin', email: email || 'admin@mbk.edu' };
+      // In preview, accept any password. A known demo email signs in as that
+      // demo profile (so the supervisor pages are reachable); anything else
+      // signs in as the demo admin, as before.
+      const wanted = String(email || '').trim().toLowerCase();
+      const profile = demoProfiles.find((p: any) => String(p.email || '').toLowerCase() === wanted)
+        || demoProfiles.find((p: any) => p.id === 'preview-admin');
+      const mockUser = { id: profile.auth_id, email: profile.email };
       const mockSession = { user: mockUser, access_token: 'mock-token', refresh_token: 'mock-refresh' };
       return { data: { user: mockUser, session: mockSession }, error: null } as any;
     },

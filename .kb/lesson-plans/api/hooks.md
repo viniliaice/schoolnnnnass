@@ -9,13 +9,16 @@ timestamp: 2026-07-27T00:00:00Z
 Custom hooks in src/lib/hooks/useLessonPlans.ts wrapping all lesson plan DB functions with TanStack Query caching, optimistic updates, and auto-refetch.
 
 - useTeacherPlans(teacherId) - list teacher plans
-- useSupervisorPlans() - list all plans for supervisor
+- useSupervisorPlans() - list all plans for supervisor (kept for callers that need every week)
+- useSupervisorPlanWeeks() - weeks that have submissions, with counts (week selector)
+- useSupervisorPlansForWeek(weekKey, weekLabels) - only the selected week's plans; filtered in the database
 - usePlanWithPeriods(id) - plan detail with periods
 - useReview(planId) - AI review data
 - useCreatePlan() / useDeletePlan() - CRUD mutations
 - useSavePeriods() - period save mutation
 - useSubmitForReview() - submit + trigger AI review
 - useApprovePlan() / useRejectPlan() - supervisor actions
+- useRequestRevision() - unlock a submitted plan for teacher edits
 
 ## Related
 
