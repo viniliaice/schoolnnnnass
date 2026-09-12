@@ -63,6 +63,9 @@ const demoProfiles: any[] = [
   { id: 'teacher-1', name: 'Ms. Fatima', email: 'fatima@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 2-C'], assignedSubjects: ['English','Mathematics'], createdAt: '2026-06-01', auth_id: 'auth-teacher-1' },
   { id: 'teacher-2', name: 'Mr. Omar', email: 'omar@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 1-A'], assignedSubjects: ['Mathematics'], createdAt: '2026-06-01', auth_id: 'auth-teacher-2' },
   { id: 'teacher-3', name: 'Ms. Hodan', email: 'hodan@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 3-B'], assignedSubjects: ['Science'], createdAt: '2026-06-01', auth_id: 'auth-teacher-3' },
+  // Submission-tracking demo: assigned to a class but (see demoLessonPlans)
+  // never submits the current week — the "Not Submitted" case.
+  { id: 'teacher-4', name: 'Mr. Abdirahman', email: 'abdirahman@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 4-A'], assignedSubjects: ['Social Studies'], createdAt: '2026-06-01', auth_id: 'auth-teacher-4' },
   { id: 'supervisor-1', name: 'Mr. Bashir (Supervisor)', email: 'supervisor@mbk.edu', role: 'supervisor', phone1: null, phone2: null, assignedClasses: [], assignedSubjects: [], createdAt: '2026-06-01', auth_id: 'auth-supervisor-1' },
 ];
 
@@ -314,7 +317,7 @@ function createMockSupabase(): SupabaseClient {
     let limitVal: number | null = null;
     let rangeFrom: number | null = null;
     let rangeTo: number | null = null;
-    let inFilter: { col: string; vals: any[] } | null = null;
+    let inFilter: Array<{ col: string; vals: any[] }> = [];
     let ilikeFilter: { col: string; pattern: string } | null = null;
     let orFilter: string | null = null;
 
@@ -358,8 +361,10 @@ function createMockSupabase(): SupabaseClient {
           out = out.filter(r => (r[f.col] == null && f.val === null) || r[f.col] === f.val);
         }
       }
-      if (inFilter) {
-        out = out.filter(r => inFilter!.vals.map(String).includes(String(r[inFilter!.col] ?? '')));
+      if (inFilter.length > 0) {
+        for (const f of inFilter) {
+          out = out.filter(r => f.vals.map(String).includes(String(r[f.col] ?? '')));
+        }
       }
       if (ilikeFilter) {
         const pat = ilikeFilter.pattern.replace(/%/g, '').toLowerCase();
@@ -395,7 +400,7 @@ function createMockSupabase(): SupabaseClient {
       },
       eq: (col: string, val: any) => { filters.push({ col: col.replace(/"/g,''), val, op: 'eq' }); return chain; },
       neq: (col: string, val: any) => { filters.push({ col: col.replace(/"/g,''), val, op: 'neq' }); return chain; },
-      in: (col: string, vals: any[]) => { inFilter = { col: col.replace(/"/g,''), vals }; return chain; },
+      in: (col: string, vals: any[]) => { inFilter.push({ col: col.replace(/"/g,''), vals }); return chain; },
       is: (col: string, val: any) => { filters.push({ col: col.replace(/"/g,''), val, op: 'is' }); return chain; },
       maybeSingle: async () => {
         const rows = applyFilters(getTableData());
@@ -495,6 +500,28 @@ function createMockSupabase(): SupabaseClient {
       return { data: null, error: { message: 'Not implemented in mock', code: 'PGRST202' } };
     }
 
+    // ── Lesson plans — week aggregate + submitter roster (preview) ─────────
+    if (fn === 'list_lesson_plan_weeks') {
+      const statuses = Array.isArray(params?.p_statuses) ? params.p_statuses : null;
+      const counts = new Map<string, number>();
+      for (const plan of demoLessonPlans) {
+        if (statuses && !statuses.includes(plan.status)) continue;
+        counts.set(plan.week_label, (counts.get(plan.week_label) ?? 0) + 1);
+      }
+      return { data: [...counts].map(([week_label, plan_count]) => ({ week_label, plan_count })), error: null };
+    }
+    if (fn === 'list_lesson_plan_submitters') {
+      // One row per (teacher, assigned class) — same shape as the SQL function.
+      const rows: Array<{ teacher_id: string; teacher_name: string; class_name: string }> = [];
+      for (const profile of demoProfiles) {
+        if (String(profile.role || '').toLowerCase().trim() !== 'teacher') continue;
+        for (const className of Array.isArray(profile.assignedClasses) ? profile.assignedClasses : []) {
+          rows.push({ teacher_id: profile.id, teacher_name: profile.name, class_name: String(className) });
+        }
+      }
+      return { data: rows, error: null };
+    }
+
     // ── Authorized pickups ("drivers") — full preview implementation ────────
     const studentObj = (id: string): DemoDriverStudent => {
       const s = demoStudents.find(x => x.id === id);
@@ -574,6 +601,20 @@ function createMockSupabase(): SupabaseClient {
     return { data: null, error: { message: `Mock RPC ${fn} not implemented`, code: 'PGRST202' } };
   };
 
+  // Realtime is how the lesson-plan detail, message, and announcement pages
+  // stay live in production. The preview has no Postgres to subscribe to, so
+  // channels become inert no-ops: pages render from the demo tables and
+  // simply never receive push updates. Without these, any page that opens a
+  // channel — e.g. selecting a lesson plan on Lesson Plan Review, which the
+  // submission tracker's View action does — crashes with
+  // "supabase.channel is not a function".
+  const makeChannel = () => {
+    const builder: Record<string, unknown> = {};
+    builder.on = () => builder;
+    builder.subscribe = () => builder;
+    return builder;
+  };
+
   const mockStorage = {
     from: (_bucket: string) => ({
       upload: async (path: string, blob: Blob) => {
@@ -603,6 +644,17 @@ function createMockSupabase(): SupabaseClient {
     from: mockFrom as any,
     rpc: mockRpc as any,
     storage: mockStorage as any,
+    channel: (_name?: string) => makeChannel(),
+    removeChannel: async () => 'ok' as const,
+    // Edge functions only run against a real backend; answer honestly so a
+    // preview click on "submit" reports a failure instead of crashing on
+    // `supabase.functions is undefined`.
+    functions: {
+      invoke: async () => ({
+        data: null,
+        error: { message: 'Preview mode — edge functions are disabled.' },
+      }),
+    },
   } as unknown as SupabaseClient;
 }
 

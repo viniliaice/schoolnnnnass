@@ -1,8 +1,8 @@
 # lesson-plans
 
-* [api/](api/) � 3 concept(s)
+* [api/](api/) � 4 concept(s)
 * [data-model/](data-model/) � 4 concept(s)
 * [security/](security/) � 1 concept(s)
-* [ui/](ui/) � 3 concept(s)
+* [ui/](ui/) � 4 concept(s)
 * [overview](overview.md)
 

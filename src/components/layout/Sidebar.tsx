@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   FileSpreadsheet, Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil
+  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil, ListChecks
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -27,6 +27,9 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
     { label: 'Unit Plans', icon: Layers, path: '/admin/unit-plans' },
     // Admin reviews lesson plans with the same rights as a supervisor.
+    // "Submission Tracking" answers who has/hasn't submitted; "Lesson Plans"
+    // is the review page itself.
+    { label: 'Submission Tracking', icon: ListChecks, path: '/admin/lesson-plan-submissions' },
     { label: 'Lesson Plans', icon: NotepadText, path: '/admin/lesson-plans' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
     { label: 'Bulk Upload Grades', icon: FileSpreadsheet, path: '/admin/bulk-grades' },
@@ -77,6 +80,9 @@ const navItems: Record<Role, NavItem[]> = {
   supervisor: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'My Classes', icon: GraduationCap, path: '/supervisor/students' },
+    // "Submission Tracking" answers who has/hasn't submitted this week;
+    // "Lesson Plans" is the detailed review page.
+    { label: 'Submission Tracking', icon: ListChecks, path: '/supervisor/lesson-plan-submissions' },
     { label: 'Lesson Plans', icon: NotepadText, path: '/supervisor/lesson-plans' },
     { label: 'Unit Plans', icon: Layers, path: '/supervisor/unit-plans' },
     { label: 'Exam Verifications', icon: ClipboardCheck, path: '/supervisor/verifications' },

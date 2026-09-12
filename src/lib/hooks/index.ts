@@ -7,3 +7,4 @@ export * from './useStudents';
 export * from './useTeacherExamProgress';
 export * from './useTeacherExamProgressVerification';
 export * from './useLessonPlans';
+export * from './useLessonPlanSubmissions';

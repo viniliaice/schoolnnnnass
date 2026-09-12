@@ -22,7 +22,7 @@ The Lesson Plan system lets teachers create weekly lesson plans for their classe
 
 - **Database**: 3 tables (`lesson_plans`, `lesson_plan_periods`, `ai_reviews`), 1 enum (`day_of_week`), 1 RPC (`save_lesson_plan_periods`).
 - **Edge function**: `generate-lesson-review` — triggered via Supabase DB webhook on plan submission.
-- **Frontend**: `LessonPlanner.tsx` (teacher), `LessonPlanReview.tsx` (supervisor), routed via `/teacher/lesson-plans` and `/supervisor/lesson-plans`.
+- **Frontend**: `LessonPlanner.tsx` (teacher), `LessonPlanSubmissions.tsx` (supervisor submission tracking), `LessonPlanReview.tsx` (supervisor review), routed via `/teacher/lesson-plans`, `/supervisor/lesson-plan-submissions` and `/supervisor/lesson-plans`.
 
 See [lesson_plans](data-model/lesson-plans.md) for the schema, [RLS policies](security/rls-policies.md) for access control, and [LessonPlanner](ui/lesson-planner.md) for the teacher UI.
 

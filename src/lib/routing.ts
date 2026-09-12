@@ -46,6 +46,13 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   '/admin/lesson-plans': ['admin'],
   '/supervisor/lesson-plans': ['admin', 'supervisor'],
 
+  // Lesson Plan Submission tracking (who submitted / who hasn't). Same roles
+  // as review: the list_lesson_plan_submitters RPC (20260915) allows exactly
+  // supervisor + admin, and the plan reads ride the same lesson_plans SELECT
+  // policies the review page uses. Mirrors the review page's two-path setup.
+  '/admin/lesson-plan-submissions': ['admin'],
+  '/supervisor/lesson-plan-submissions': ['admin', 'supervisor'],
+
   // Read-only student directory (name, grade, transport, family ID).
   '/directory': ['admin', 'supervisor', 'office'],
 };

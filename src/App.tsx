@@ -46,6 +46,7 @@ import { CreateQuiz } from './pages/teacher/CreateQuiz';
 import { GradeQuizzes } from './pages/teacher/GradeQuizzes';
 import { LessonPlanner } from './pages/teacher/LessonPlanner';
 import { LessonPlanReview } from './pages/supervisor/LessonPlanReview';
+import { LessonPlanSubmissions } from './pages/supervisor/LessonPlanSubmissions';
 import { UnitPlans } from './pages/teacher/UnitPlans';
 
 // Shared Reports
@@ -125,8 +126,14 @@ function AppContent() {
             // request_lesson_plan_revision, retry_lesson_plan_ai_review and the
             // quiz-replacement RPC). The supervisor URL is honoured too, so a
             // link shared by a supervisor opens for an admin.
-            case '/admin/lesson-plans': return <LessonPlanReview />;
-            case '/supervisor/lesson-plans': return <LessonPlanReview />;
+            case '/admin/lesson-plans': return <LessonPlanReview navigate={navigate} submissionTrackingPath="/admin/lesson-plan-submissions" />;
+            case '/supervisor/lesson-plans': return <LessonPlanReview navigate={navigate} />;
+            // Lesson-plan submission tracking (who submitted / who hasn't) —
+            // same supervisor+admin rights as review (list_lesson_plan_submitters
+            // allows exactly those roles), on the admin path so the admin
+            // sidebar stays under /admin/*.
+            case '/admin/lesson-plan-submissions': return <LessonPlanSubmissions navigate={navigate} reviewPath="/admin/lesson-plans" />;
+            case '/supervisor/lesson-plan-submissions': return <LessonPlanSubmissions navigate={navigate} />;
             case '/admin/attendance': return <RecordAttendance />;
             case '/admin/homework': return <AssignHomework />;
             case '/admin/quizzes': return <CreateQuiz />;
@@ -147,7 +154,8 @@ function AppContent() {
               case '/supervisor/students': return <TeacherStudents />;
               case '/supervisor/verifications': return <ExamVerification />;
               case '/supervisor/reports': return <ExamReport />;
-              case '/supervisor/lesson-plans': return <LessonPlanReview />;
+              case '/supervisor/lesson-plans': return <LessonPlanReview navigate={navigate} />;
+              case '/supervisor/lesson-plan-submissions': return <LessonPlanSubmissions navigate={navigate} />;
               case '/supervisor/unit-plans': return <UnitPlans />;
               case '/supervisor/attendance': return <RecordAttendance />;
               case '/supervisor/homework': return <AssignHomework />;
