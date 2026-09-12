@@ -2,6 +2,7 @@ import { supabase } from '../supabase';
 import { generateLessonPlanQuizzes } from './lessonPlanQuizzes';
 import type { LessonPlan, LessonPlanPeriod, AIReview, AiReviewLog, AiReviewOutcome, PlanStatus, ReviewDispatchResponse, SavePeriodsPayload } from '../../types';
 import { isPlanEditable } from '../../types';
+import type { PlanWeekCount } from '../lessonPlanWeeks';
 
 function newId(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
@@ -28,18 +29,87 @@ export async function fetchPlansByTeacher(teacherId: string): Promise<LessonPlan
   return data || [];
 }
 
-export async function fetchPlansBySupervisor(): Promise<(LessonPlan & { teacher_name?: string })[]> {
+/**
+ * Statuses a supervisor reviews. `draft` and `revision_requested` are
+ * deliberately excluded — those plans are back in the teacher's hands.
+ */
+export const SUPERVISOR_REVIEW_STATUSES: PlanStatus[] = [
+  'submitted',
+  'in_review',
+  'approved',
+  'rejected',
+  'ai_failed',
+];
+
+/** Shape the supervisor list renders: plan row + the teacher who wrote it. */
+export type SupervisorPlanRow = LessonPlan & { teacher_name?: string };
+
+function withTeacherName(p: any): SupervisorPlanRow {
+  return { ...p, teacher_name: p.profiles?.name };
+}
+
+export async function fetchPlansBySupervisor(): Promise<SupervisorPlanRow[]> {
   await sweepStuckAiReviews();
   const { data, error } = await supabase
     .from('lesson_plans')
     .select('*, profiles!lesson_plans_teacher_id_fkey(name)')
-    .in('status', ['submitted', 'in_review', 'approved', 'rejected', 'ai_failed'])
+    .in('status', SUPERVISOR_REVIEW_STATUSES)
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return (data || []).map((p: any) => ({
-    ...p,
-    teacher_name: p.profiles?.name,
-  }));
+  return (data || []).map(withTeacherName);
+}
+
+/**
+ * The weeks that actually have submissions, each with the number of plans
+ * stored under it. Only `week_label` + a count ever leaves the database, so
+ * the week dropdown never downloads the whole plan history.
+ */
+export async function fetchSupervisorPlanWeeks(): Promise<PlanWeekCount[]> {
+  const statuses = SUPERVISOR_REVIEW_STATUSES as unknown as string[];
+  const { data, error } = await supabase.rpc('list_lesson_plan_weeks', { p_statuses: statuses });
+  if (!error) {
+    return ((data as PlanWeekCount[] | null) ?? []).map((row) => ({
+      week_label: row.week_label,
+      plan_count: Number(row.plan_count ?? 0) || 0,
+    }));
+  }
+
+  // The aggregate RPC ships in migration 20260912_lesson_plan_week_index.sql.
+  // Until a deployment applies it, fall back to reading only the week column —
+  // still never the full plan rows — and count it here.
+  const { data: rows, error: fallbackError } = await supabase
+    .from('lesson_plans')
+    .select('week_label')
+    .in('status', SUPERVISOR_REVIEW_STATUSES);
+  if (fallbackError) throw fallbackError;
+
+  const counts = new Map<string, number>();
+  for (const row of (rows ?? []) as Array<{ week_label: string | null }>) {
+    const label = row?.week_label?.trim();
+    if (!label) continue;
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts].map(([week_label, plan_count]) => ({ week_label, plan_count }));
+}
+
+/**
+ * Only the plans stored under the selected week.
+ *
+ * `weekLabels` are the raw `week_label` values belonging to that week (a week
+ * can hold more than one spelling in legacy rows), so the week filter happens
+ * in the database instead of in the browser.
+ */
+export async function fetchPlansBySupervisorForWeek(weekLabels: string[]): Promise<SupervisorPlanRow[]> {
+  await sweepStuckAiReviews();
+  if (weekLabels.length === 0) return [];
+  const { data, error } = await supabase
+    .from('lesson_plans')
+    .select('*, profiles!lesson_plans_teacher_id_fkey(name)')
+    .in('status', SUPERVISOR_REVIEW_STATUSES)
+    .in('week_label', weekLabels)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data || []).map(withTeacherName);
 }
 
 export async function fetchPlanById(id: string): Promise<{ plan: LessonPlan; periods: LessonPlanPeriod[] } | null> {

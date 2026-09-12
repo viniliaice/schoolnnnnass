@@ -29,7 +29,9 @@ describe('canAccessRoute — office role', () => {
 
   it('every guarded route is listed in ROUTE_ACCESS', () => {
     expect(Object.keys(ROUTE_ACCESS).sort()).toEqual([
-      '/admin/class-import', '/admin/drivers', '/admin/family-ids', '/admin/family-ids/setup', '/admin/grade-corrections', '/directory', '/gate',
+      '/admin/class-import', '/admin/drivers', '/admin/family-ids', '/admin/family-ids/setup',
+      '/admin/grade-corrections', '/admin/lesson-plans', '/directory', '/gate',
+      '/supervisor/lesson-plans',
     ]);
   });
 });
@@ -83,5 +85,25 @@ describe('DEFAULT_ROUTE', () => {
     for (const role of ['admin', 'supervisor', 'teacher', 'parent', 'office'] as const) {
       expect(DEFAULT_ROUTE[role]).toBe('/dashboard');
     }
+  });
+});
+
+describe('lesson plan review route — admin reviews like a supervisor', () => {
+  it('lets admin open its own lesson-plan review path', () => {
+    expect(canAccessRoute('admin', '/admin/lesson-plans')).toBe(true);
+  });
+
+  it('lets admin open the supervisor path too, so shared links work', () => {
+    expect(canAccessRoute('admin', '/supervisor/lesson-plans')).toBe(true);
+    expect(canAccessRoute('supervisor', '/supervisor/lesson-plans')).toBe(true);
+  });
+
+  it('keeps everyone else off the admin lesson-plan path', () => {
+    for (const role of ['supervisor', 'office', 'teacher', 'parent'] as const) {
+      expect(canAccessRoute(role, '/admin/lesson-plans'), role).toBe(false);
+    }
+    // Teachers keep their own planner; they are not reviewers.
+    expect(canAccessRoute('teacher', '/supervisor/lesson-plans')).toBe(false);
+    expect(canAccessRoute('office', '/supervisor/lesson-plans')).toBe(false);
   });
 });

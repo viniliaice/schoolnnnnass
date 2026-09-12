@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  useSupervisorPlans, usePlanWithPeriods, useReview, usePeriodAiReviews, useLessonPlanQuizPreviews,
+  useSupervisorPlanWeeks, useSupervisorPlansForWeek, usePlanWithPeriods, useReview, usePeriodAiReviews, useLessonPlanQuizPreviews,
   useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout, useRegeneratePeriodAiReviews, useGenerateLessonPlanQuizzes, useAddGeneratedQuizToBank,
 } from '../../lib/hooks/useLessonPlans';
 import { LessonPlanPeriod, PlanStatus } from '../../types';
-import { ClipboardCheck, ChevronRight, Filter, AlertTriangle, Loader2, Unlock, CalendarRange, RotateCcw, HelpCircle } from 'lucide-react';
+import { ClipboardCheck, ChevronDown, ChevronRight, Filter, AlertTriangle, Loader2, Unlock, CalendarRange, RotateCcw, HelpCircle } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
 import { ExportLessonPlanPdfButton } from '../../components/lesson-planner/ExportLessonPlanPdfButton';
@@ -13,6 +13,7 @@ import { AiReviewPanel, minutesSince } from '../../components/lesson-planner/AiR
 import { LessonPlanPdfDocument } from '../shared/LessonPlanPdfDocument';
 import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
 import { describePlanWeek } from '../../utils/weekDates';
+import { buildPlanWeeks } from '../../lib/lessonPlanWeeks';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
 import { getSubjects } from '../../lib/db/subjects';
 import { useI18n } from '../../lib/i18n/AppLanguageContext';
@@ -43,15 +44,44 @@ const STATUS_CHIP: Record<PlanStatus, string> = {
 };
 
 export function LessonPlanReview() {
+  const [selectedWeekKey, setSelectedWeekKey] = useState<string | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [comment, setComment] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | PlanStatus>('all');
   const [quizzesOpen, setQuizzesOpen] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
+  const [yearStart, setYearStart] = useState<string | null>(null);
   const { t } = useI18n();
   const { addToast } = useToast();
 
-  const { data: plans } = useSupervisorPlans();
+  useEffect(() => {
+    getCurrentAcademicYear().then((ay) => setYearStart(ay?.startDate ?? null));
+  }, []);
+
+  // ── Week-first review ────────────────────────────────────────────────
+  // The dropdown lists only weeks that actually hold submissions, and the plan
+  // query is scoped to the selected week, so the page never loads the whole
+  // plan history into the browser to filter it here.
+  const { data: weekCounts, isLoading: weeksLoading } = useSupervisorPlanWeeks();
+  const weeks = useMemo(() => buildPlanWeeks(weekCounts, yearStart), [weekCounts, yearStart]);
+  const selectedWeek = useMemo(
+    () => weeks.find((week) => week.key === selectedWeekKey) ?? null,
+    [weeks, selectedWeekKey]
+  );
+  const { data: weekPlans, isLoading: weekPlansLoading } = useSupervisorPlansForWeek(
+    selectedWeek?.key ?? null,
+    selectedWeek?.weekLabels
+  );
+
+  // Default: the most recent week containing submissions. There is no
+  // "All Weeks" option — the supervisor lands on what needs attention.
+  useEffect(() => {
+    if (weeks.length === 0) return;
+    setSelectedWeekKey((current) => (
+      current && weeks.some((week) => week.key === current) ? current : weeks[0].key
+    ));
+  }, [weeks]);
+
   const { data: planWithPeriods } = usePlanWithPeriods(selectedPlanId || undefined);
   const planStatus = planWithPeriods?.plan.status;
   const reviewMayBeArriving = planStatus === 'submitted' || planStatus === 'in_review';
@@ -68,7 +98,6 @@ export function LessonPlanReview() {
   const regeneratePeriodReviewMut = useRegeneratePeriodAiReviews();
   const generateQuizzesMut = useGenerateLessonPlanQuizzes();
   const addQuizToBankMut = useAddGeneratedQuizToBank();
-  const [yearStart, setYearStart] = useState<string | null>(null);
   const plan = planWithPeriods?.plan;
   const { data: unitPlans = [] } = useUnitPlansByClass(plan?.class_name ?? null);
   const { data: subjects } = useQuery({
@@ -77,18 +106,38 @@ export function LessonPlanReview() {
     staleTime: 1000 * 60 * 10,
   });
 
-  useEffect(() => {
-    getCurrentAcademicYear().then((ay) => setYearStart(ay?.startDate ?? null));
-  }, []);
-
   const readPeriods = useMemo(
     () => toReadPeriods(planWithPeriods?.periods ?? []),
     [planWithPeriods?.periods]
   );
+  const plansInWeek = useMemo(() => weekPlans ?? [], [weekPlans]);
+  // The status filter is secondary: it only ever narrows the selected week.
   const filteredPlans = useMemo(
-    () => plans?.filter((p) => statusFilter === 'all' || p.status === statusFilter) ?? [],
-    [plans, statusFilter]
+    () => plansInWeek.filter((p) => statusFilter === 'all' || p.status === statusFilter),
+    [plansInWeek, statusFilter]
   );
+  const selectedListPlan = useMemo(
+    () => plansInWeek.find((p) => p.id === selectedPlanId) ?? null,
+    [plansInWeek, selectedPlanId]
+  );
+  // True while the week list is still arriving, or for the single render where
+  // the newest week has been identified but not selected yet.
+  const resolvingWeek = weeksLoading || (!selectedWeek && weeks.length > 0);
+  const planCountLabel = resolvingWeek || weekPlansLoading
+    ? t('lessonReview.loadingPlans')
+    : statusFilter === 'all'
+      ? `${plansInWeek.length} ${t('lessonReview.planCount')}`
+      : `${filteredPlans.length} of ${plansInWeek.length} ${t('lessonReview.planCount')}`;
+
+  /** Switching week replaces the whole result set, detail panel included. */
+  const handleSelectWeek = useCallback((weekKey: string) => {
+    if (weekKey === selectedWeekKey) return;
+    setSelectedWeekKey(weekKey);
+    // A plan from the previous week must never stay open next to another
+    // week's list.
+    setSelectedPlanId(null);
+    setComment('');
+  }, [selectedWeekKey]);
 
   const handleRequestRevision = useCallback(async () => {
     if (!selectedPlanId) return;
@@ -174,28 +223,112 @@ export function LessonPlanReview() {
         </div>
       </div>
 
-      <div className="flex min-w-0 flex-col gap-5 xl:flex-row xl:gap-6">
-        {/* Left: plan list */}
-        <div className="w-full xl:w-80 shrink-0">
-          <div className="flex items-center gap-2 mb-3">
-            <Filter className="w-4 h-4 text-slate-400" />
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as 'all' | PlanStatus)}
-              className="min-h-10 flex-1 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+      {/* Week selector — the supervisor's first choice, then everything else */}
+      <section
+        aria-label={t('lessonReview.filters')}
+        className="mb-4 min-w-0 rounded-2xl border border-slate-200 bg-white p-3 sm:p-4"
+      >
+        <div className="grid min-w-0 gap-3 sm:grid-cols-2 sm:gap-4">
+          <div className="min-w-0">
+            <label
+              htmlFor="lesson-review-week"
+              className="mb-1.5 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500"
             >
-              <option value="all">All Statuses</option>
-              <option value="submitted">Submitted (pending AI)</option>
-              <option value="in_review">In Review</option>
-              <option value="approved">Approved</option>
-              <option value="rejected">Rejected</option>
-              <option value="ai_failed">AI Failed</option>
-            </select>
+              <CalendarRange className="h-3.5 w-3.5" /> {t('lessonReview.week')}
+            </label>
+            <div className="relative min-w-0">
+              <select
+                id="lesson-review-week"
+                value={selectedWeek?.key ?? ''}
+                onChange={(e) => handleSelectWeek(e.target.value)}
+                className="h-12 w-full min-w-0 appearance-none truncate rounded-xl border border-slate-300 bg-white pl-3 pr-9 text-base font-bold text-slate-900 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+              >
+                {resolvingWeek && <option value="">{t('lessonReview.loadingWeeks')}</option>}
+                {weeks.map((week) => (
+                  <option key={week.key} value={week.key}>
+                    {week.rangeLabel ? `${week.label} — ${week.rangeLabel}` : week.label}
+                  </option>
+                ))}
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            </div>
           </div>
-          <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
-            {(!plans || plans.length === 0) && (
-              <div className="p-8 text-center text-sm text-slate-500">No submitted plans</div>
+
+          <div className="min-w-0">
+            <label
+              htmlFor="lesson-review-status"
+              className="mb-1.5 flex items-center gap-1.5 text-xs font-bold uppercase tracking-wide text-slate-500"
+            >
+              <Filter className="h-3.5 w-3.5" /> {t('lessonReview.status')}
+            </label>
+            <div className="relative min-w-0">
+              <select
+                id="lesson-review-status"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as 'all' | PlanStatus)}
+                className="h-12 w-full min-w-0 appearance-none truncate rounded-xl border border-slate-200 bg-white pl-3 pr-9 text-sm font-medium text-slate-700 outline-none focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+              >
+                <option value="all">All Statuses</option>
+                <option value="submitted">Submitted (pending AI)</option>
+                <option value="in_review">In Review</option>
+                <option value="approved">Approved</option>
+                <option value="rejected">Rejected</option>
+                <option value="ai_failed">AI Failed</option>
+              </select>
+              <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <div className="flex min-w-0 flex-col gap-5 xl:flex-row xl:gap-6">
+        {/* Left: the selected week's plan list */}
+        <div className="w-full min-w-0 shrink-0 xl:w-80">
+          <div className="mb-3 min-w-0">
+            <h2 className="truncate text-base font-bold text-slate-900 sm:text-lg">
+              {selectedWeek?.label ?? (resolvingWeek ? t('lessonReview.loadingWeeks') : t('lessonReview.noWeeks'))}
+            </h2>
+            {selectedWeek?.rangeLabel && (
+              <p className="truncate text-sm text-slate-500">{selectedWeek.rangeLabel}</p>
             )}
+            <p className="mt-0.5 text-sm font-semibold text-indigo-600">{planCountLabel}</p>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
+            {resolvingWeek && (
+              <div className="flex items-center justify-center gap-2 p-8 text-sm text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin" /> {t('lessonReview.loadingWeeks')}
+              </div>
+            )}
+
+            {!resolvingWeek && weeks.length === 0 && (
+              <div className="p-8 text-center text-sm text-slate-500">{t('lessonReview.noWeeks')}</div>
+            )}
+
+            {selectedWeek && weekPlansLoading && (
+              <div className="flex items-center justify-center gap-2 p-8 text-sm text-slate-500">
+                <Loader2 className="h-4 w-4 animate-spin" /> {t('lessonReview.loadingPlans')}
+              </div>
+            )}
+
+            {/* Never fall back to another week's plans — an empty week is empty. */}
+            {selectedWeek && !weekPlansLoading && plansInWeek.length === 0 && (
+              <div className="p-8 text-center text-sm text-slate-500">{t('lessonReview.noPlansThisWeek')}</div>
+            )}
+
+            {selectedWeek && !weekPlansLoading && plansInWeek.length > 0 && filteredPlans.length === 0 && (
+              <div className="p-8 text-center">
+                <p className="text-sm text-slate-500">{t('lessonReview.noStatusMatches')}</p>
+                <button
+                  type="button"
+                  onClick={() => setStatusFilter('all')}
+                  className="mt-2 text-sm font-semibold text-indigo-600 hover:text-indigo-700"
+                >
+                  All Statuses
+                </button>
+              </div>
+            )}
+
             {filteredPlans.map((p) => (
               <button
                 key={p.id}
@@ -256,7 +389,7 @@ export function LessonPlanReview() {
                   <div className="min-w-0">
                     <h2 className="break-words text-lg font-bold text-slate-900 sm:text-xl">{plan.title}</h2>
                     <p className="mt-1 text-sm leading-6 text-slate-500">
-                      {(plans?.find((p) => p.id === plan.id)?.teacher_name) || 'Unknown teacher'} · {plan.class_name} ·{' '}
+                      {selectedListPlan?.teacher_name || 'Unknown teacher'} · {plan.class_name} ·{' '}
                       <span className="font-medium text-slate-600">{describePlanWeek(plan.week_label, yearStart)}</span> ·{' '}
                       {plan.period_count} periods/day
                     </p>
