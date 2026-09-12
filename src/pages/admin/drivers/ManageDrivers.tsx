@@ -13,7 +13,7 @@
 // would leak mappings beyond their classes — see 20260902_manage_drivers.sql).
 
 import { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Plus, Search, Trash2, UserRound } from 'lucide-react';
+import { ArrowLeft, Camera, Plus, Search, Trash2, UserRound } from 'lucide-react';
 import { useToast } from '../../../context/ToastContext';
 import { getStudents } from '../../../lib/db/students';
 import {
@@ -23,6 +23,7 @@ import {
 } from '../../../lib/db/authorizedPickups';
 import { displayFamilyId, formatGradeLabel } from '../../../lib/transport';
 import { NewDriverDialog } from './NewDriverDialog';
+import { EditDriverPhotoDialog } from './EditDriverPhotoDialog';
 import { StudentSearchList } from './StudentSearchList';
 import type { Student } from '../../../types';
 
@@ -35,6 +36,7 @@ export function ManageDrivers() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [photoUrls, setPhotoUrls] = useState<Map<string, string>>(new Map());
   const [newOpen, setNewOpen] = useState(false);
+  const [editPhotoDriver, setEditPhotoDriver] = useState<ManagedDriver | null>(null);
   const [addQuery, setAddQuery] = useState('');
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -142,6 +144,13 @@ export function ManageDrivers() {
               {selected.familyCount} famil{selected.familyCount === 1 ? 'y' : 'ies'}
             </p>
           </div>
+          <button
+            onClick={() => setEditPhotoDriver(selected)}
+            className="inline-flex min-h-[44px] shrink-0 items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-bold text-slate-700 transition hover:border-emerald-500 hover:bg-emerald-50"
+          >
+            <Camera className="h-4 w-4" />
+            Edit photo
+          </button>
         </div>
 
         {/* Linked students grouped by family */}
@@ -202,6 +211,16 @@ export function ManageDrivers() {
             emptyHint="Start typing to find students"
           />
         </section>
+
+        {editPhotoDriver && (
+          <EditDriverPhotoDialog
+            driver={editPhotoDriver}
+            initialPhotoUrl={photoUrls.get(editPhotoDriver.id) ?? null}
+            open
+            onClose={() => setEditPhotoDriver(null)}
+            onSaved={() => void reload()}
+          />
+        )}
       </div>
     );
   }

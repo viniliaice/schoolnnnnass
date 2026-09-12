@@ -61,7 +61,7 @@ BEGIN
   END IF;
 END $$;
 
--- ── 4. create_authorized_pickup(): SECURITY DEFINER, role-gated, photo-required
+-- ── 4. create_authorized_pickup(): SECURITY DEFINER, role-gated, photo OPTIONAL
 DO $$
 DECLARE
   v_def TEXT;
@@ -78,8 +78,11 @@ BEGIN
      OR position('''admin''' in v_def) = 0 THEN
     RAISE EXCEPTION 'create_authorized_pickup() is missing a gate role';
   END IF;
-  IF position('photo' in v_def) = 0 OR position('required' in v_def) = 0 THEN
-    RAISE EXCEPTION 'create_authorized_pickup() does not enforce the required photo';
+  -- The photo is now OPTIONAL: the old hard "A photo is required." guard must
+  -- be gone so drivers can be saved without a photo (camera OR upload both
+  -- feed the same single photoPath).
+  IF position('A photo is required' in v_def) > 0 THEN
+    RAISE EXCEPTION 'create_authorized_pickup() still requires a photo — drivers must be saveable without one';
   END IF;
   -- Staff must explicitly select one or more students; no implicit "all
   -- family students" default is permitted server-side.
@@ -95,6 +98,20 @@ BEGIN
   WHERE proname = 'create_authorized_pickup' AND pronamespace = 'public'::regnamespace;
   IF v_secdef IS DISTINCT FROM true THEN
     RAISE EXCEPTION 'create_authorized_pickup() must be SECURITY DEFINER';
+  END IF;
+END $$;
+
+-- ── 4b. photoPath is nullable (drivers can be saved without a photo) ────────
+DO $$
+DECLARE
+  v_nullable TEXT;
+BEGIN
+  SELECT is_nullable INTO v_nullable
+  FROM information_schema.columns
+  WHERE table_schema = 'public' AND table_name = 'authorized_pickups'
+    AND column_name = 'photoPath';
+  IF v_nullable IS DISTINCT FROM 'YES' THEN
+    RAISE EXCEPTION 'authorized_pickups.photoPath must be nullable so drivers can be saved without a photo';
   END IF;
 END $$;
 
@@ -196,6 +213,38 @@ BEGIN
   -- The driver must actually be assigned to the student.
   IF position('Driver is not assigned to this student' in v_def) = 0 THEN
     RAISE EXCEPTION 'record_release() does not reject an unassigned driver';
+  END IF;
+END $$;
+
+-- ── 10. update_authorized_pickup_photo(): replace/remove, admin + office ────
+DO $$
+DECLARE
+  v_def TEXT;
+  v_secdef BOOLEAN;
+  v_config TEXT[];
+BEGIN
+  SELECT pg_get_functiondef(p.oid), p.prosecdef, p.proconfig INTO v_def, v_secdef, v_config
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'update_authorized_pickup_photo'
+  ORDER BY p.oid DESC LIMIT 1;
+
+  IF v_def IS NULL THEN
+    RAISE EXCEPTION 'update_authorized_pickup_photo() is missing';
+  END IF;
+  IF NOT v_secdef THEN
+    RAISE EXCEPTION 'update_authorized_pickup_photo() lost SECURITY DEFINER';
+  END IF;
+  IF v_config IS NULL OR NOT (v_config @> ARRAY['search_path=public']) THEN
+    RAISE EXCEPTION 'update_authorized_pickup_photo() lost its pinned search_path';
+  END IF;
+  IF position('''admin''' in v_def) = 0 OR position('''office''' in v_def) = 0 THEN
+    RAISE EXCEPTION 'update_authorized_pickup_photo() must admit admin + office';
+  END IF;
+  IF position('''supervisor''' in v_def) > 0 THEN
+    RAISE EXCEPTION 'update_authorized_pickup_photo() admits supervisor — photo editing is back-office';
+  END IF;
+  IF position('audit_logs' in v_def) = 0 THEN
+    RAISE EXCEPTION 'update_authorized_pickup_photo() does not write the audit trail';
   END IF;
 END $$;
 

@@ -200,7 +200,8 @@ BEGIN
     'find_authorized_pickup_by_phone(TEXT)',
     'list_authorized_pickups()',
     'attach_students_to_authorized_pickup(TEXT,TEXT[])',
-    'remove_student_from_authorized_pickup(TEXT,TEXT)'
+    'remove_student_from_authorized_pickup(TEXT,TEXT)',
+    'update_authorized_pickup_photo(TEXT,TEXT)'
   ] LOOP
     IF has_function_privilege('public', format('public.%s', v_name), 'EXECUTE') THEN
       RAISE EXCEPTION '%() is executable by PUBLIC', v_name;
