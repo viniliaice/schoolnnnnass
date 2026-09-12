@@ -11,6 +11,8 @@ timestamp: 2026-09-12T00:00:00Z
 | Page | Path | Roles |
 |------|------|-------|
 | LessonPlanner | `/teacher/lesson-plans` | teacher |
+| LessonPlanSubmissions | `/supervisor/lesson-plan-submissions` | supervisor, admin |
+| LessonPlanSubmissions | `/admin/lesson-plan-submissions` | admin |
 | LessonPlanReview | `/supervisor/lesson-plans` | supervisor, admin |
 | LessonPlanReview | `/admin/lesson-plans` | admin |
 
@@ -28,21 +30,26 @@ link shared by a supervisor still opens.
 > `App.tsx` had no lesson-plans case, so admin fell through to
 > `<AdminDashboard />`, and the admin sidebar had no entry. Both now exist.
 
-`ROUTE_ACCESS` in `src/lib/routing.ts` lists `/admin/lesson-plans: ['admin']`
-and `/supervisor/lesson-plans: ['admin','supervisor']`.
+`ROUTE_ACCESS` in `src/lib/routing.ts` lists `/admin/lesson-plans: ['admin']`,
+`/supervisor/lesson-plans: ['admin','supervisor']`,
+`/admin/lesson-plan-submissions: ['admin']` and
+`/supervisor/lesson-plan-submissions: ['admin','supervisor']`.
 
 ## Sidebar entries
 
-All three use the `NotepadText` icon from `lucide-react`.
+The lesson-plan pages use the `NotepadText` (review) and `ListChecks` (submission tracking) icons from `lucide-react`.
 
 ```typescript
 // Teacher sidebar
 { label: 'Lesson Plans', icon: NotepadText, path: '/teacher/lesson-plans' }
 
-// Supervisor sidebar
+// Supervisor sidebar — Submission Tracking answers "who submitted?",
+// Lesson Plans is the review page.
+{ label: 'Submission Tracking', icon: ListChecks, path: '/supervisor/lesson-plan-submissions' }
 { label: 'Lesson Plans', icon: NotepadText, path: '/supervisor/lesson-plans' }
 
-// Admin sidebar
+// Admin sidebar (same pair, under /admin/*)
+{ label: 'Submission Tracking', icon: ListChecks, path: '/admin/lesson-plan-submissions' }
 { label: 'Lesson Plans', icon: NotepadText, path: '/admin/lesson-plans' }
 ```
 

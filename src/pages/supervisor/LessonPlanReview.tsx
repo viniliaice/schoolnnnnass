@@ -5,7 +5,7 @@ import {
   useApprovePlan, useRejectPlan, useRetryAIReview, useRequestRevision, useAiReviewTimeout, useRegeneratePeriodAiReviews, useGenerateLessonPlanQuizzes, useAddGeneratedQuizToBank,
 } from '../../lib/hooks/useLessonPlans';
 import { LessonPlanPeriod, PlanStatus } from '../../types';
-import { ClipboardCheck, ChevronDown, ChevronRight, Filter, AlertTriangle, Loader2, Unlock, CalendarRange, RotateCcw, HelpCircle } from 'lucide-react';
+import { ClipboardCheck, ChevronDown, ChevronRight, Filter, AlertTriangle, Loader2, Unlock, CalendarRange, RotateCcw, HelpCircle, ClipboardList } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { PlanReadView, ReadPeriod } from '../../components/lesson-planner/PlanReadView';
 import { ExportLessonPlanPdfButton } from '../../components/lesson-planner/ExportLessonPlanPdfButton';
@@ -14,6 +14,7 @@ import { LessonPlanPdfDocument } from '../shared/LessonPlanPdfDocument';
 import { useUnitPlansByClass } from '../../lib/hooks/useUnitPlans';
 import { describePlanWeek } from '../../utils/weekDates';
 import { buildPlanWeeks } from '../../lib/lessonPlanWeeks';
+import { takePendingLessonPlanReview } from '../../lib/lessonPlanDeepLink';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
 import { getSubjects } from '../../lib/db/subjects';
 import { useI18n } from '../../lib/i18n/AppLanguageContext';
@@ -43,7 +44,15 @@ const STATUS_CHIP: Record<PlanStatus, string> = {
   revision_requested: 'bg-amber-100 text-amber-700',
 };
 
-export function LessonPlanReview() {
+export function LessonPlanReview({
+  navigate,
+  submissionTrackingPath = '/supervisor/lesson-plan-submissions',
+}: {
+  /** Path-based navigation from the dashboard layout (cross-page links). */
+  navigate?: (path: string) => void;
+  /** Where this role's submission-tracking page lives. */
+  submissionTrackingPath?: string;
+} = {}) {
   const [selectedWeekKey, setSelectedWeekKey] = useState<string | null>(null);
   const [selectedPlanId, setSelectedPlanId] = useState<string | null>(null);
   const [comment, setComment] = useState('');
@@ -51,8 +60,23 @@ export function LessonPlanReview() {
   const [quizzesOpen, setQuizzesOpen] = useState(false);
   const [quizError, setQuizError] = useState<string | null>(null);
   const [yearStart, setYearStart] = useState<string | null>(null);
+  // A plan parked by another page (the submission tracker's View action) is
+  // opened directly, then the week selector aligns with the plan's own week.
+  const [deepLinkedPlanId, setDeepLinkedPlanId] = useState<string | null>(null);
+  const [deepLink, setDeepLink] = useState<{ planId: string; teacherName: string | null } | null>(null);
   const { t } = useI18n();
   const { addToast } = useToast();
+
+  // Consume a parked plan id once, on mount. Nothing persists, so a link that
+  // is never consumed (page closed first) is simply dropped.
+  useEffect(() => {
+    const link = takePendingLessonPlanReview();
+    if (link?.planId) {
+      setDeepLinkedPlanId(link.planId);
+      setSelectedPlanId(link.planId);
+      setDeepLink({ planId: link.planId, teacherName: link.teacherName ?? null });
+    }
+  }, []);
 
   useEffect(() => {
     getCurrentAcademicYear().then((ay) => setYearStart(ay?.startDate ?? null));
@@ -83,14 +107,27 @@ export function LessonPlanReview() {
   }, [weeks]);
 
   const { data: planWithPeriods } = usePlanWithPeriods(selectedPlanId || undefined);
-  const planStatus = planWithPeriods?.plan.status;
+  // fetchPlanById returns { plan: null, periods: [] } when the row is gone
+  // (deleted while open, or a stale deep link) — the page must survive that.
+  const plan = planWithPeriods?.plan ?? null;
+
+  // A deep-linked plan (opened from the submission tracker's View action)
+  // also drives the week selector, so the list beside the detail panel shows
+  // the plan's own week instead of the default newest week.
+  useEffect(() => {
+    if (!deepLinkedPlanId || !plan || weeks.length === 0) return;
+    const week = weeks.find((candidate) => candidate.weekLabels.includes(plan.week_label));
+    if (week) setSelectedWeekKey(week.key);
+    setDeepLinkedPlanId(null);
+  }, [deepLinkedPlanId, plan, weeks]);
+  const planStatus = plan?.status;
   const reviewMayBeArriving = planStatus === 'submitted' || planStatus === 'in_review';
   const { data: review } = useReview(selectedPlanId || undefined, reviewMayBeArriving);
   const aiReviewPending = planStatus === 'submitted' || (planStatus === 'in_review' && !review);
   const { data: periodAiReviews = [] } = usePeriodAiReviews(selectedPlanId || undefined, reviewMayBeArriving);
   const { data: quizPreviews = [] } = useLessonPlanQuizPreviews(selectedPlanId || undefined);
   // Guarantees a stuck plan flips to ai_failed instead of waiting forever (#4).
-  useAiReviewTimeout(planWithPeriods?.plan);
+  useAiReviewTimeout(plan);
   const approveMut = useApprovePlan();
   const rejectMut = useRejectPlan();
   const retryMut = useRetryAIReview();
@@ -98,7 +135,6 @@ export function LessonPlanReview() {
   const regeneratePeriodReviewMut = useRegeneratePeriodAiReviews();
   const generateQuizzesMut = useGenerateLessonPlanQuizzes();
   const addQuizToBankMut = useAddGeneratedQuizToBank();
-  const plan = planWithPeriods?.plan;
   const { data: unitPlans = [] } = useUnitPlansByClass(plan?.class_name ?? null);
   const { data: subjects } = useQuery({
     queryKey: ['subjects'],
@@ -137,6 +173,7 @@ export function LessonPlanReview() {
     // week's list.
     setSelectedPlanId(null);
     setComment('');
+    setDeepLink(null);
   }, [selectedWeekKey]);
 
   const handleRequestRevision = useCallback(async () => {
@@ -213,14 +250,26 @@ export function LessonPlanReview() {
 
   return (
     <div className="mx-auto max-w-7xl p-4 sm:p-6">
-      <div className="mb-5 flex items-start gap-3 sm:mb-6 sm:items-center">
-        <div className="p-2.5 rounded-xl bg-amber-100 text-amber-700">
-          <ClipboardCheck className="w-6 h-6" />
+      <div className="mb-5 flex flex-col gap-3 sm:mb-6 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex min-w-0 items-start gap-3 sm:items-center">
+          <div className="p-2.5 rounded-xl bg-amber-100 text-amber-700">
+            <ClipboardCheck className="w-6 h-6" />
+          </div>
+          <div className="min-w-0">
+            <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">{t('lessonReview.title')}</h1>
+            <p className="mt-1 text-sm leading-5 text-slate-500">{t('lessonReview.subtitle')}</p>
+          </div>
         </div>
-        <div className="min-w-0">
-          <h1 className="text-xl font-bold text-slate-900 sm:text-2xl">{t('lessonReview.title')}</h1>
-          <p className="mt-1 text-sm leading-5 text-slate-500">{t('lessonReview.subtitle')}</p>
-        </div>
+        {navigate && (
+          <button
+            type="button"
+            onClick={() => navigate(submissionTrackingPath)}
+            className="inline-flex min-h-11 shrink-0 items-center justify-center gap-2 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2.5 text-sm font-semibold text-indigo-700 transition-colors hover:bg-indigo-100"
+          >
+            <ClipboardList className="h-4 w-4" />
+            {t('lessonReview.openSubmissionTracking')}
+          </button>
+        )}
       </div>
 
       {/* Week selector — the supervisor's first choice, then everything else */}
@@ -332,7 +381,7 @@ export function LessonPlanReview() {
             {filteredPlans.map((p) => (
               <button
                 key={p.id}
-                onClick={() => setSelectedPlanId(p.id)}
+                onClick={() => { setSelectedPlanId(p.id); setDeepLink(null); }}
                 className={cn(
                   'w-full flex items-center gap-3 p-4 text-left hover:bg-slate-50 transition-colors sm:p-4',
                   selectedPlanId === p.id && 'bg-indigo-50'
@@ -389,7 +438,9 @@ export function LessonPlanReview() {
                   <div className="min-w-0">
                     <h2 className="break-words text-lg font-bold text-slate-900 sm:text-xl">{plan.title}</h2>
                     <p className="mt-1 text-sm leading-6 text-slate-500">
-                      {selectedListPlan?.teacher_name || 'Unknown teacher'} · {plan.class_name} ·{' '}
+                      {(deepLink?.planId === plan.id ? deepLink.teacherName : null)
+                        || selectedListPlan?.teacher_name
+                        || 'Unknown teacher'} · {plan.class_name} ·{' '}
                       <span className="font-medium text-slate-600">{describePlanWeek(plan.week_label, yearStart)}</span> ·{' '}
                       {plan.period_count} periods/day
                     </p>

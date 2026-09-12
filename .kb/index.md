@@ -1,7 +1,7 @@
 # MBK International School — Knowledge Base
 
 Complete OKF knowledge base for the MBK International School management system.
-Covers 9 feature domains with 114 concept files across the application.
+Covers 9 feature domains with 116 concept files across the application.
 
 ## Bundles
 

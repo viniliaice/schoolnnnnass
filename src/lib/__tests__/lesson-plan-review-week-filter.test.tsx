@@ -111,6 +111,7 @@ vi.mock('../../pages/shared/LessonPlanPdfDocument', () => ({
 
 import { LessonPlanReview } from '../../pages/supervisor/LessonPlanReview';
 import { I18nProvider } from '../i18n/AppLanguageContext';
+import { setPendingLessonPlanReview, takePendingLessonPlanReview } from '../lessonPlanDeepLink';
 import type { PlanStatus } from '../../types';
 
 const TEACHERS = ['Ms. Fatima', 'Mr. Omar', 'Ms. Hodan'];
@@ -537,5 +538,45 @@ describe('Lesson Plan Review — narrow viewports (320px, 360px, 390px)', () => 
     expect(week.options[0].textContent).toBe('Week 2026-W07 — 12 Sep – 16 Sep 2026');
     // The week is the only thing the supervisor must touch first.
     expect(week.options.length).toBe(5);
+  });
+});
+
+describe('Lesson Plan Review — deep-linked from the submission tracker', () => {
+  it('opens the parked plan directly and aligns the week with the plan', async () => {
+    // The submission tracker's View action parks a plan id and navigates here.
+    setPendingLessonPlanReview('2026-W05-plan-02');
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <I18nProvider>
+            <LessonPlanReview />
+          </I18nProvider>
+        </QueryClientProvider>
+      );
+    });
+    // The detail panel and the week selector both land on the plan's own week
+    // (week 5), not the default newest week.
+    await waitFor(host, () => text(host).includes('Supervisor Decision'), 'the parked plan to open');
+    await waitFor(host, () => weekSelect(host).value === '2026#5', 'the week selector to align');
+    expect(weekSelect(host).value).toBe('2026#5');
+    expect(text(host)).toContain('2026-W05 Plan 02');
+    expect(fetchPlansBySupervisorForWeek).toHaveBeenCalledWith(['2026-W05']);
+    // The parked link is consumed — a later mount opens on the newest week again.
+    expect(takePendingLessonPlanReview()).toBeNull();
+  });
+
+  it('consumes and drops the parked link when nothing can match it', async () => {
+    setPendingLessonPlanReview('plan-that-does-not-exist');
+    const { host } = await mount();
+    // No crash, the default week behaviour is untouched…
+    expect(weekSelect(host).value).toBe('2026#7');
+    // …and the stale link does not linger for the next mount.
+    expect(takePendingLessonPlanReview()).toBeNull();
+    expect(host.textContent).toContain('18 Lesson Plans');
   });
 });
