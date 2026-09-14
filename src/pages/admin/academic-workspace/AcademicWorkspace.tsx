@@ -43,7 +43,6 @@ import { createSubject, deleteSubject, updateSubject } from '../../../lib/db/sub
 import { createAuditLog } from '../../../lib/db/audit';
 import { bulkCreateTeachersWithAssignments } from '../../../lib/db/bulk';
 import { updateUser } from '../../../lib/db/profiles';
-import { supabase } from '../../../lib/supabase';
 import { cn } from '../../../utils/cn';
 import { calculateTeacherWorkload, DEFAULT_WEEKLY_LESSONS, TEACHER_WEEKLY_LIMIT, type SubjectMeta } from './utils/workload';
 import { buildAcademicWarnings } from './utils/warnings';
@@ -185,7 +184,6 @@ export function AcademicWorkspace() {
   const [showMoreMenu, setShowMoreMenu] = useState(false);
   const [filterClassList, setFilterClassList] = useState<string[]>([]);
   const [showClassFilter, setShowClassFilter] = useState(false);
-  const [classesWithStudents, setClassesWithStudents] = useState<Set<string> | null>(null);
   const moreMenuRef = useRef<HTMLDivElement>(null);
   const classFilterRef = useRef<HTMLButtonElement>(null);
   const classFilterDropdownRef = useRef<HTMLDivElement>(null);
@@ -235,31 +233,16 @@ export function AcademicWorkspace() {
     });
   }, [subjects, query, departmentFilter]);
 
-  // Fetch classes that have at least one student
-  useEffect(() => {
-    supabase
-      .from('students')
-      .select('className')
-      .then(({ data, error }) => {
-        if (!error && data) {
-          const set = new Set(data.map(s => s.className).filter(Boolean));
-          setClassesWithStudents(set);
-          if (!set.has(selectedClass)) {
-            const first = CLASSES.find(c => set.has(c));
-            if (first) setSelectedClass(first);
-          }
-        }
-      });
-  }, []);
-
+  // Classes come from the authoritative catalogue, not the student roster.
+  // Empty or not-yet-configured classes must remain selectable so their
+  // subjects and teachers can be assigned before students are enrolled.
   const filteredClasses = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (filterClassList.length === 0 && !needle) return [];
-    let list = classesWithStudents ? CLASSES.filter(c => classesWithStudents.has(c)) : CLASSES;
+    let list = CLASSES;
     if (needle) list = list.filter(className => className.toLowerCase().includes(needle));
     if (filterClassList.length > 0) list = list.filter(className => filterClassList.includes(className));
     return list;
-  }, [query, filterClassList, classesWithStudents]);
+  }, [query, filterClassList]);
 
   const selectedClassMappings = useMemo(
     () => mappings.filter(row => row.className === selectedClass),
@@ -798,12 +781,11 @@ export function AcademicWorkspace() {
     }
   }, [teachersById, teacherSubjById, refresh, addToast]);
 
-  // Build matrix CSV template from actual subjects + classes
+  // Build matrix CSV template from actual subjects + every active class.
   const TEACHER_ASSIGN_CSV_TEMPLATE = useMemo(() => {
-    const sortedClasses = CLASSES.filter(c => classesWithStudents?.has(c) ?? true);
-    const header = ',' + sortedClasses.join(',');
+    const header = ',' + CLASSES.join(',');
     const rows = subjects.map(s => {
-      const cells = sortedClasses.map(c => {
+      const cells = CLASSES.map(c => {
         const row = mappings.find(m => m.className === c && m.subjectId === s.id);
         if (!row) return '';
         const teacher = row.teacherId ? teachersById.get(row.teacherId) : null;
@@ -812,7 +794,7 @@ export function AcademicWorkspace() {
       return s.name + ',' + cells.join(',');
     });
     return [header, ...rows].join('\n');
-  }, [subjects, mappings, teachersById, classesWithStudents]);
+  }, [subjects, mappings, teachersById]);
 
   const downloadTeacherAssignTemplate = () => {
     const blob = new Blob([TEACHER_ASSIGN_CSV_TEMPLATE], { type: 'text/csv;charset=utf-8;' });
@@ -1523,7 +1505,7 @@ Ms. Nasra,nasra@school.edu,TempPass123!,Grade 9-A;Grade 10-A,English;Somali,20`
                 <div className="absolute left-0 top-full z-40 mt-1 w-56 rounded-2xl border border-slate-200 bg-white p-2 shadow-xl">
                   <button onClick={() => { setFilterClassList([]); setShowClassFilter(false); }} className="w-full rounded-xl px-3 py-1.5 text-left text-sm font-semibold text-indigo-600 hover:bg-slate-50">Show all</button>
                   <div className="max-h-56 space-y-0.5 overflow-auto">
-                    {(classesWithStudents ? CLASSES.filter(c => classesWithStudents.has(c)) : CLASSES).map(className => (
+                    {CLASSES.map(className => (
                       <label key={className} className="flex cursor-pointer items-center gap-2 rounded-xl px-3 py-1.5 text-sm hover:bg-slate-50">
                         <input type="checkbox" checked={filterClassList.includes(className)} onChange={event => setFilterClassList(prev => event.target.checked ? [...prev, className] : prev.filter(c => c !== className))} className="rounded" />
                         {className}
