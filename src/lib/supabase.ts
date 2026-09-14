@@ -69,6 +69,30 @@ const demoProfiles: any[] = [
   { id: 'supervisor-1', name: 'Mr. Bashir (Supervisor)', email: 'supervisor@mbk.edu', role: 'supervisor', phone1: null, phone2: null, assignedClasses: [], assignedSubjects: [], createdAt: '2026-06-01', auth_id: 'auth-supervisor-1' },
 ];
 
+// --- Demo subjects + class_subjects (Lesson Planner / Unit Plans preview) ---
+const demoSubjects: any[] = [
+  { id: 'sub-english', name: 'English', shortName: 'Eng', createdAt: '2026-06-01' },
+  { id: 'sub-math', name: 'Mathematics', shortName: 'Math', createdAt: '2026-06-01' },
+  { id: 'sub-science', name: 'Science', shortName: 'Sci', createdAt: '2026-06-01' },
+  { id: 'sub-social', name: 'Social Studies', shortName: 'Soc', createdAt: '2026-06-01' },
+  { id: 'sub-somali', name: 'Somali', shortName: 'Som', createdAt: '2026-06-01' },
+  { id: 'sub-arabic', name: 'Arabic', shortName: 'Ara', createdAt: '2026-06-01' },
+  { id: 'sub-tarabiya', name: 'Tarabiya', shortName: 'Tar', createdAt: '2026-06-01' },
+];
+
+const demoClassSubjects: any[] = [
+  { id: 'cs-1a-eng', subjectId: 'sub-english', teacherId: 'teacher-1', className: 'Grade 1-A', createdAt: '2026-06-01', subjects: demoSubjects[0] },
+  { id: 'cs-1a-mat', subjectId: 'sub-math', teacherId: 'teacher-2', className: 'Grade 1-A', createdAt: '2026-06-01', subjects: demoSubjects[1] },
+  { id: 'cs-1a-sci', subjectId: 'sub-science', teacherId: 'teacher-1', className: 'Grade 1-A', createdAt: '2026-06-01', subjects: demoSubjects[2] },
+  { id: 'cs-1a-som', subjectId: 'sub-somali', teacherId: 'teacher-2', className: 'Grade 1-A', createdAt: '2026-06-01', subjects: demoSubjects[4] },
+  { id: 'cs-1a-ara', subjectId: 'sub-arabic', teacherId: 'teacher-1', className: 'Grade 1-A', createdAt: '2026-06-01', subjects: demoSubjects[5] },
+  { id: 'cs-2c-eng', subjectId: 'sub-english', teacherId: 'teacher-1', className: 'Grade 2-C', createdAt: '2026-06-01', subjects: demoSubjects[0] },
+  { id: 'cs-2c-mat', subjectId: 'sub-math', teacherId: 'teacher-1', className: 'Grade 2-C', createdAt: '2026-06-01', subjects: demoSubjects[1] },
+  { id: 'cs-2c-sci', subjectId: 'sub-science', teacherId: 'teacher-3', className: 'Grade 2-C', createdAt: '2026-06-01', subjects: demoSubjects[2] },
+  { id: 'cs-2c-soc', subjectId: 'sub-social', teacherId: 'teacher-1', className: 'Grade 2-C', createdAt: '2026-06-01', subjects: demoSubjects[3] },
+  { id: 'cs-2c-tar', subjectId: 'sub-tarabiya', teacherId: 'teacher-1', className: 'Grade 2-C', createdAt: '2026-06-01', subjects: demoSubjects[6] },
+];
+
 // --- Demo authorized-pickup (driver) data for the Manage Drivers preview ---
 type DemoDriverStudent = {
   id: string;
@@ -308,6 +332,29 @@ const demoLessonPlanPeriods: any[] = demoLessonPlans.flatMap((plan: any) =>
 function createMockSupabase(): SupabaseClient {
   const demoClasses = Array.from(new Set(demoStudents.map(s => s.className))).sort();
 
+  // Mutable in-memory "database" for the preview. Insert/update/delete go
+  // through this store so a created lesson plan (or unit plan) is visible to
+  // subsequent queries in the same preview session — the closest match to how
+  // the real backend behaves without any network.
+  const mockTables: Record<string, any[]> = {
+    academic_years: [...demoAcademicYears],
+    terms: [...demoTerms],
+    students: [...demoStudents],
+    profiles: [...demoProfiles],
+    report_comments: [],
+    exams: [],
+    grade_scales: [],
+    report_config: [{ id: 'default', caWeight: 60, midtermWeight: 20, finalWeight: 20, caTypes: ['CA', 'Homework', 'Classwork', 'Quiz', 'Attendance'], updatedAt: new Date().toISOString() }],
+    lesson_plans: [...demoLessonPlans],
+    lesson_plan_periods: [...demoLessonPlanPeriods],
+    ai_reviews: [],
+    lesson_period_ai_reviews: [],
+    lesson_plan_quizzes: [],
+    unit_plans: [],
+    subjects: [...demoSubjects],
+    class_subjects: [...demoClassSubjects],
+  };
+
   // Helper to build a query chain that mimics supabase-js
   const makeChain = (table: string, opts: any = {}) => {
     let filters: Array<{ col: string; val: any; op: string }> = [];
@@ -320,25 +367,12 @@ function createMockSupabase(): SupabaseClient {
     let inFilter: Array<{ col: string; vals: any[] }> = [];
     let ilikeFilter: { col: string; pattern: string } | null = null;
     let orFilter: string | null = null;
+    let insertRows: any[] | null = null;
+    let updatePayload: Record<string, any> | null = null;
+    let deleteMode = false;
 
     const getTableData = (): any[] => {
-      switch (table) {
-        case 'academic_years': return [...demoAcademicYears];
-        case 'terms': return [...demoTerms];
-        case 'students': return [...demoStudents];
-        case 'profiles': return [...demoProfiles];
-        case 'report_comments': return [];
-        case 'exams': return [];
-        case 'grade_scales': return [];
-        case 'report_config': return [{ id: 'default', caWeight: 60, midtermWeight: 20, finalWeight: 20, caTypes: ['CA','Homework','Classwork','Quiz','Attendance'], updatedAt: new Date().toISOString() }];
-        case 'lesson_plans': return [...demoLessonPlans];
-        case 'lesson_plan_periods': return [...demoLessonPlanPeriods];
-        case 'ai_reviews': return [];
-        case 'lesson_period_ai_reviews': return [];
-        case 'lesson_plan_quizzes': return [];
-        case 'unit_plans': return [];
-        default: return [];
-      }
+      return [...(mockTables[table] ?? [])];
     };
 
     const applyFilters = (rows: any[]) => {
@@ -403,11 +437,11 @@ function createMockSupabase(): SupabaseClient {
       in: (col: string, vals: any[]) => { inFilter.push({ col: col.replace(/"/g,''), vals }); return chain; },
       is: (col: string, val: any) => { filters.push({ col: col.replace(/"/g,''), val, op: 'is' }); return chain; },
       maybeSingle: async () => {
-        const rows = applyFilters(getTableData());
+        const rows = resolveRows();
         return { data: rows[0] || null, error: null };
       },
       single: async () => {
-        const rows = applyFilters(getTableData());
+        const rows = resolveRows();
         if (rows.length === 0) return { data: null, error: { message: 'No rows', code: 'PGRST116' } };
         return { data: rows[0], error: null };
       },
@@ -417,16 +451,50 @@ function createMockSupabase(): SupabaseClient {
       ilike: (col: string, pat: string) => { ilikeFilter = { col, pattern: pat }; return chain; },
       or: (expr: string) => { orFilter = expr; return chain; },
       returns: () => chain,
-      delete: () => chain,
-      insert: () => chain,
-      update: () => chain,
+      delete: () => { deleteMode = true; return chain; },
+      insert: (payload: any) => {
+        const now = new Date().toISOString();
+        insertRows = (Array.isArray(payload) ? payload : [payload]).map((row: any) => ({
+          // Real DB defaults that the mock does not apply automatically.
+          ...(table === 'lesson_plans' ? { status: 'draft' } : {}),
+          created_at: now,
+          updated_at: now,
+          ...row,
+        }));
+        mockTables[table] = [...(mockTables[table] ?? []), ...insertRows];
+        return chain;
+      },
+      update: (payload: any) => { updatePayload = payload ?? {}; return chain; },
       // For queries that are awaited directly (supabase.from(...).select(...))
       then: (onFulfilled: any, onRejected: any) => {
-        const rows = applyFilters(getTableData());
+        const rows = resolveRows();
         const result: any = { data: rows, error: null };
         if (chain._count) result.count = rows.length;
         return Promise.resolve(result).then(onFulfilled, onRejected);
       },
+    };
+
+    // Resolve what a chain returns: inserted rows as-is, updates/deletes
+    // applied to the matching rows of the in-memory table, otherwise the
+    // filtered table snapshot.
+    const resolveRows = (): any[] => {
+      if (insertRows) return insertRows;
+      if (deleteMode) {
+        const matched = applyFilters(getTableData());
+        const ids = new Set(matched.map(r => r.id));
+        mockTables[table] = (mockTables[table] ?? []).filter(row => !ids.has(row.id));
+        return matched;
+      }
+      if (updatePayload) {
+        const matched = applyFilters(getTableData());
+        const ids = new Set(matched.map(r => r.id));
+        const now = new Date().toISOString();
+        mockTables[table] = (mockTables[table] ?? []).map(row =>
+          ids.has(row.id) ? { ...row, ...updatePayload, updated_at: now } : row,
+        );
+        return matched.map(row => ({ ...row, ...updatePayload }));
+      }
+      return applyFilters(getTableData());
     };
     // Handle className distinct for getClasses: if selecting only className, we still return objects with className
     if (table === 'students' && selectedCols === 'className') {
@@ -520,6 +588,34 @@ function createMockSupabase(): SupabaseClient {
         }
       }
       return { data: rows, error: null };
+    }
+    if (fn === 'expire_stuck_ai_reviews') {
+      return { data: [], error: null };
+    }
+    if (fn === 'save_lesson_plan_periods') {
+      const periods = Array.isArray(params?.p_periods) ? params.p_periods : [];
+      const now = new Date().toISOString();
+      const saved = periods.map((p: any) => ({
+        ...p,
+        id: p.id || `period-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        created_at: now,
+        updated_at: now,
+      }));
+      // Persist into the in-memory table so the grid + plan detail read them back.
+      mockTables.lesson_plan_periods = [
+        ...mockTables.lesson_plan_periods.filter((row: any) => row.plan_id !== params?.p_plan_id),
+        ...saved,
+      ];
+      return { data: saved, error: null };
+    }
+    if (fn === 'submit_lesson_plan_for_review') {
+      const plan = mockTables.lesson_plans.find((p: any) => p.id === params?.p_plan_id);
+      if (!plan) return { data: null, error: { message: `Lesson plan ${params?.p_plan_id} was not found.`, code: 'P0002' } };
+      const now = new Date().toISOString();
+      plan.status = 'submitted';
+      plan.ai_started_at = now;
+      plan.updated_at = now;
+      return { data: [plan], error: null };
     }
 
     // ── Authorized pickups ("drivers") — full preview implementation ────────
