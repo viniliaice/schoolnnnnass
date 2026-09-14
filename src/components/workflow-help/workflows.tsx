@@ -598,11 +598,101 @@ export const lessonPlanHelp: WorkflowHelpConfig = {
             { n: 2, text: 'A topic is required for every active period before submission.' },
             { n: 3, text: 'Objective and slide number are optional per period.' },
             { n: 4, text: 'Activities can each have a time, resource and place.' },
-            { n: 5, text: 'Optional: import from Excel with Date, Period, Subject, Topic, Objective and Activity columns.' },
+            { n: 5, text: 'Optional: import from Excel instead of typing — the next step shows the exact sheet layout to use.' },
           ]}
         />
       ),
       warning: 'You can continue only when at least one period has a topic — empty periods are listed before submission.',
+    },
+    {
+      id: 'excel',
+      icon: FileSpreadsheet,
+      title: 'Import from Excel (optional)',
+      summary:
+        'Instead of typing the week, press Upload from Excel on the grid step and choose a .xlsx, .xls or .csv file. One row per period, with these columns — the import fills the grid exactly as if you had typed the plan.',
+      visual: (
+        <div className="space-y-3">
+          <SpreadsheetMock
+            headers={[
+              <Mark key="h0" tone="amber" n={1}>Date</Mark>,
+              <Mark key="h1" tone="amber" n={2}>Period</Mark>,
+              <Mark key="h2" tone="amber" n={3}>Subject</Mark>,
+              <Mark key="h3" tone="amber" n={4}>Topic</Mark>,
+              <Mark key="h4" tone="amber" n={4}>Objective</Mark>,
+              <Mark key="h5" tone="amber" n={4}>Weekly Slide Number</Mark>,
+              <Mark key="h6" tone="amber" n={5}>Activity 1</Mark>,
+              <Mark key="h7" tone="amber" n={5}>Time 1</Mark>,
+            ]}
+            rows={[
+              [
+                <ScoreCell key="a" tone="note">7/9/2026</ScoreCell>,
+                '1',
+                'Mathematics',
+                'Fractions: adding halves',
+                'Add halves to make a whole',
+                '12',
+                'Warm-up quiz',
+                '10 min',
+              ],
+              [
+                <ScoreCell key="b" tone="note">7/9/2026</ScoreCell>,
+                '2',
+                'English',
+                'Reading: story map',
+                'Retell the story in order',
+                '12',
+                'Read aloud',
+                '15 min',
+              ],
+              [
+                <ScoreCell key="c" tone="note">8/9/2026</ScoreCell>,
+                '1',
+                <span key="s" className="font-semibold text-slate-500">Free</span>,
+                '',
+                '',
+                '',
+                '',
+                '',
+              ],
+              [
+                <Mark key="d" tone="red" n={6}>
+                  <ScoreCell tone="bad">—</ScoreCell>
+                </Mark>,
+                '1',
+                'Mathematics',
+                '',
+                '',
+                '',
+                '',
+                '',
+              ],
+            ]}
+          />
+          <div className="grid gap-1.5 sm:grid-cols-2">
+            <Mark n={6} tone="red" block>
+              <MockToast
+                tone="error"
+                title="No valid rows found"
+                description="Check that the file has Date, Period, and Subject columns."
+              />
+            </Mark>
+            <MockToast tone="success" title="8 periods imported from Excel" />
+          </div>
+        </div>
+      ),
+      legend: (
+        <Legend
+          items={[
+            { n: 1, text: 'One row per period. The day of week comes from the Date — rows without a valid Date are skipped.' },
+            { n: 2, text: 'Periods 1–6: classes run 4, 5 or 6 periods a day, so anything above 6 is ignored.' },
+            { n: 3, text: 'Subject must match what you teach in this class. Leave it blank or type “Free” for a free period.' },
+            { n: 4, text: 'Topic, Objective and Weekly Slide Number fill the grid cells — a topic is required for every active period before submit.' },
+            { n: 5, text: 'Up to five activities per row, each with its own Time, Resource and Place/url (all optional).' },
+            { n: 6, tone: 'red', text: 'A file without Date, Period and Subject columns shows “No valid rows found” — add the columns and upload again.' },
+          ]}
+        />
+      ),
+      warning: 'The import only fills the grid — the plan is still saved by autosave and sent with Submit to Supervisor, exactly like a typed plan.',
     },
     {
       id: 'review',

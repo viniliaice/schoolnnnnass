@@ -220,6 +220,7 @@ describe('WorkflowHelp guide content matches the real app', () => {
     for (const expected of [
       'Setup — class, week & periods',
       'Fill the weekly grid',
+      'Import from Excel (optional)',
       'Review & Submit',
       'My Lesson Plans',
       'Start Planning',
@@ -233,6 +234,15 @@ describe('WorkflowHelp guide content matches the real app', () => {
       'Revisions requested',
       'Topic',
       'Objective',
+      // The Excel-import step mirrors the real importer columns + messages.
+      'Weekly Slide Number',
+      'Activity 1',
+      'Time 1',
+      '.xlsx, .xls or .csv',
+      'No valid rows found',
+      'Check that the file has Date, Period, and Subject columns',
+      '8 periods imported from Excel',
+      'One row per period',
     ]) {
       expect(html).toContain(expected);
     }
