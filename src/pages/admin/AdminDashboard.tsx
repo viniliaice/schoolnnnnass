@@ -4,7 +4,7 @@ import { getStudents } from '../../lib/db/students';
 import { getExams } from '../../lib/db/exams';
 import { getUsers } from '../../lib/db/profiles';
 
-import { Users, GraduationCap, FileText, CheckCircle, XCircle, Clock, TrendingUp, BookOpen, FileBarChart } from 'lucide-react';
+import { Users, GraduationCap, FileText, CheckCircle, XCircle, Clock, TrendingUp, BookOpen, FileBarChart, CalendarRange } from 'lucide-react';
 
 export function AdminDashboard({ navigate }: { navigate?: (path: string) => void }) {
   const [stats, setStats] = useState<any>(null);
@@ -110,6 +110,7 @@ export function AdminDashboard({ navigate }: { navigate?: (path: string) => void
     { label: 'Rejected', value: stats.rejectedExams, icon: XCircle, color: 'bg-red-500', bg: 'bg-red-50' },
     { label: 'Avg Score', value: `${stats.averageScore}%`, icon: TrendingUp, color: 'bg-indigo-500', bg: 'bg-indigo-50' },
     { label: 'Exam Reports', value: 'Open', icon: FileBarChart, color: 'bg-indigo-500', bg: 'bg-indigo-50', onClick: () => navigate?.('/admin/exam-reports') },
+    { label: 'Lesson Plan Upload', value: 'Open', icon: CalendarRange, color: 'bg-indigo-500', bg: 'bg-indigo-50', onClick: () => navigate?.('/admin/lesson-planner') },
   ];
 
   return (

@@ -11,6 +11,8 @@ import type { UnitPlan, UnitPlanInput, Term, Subject } from '../../types';
 import { BookOpen, Plus, Pencil, Trash2, Loader2, Eye, X, CalendarRange, Target, Layers } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { useEffect } from 'react';
+import { WorkflowHelp } from '../../components/workflow-help/WorkflowHelp';
+import { unitPlanHelp } from '../../components/workflow-help/workflows';
 
 export function UnitPlans() {
   const { session } = useRole();
@@ -129,7 +131,13 @@ export function UnitPlans() {
     <div className="p-6 max-w-6xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">Unit Plans</h1>
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-bold text-slate-900">Unit Plans</h1>
+            <WorkflowHelp
+              config={unitPlanHelp}
+              currentStep={showForm ? (editingUnit ? 'details' : 'create') : 'manage'}
+            />
+          </div>
           <p className="text-slate-600 mt-1">Group your lesson plans into curriculum units</p>
         </div>
         {!showForm && (

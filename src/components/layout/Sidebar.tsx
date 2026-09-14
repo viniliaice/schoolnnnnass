@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   FileSpreadsheet, Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil, ListChecks
+  CalendarCheck, CalendarRange, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil, ListChecks
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -31,6 +31,7 @@ const navItems: Record<Role, NavItem[]> = {
     // is the review page itself.
     { label: 'Submission Tracking', icon: ListChecks, path: '/admin/lesson-plan-submissions' },
     { label: 'Lesson Plans', icon: NotepadText, path: '/admin/lesson-plans' },
+    { label: 'Lesson Plan Upload', icon: CalendarRange, path: '/admin/lesson-planner' },
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
     { label: 'Bulk Upload Grades', icon: FileSpreadsheet, path: '/admin/bulk-grades' },
     { label: 'Announcements', icon: BellRing, path: '/admin/announcements' },

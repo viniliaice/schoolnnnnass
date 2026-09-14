@@ -1,5 +1,7 @@
 import { BookOpen, CalendarRange, FileCheck2, FolderOpen, ChevronRight } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { WorkflowHelp } from '../workflow-help/WorkflowHelp';
+import { lessonPlanHelp } from '../workflow-help/workflows';
 
 export type PlanTab = 'setup' | 'plan' | 'review' | 'mine';
 
@@ -51,7 +53,10 @@ export function PlanStepper({
             <BookOpen className="w-6 h-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Lesson Plans</h1>
+            <div className="flex flex-wrap items-center gap-3">
+              <h1 className="text-2xl font-bold text-slate-900">Lesson Plans</h1>
+              <WorkflowHelp config={lessonPlanHelp} currentStep={activeTab} />
+            </div>
             <p className="text-sm text-slate-500">
               {className ? `${className} · ` : ''}
               {weekRangeLabel || weekLabel}

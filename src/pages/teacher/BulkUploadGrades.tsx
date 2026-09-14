@@ -27,6 +27,8 @@ import {
   type WorkbookParseResult,
 } from '../../lib/bulk-grades/workbook';
 import { resolveWorkbook, type ResolveResult, type ReviewDecision } from '../../lib/bulk-grades/resolve';
+import { WorkflowHelp } from '../../components/workflow-help/WorkflowHelp';
+import { bulkGradeUploadHelp } from '../../components/workflow-help/workflows';
 import type { AssessmentLabel } from '../../lib/excel-parser';
 import type { Student, Subject, Term } from '../../types';
 import { MONTHS } from '../../types';
@@ -353,7 +355,10 @@ export function BulkUploadGrades() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Bulk Upload Grades</h1>
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-bold text-slate-900">Bulk Upload Grades</h1>
+          <WorkflowHelp config={bulkGradeUploadHelp} currentStep={step} />
+        </div>
         <p className="mt-1 text-slate-500">
           One class at a time. Download a flat-header workbook for the selected class and subjects, enter grades, and confirm server-validated changes.
         </p>

@@ -128,6 +128,9 @@ function AppContent() {
             // link shared by a supervisor opens for an admin.
             case '/admin/lesson-plans': return <LessonPlanReview navigate={navigate} submissionTrackingPath="/admin/lesson-plan-submissions" />;
             case '/supervisor/lesson-plans': return <LessonPlanReview navigate={navigate} />;
+            // Admin lesson-plan creation (same wizard teachers use, with every
+            // class/subject available — LessonPlanner is admin-aware).
+            case '/admin/lesson-planner': return <LessonPlanner />;
             // Lesson-plan submission tracking (who submitted / who hasn't) —
             // same supervisor+admin rights as review (list_lesson_plan_submitters
             // allows exactly those roles), on the admin path so the admin

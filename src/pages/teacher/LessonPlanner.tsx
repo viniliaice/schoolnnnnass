@@ -7,7 +7,7 @@ import { Loader2, Upload, FileSpreadsheet, Lock, Unlock } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { cn } from '../../utils/cn';
 import { getUserById } from '../../lib/db/profiles';
-import { getClassSubjectsForTeacher } from '../../lib/db/classes';
+import { getClassSubjectsForTeacher, getClasses } from '../../lib/db/classes';
 import { getCurrentAcademicYear } from '../../lib/db/academic';
 import { weekRangeForNumber, weekNumberForDate, weekNumberFromLabel, makeWeekLabel, describePlanWeek } from '../../utils/weekDates';
 import { PlanConfigBar } from '../../components/lesson-planner/PlanConfigBar';
@@ -84,6 +84,16 @@ export function LessonPlanner() {
 
   useEffect(() => {
     if (!session) return;
+    if (session.role === 'admin') {
+      // Admins are not assigned classes in profiles — they may plan for any
+      // class, so the class list comes from the school registry.
+      getClasses().then(availableClasses => {
+        const sorted = [...availableClasses].sort();
+        setTeacherClasses(sorted);
+        if (sorted.length) setClassName(sorted[0]);
+      });
+      return;
+    }
     getUserById(session.userId).then((u) => {
       setTeacherClasses(u?.assignedClasses || []);
       if (u?.assignedClasses?.length) setClassName(u.assignedClasses[0]);
@@ -104,7 +114,9 @@ export function LessonPlanner() {
 
   useEffect(() => {
     if (!session || !className) { setSubjects([]); return; }
-    getClassSubjectsForTeacher(session.userId, className).then((subs) => {
+    // Admins pass no teacher id so every subject taught in the class is
+    // listed (same pattern as the admin Bulk Upload Grades flow).
+    getClassSubjectsForTeacher(session.role === 'admin' ? '' : session.userId, className).then((subs) => {
       setSubjects(subs);
     });
   }, [session, className]);
