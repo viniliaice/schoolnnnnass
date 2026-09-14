@@ -91,7 +91,7 @@ describe('canonical catalogue classes are valid', () => {
   it('KG-A / KG-B / Foundation A resolve against the CLASSES catalogue even with no loaded roster class', () => {
     // The page always unions the authoritative CLASSES catalogue into the
     // known-class list, so a sectioned catalogue class is never "missing".
-    for (const code of ['KG-A', 'KG-B', 'Foundation A', 'Grade 12-C']) {
+    for (const code of ['KG-A', 'KG-B', 'Foundation A', 'Grade 12-A']) {
       expect(resolveUploadedClassCandidates([code], CLASSES).resolved).toBe(code);
     }
     // A bare grade is still NOT a class even against the catalogue.

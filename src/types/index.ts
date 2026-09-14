@@ -10,10 +10,18 @@ export const MONTHS = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
+/**
+ * Authoritative catalogue of active school classes.
+ *
+ * This application does not have a separate classes table, so class selectors
+ * use this list rather than inferring classes from students or assignments.
+ * Keeping empty/unconfigured classes here is intentional: administrators must
+ * be able to configure a class before it has students or subjects.
+ */
 export const CLASSES = [
-  // Kindergarten
-  'Foundation A','Foundation C','Foundation D', 'Foundation B',
-  'KG-A', 'KG-B', 'KG-C','KG-D','KG-E',
+  // Early years
+  'Foundation A', 'Foundation B',
+  'KG-A', 'KG-B', 'KG-C',
 
   // Primary School (Grades 1-6)
   'Grade 1-A', 'Grade 1-B', 'Grade 1-C',
@@ -24,15 +32,12 @@ export const CLASSES = [
   'Grade 6-A', 'Grade 6-B', 'Grade 6-C',
 
   // Secondary School (Grades 7-12)
-  'Grade 7-A', 'Grade 7-B', 'Grade 7-C',
-  'Grade 8-A', 'Grade 8-B', 'Grade 8-C',
-  'Grade 9-A', 'Grade 9-B', 'Grade 9-C',
-  'Grade 10-A', 'Grade 10-B', 'Grade 10-C',
-  'Grade 11-A', 'Grade 11-B', 'Grade 11-C',
-  'Grade 12-A', 'Grade 12-B', 'Grade 12-C',
-
-  // Alternative naming for Year 12 (if needed)
-  'Year 12-A', 'Year 12-B', 'Year 12-C',
+  'Grade 7-A', 'Grade 7-B',
+  'Grade 8-A', 'Grade 8-B',
+  'Grade 9-A', 'Grade 9-B',
+  'Grade 10-A', 'Grade 10-B',
+  'Grade 11-A', 'Grade 11-B',
+  'Grade 12-A',
 ];
 
 export const SUBJECTS = [
