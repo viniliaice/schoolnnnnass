@@ -4,6 +4,7 @@ import { CLASSES } from '../../../../../types';
 const EXPECTED_ACTIVE_CLASSES = [
   'Foundation A',
   'Foundation B',
+  'Foundation C',
   'KG-A',
   'KG-B',
   'KG-C',
@@ -39,9 +40,9 @@ const EXPECTED_ACTIVE_CLASSES = [
 ];
 
 describe('Academic Workspace active class catalogue', () => {
-  it('contains exactly the 34 active school classes in display order', () => {
+  it('contains exactly the 35 active school classes in display order', () => {
     expect(CLASSES).toEqual(EXPECTED_ACTIVE_CLASSES);
-    expect(CLASSES).toHaveLength(34);
+    expect(CLASSES).toHaveLength(35);
     expect(new Set(CLASSES).size).toBe(CLASSES.length);
   });
 });

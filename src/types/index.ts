@@ -20,7 +20,7 @@ export const MONTHS = [
  */
 export const CLASSES = [
   // Early years
-  'Foundation A', 'Foundation B',
+  'Foundation A', 'Foundation B', 'Foundation C',
   'KG-A', 'KG-B', 'KG-C',
 
   // Primary School (Grades 1-6)
