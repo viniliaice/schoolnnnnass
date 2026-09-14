@@ -127,7 +127,7 @@ beforeEach(() => {
 });
 
 describe('Academic Workspace class selector', () => {
-  it('shows all 34 active classes in Cards and Matrix views', async () => {
+  it('shows all 35 active classes in Cards and Matrix views', async () => {
     const { host, root } = await mountWorkspace();
     const workspaceMain = Array.from(host.querySelectorAll('main')).find(main =>
       main.textContent?.includes('Classes & Assignments'),
@@ -138,6 +138,11 @@ describe('Academic Workspace class selector', () => {
       .map(button => button.textContent?.trim())
       .filter(label => label && CLASSES.includes(label));
     expect(cardClassButtons).toEqual(CLASSES);
+    // Required result: every Foundation section (A, B and C) must be visible
+    // in the Classes & Assignments selector even with no students/mappings.
+    expect(cardClassButtons).toEqual(
+      expect.arrayContaining(['Foundation A', 'Foundation B', 'Foundation C']),
+    );
 
     await act(async () => {
       buttonWithExactText(workspaceMain!, 'Classes').click();
@@ -145,6 +150,9 @@ describe('Academic Workspace class selector', () => {
     const selectorClasses = Array.from(workspaceMain!.querySelectorAll('input[type="checkbox"]'))
       .map(input => input.closest('label')?.textContent?.trim());
     expect(selectorClasses).toEqual(CLASSES);
+    expect(selectorClasses).toEqual(
+      expect.arrayContaining(['Foundation A', 'Foundation B', 'Foundation C']),
+    );
 
     await act(async () => {
       buttonWithExactText(workspaceMain!, 'Matrix').click();
@@ -153,6 +161,9 @@ describe('Academic Workspace class selector', () => {
       .slice(1)
       .map(header => header.textContent?.trim());
     expect(matrixHeaders).toEqual(CLASSES);
+    expect(matrixHeaders).toEqual(
+      expect.arrayContaining(['Foundation A', 'Foundation B', 'Foundation C']),
+    );
 
     await act(async () => root.unmount());
   });
