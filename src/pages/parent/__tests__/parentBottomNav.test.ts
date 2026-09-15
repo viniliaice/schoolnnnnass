@@ -66,12 +66,17 @@ describe('mobile overflow guard', () => {
     expect(source).toContain('fixed inset-x-0 bottom-0');
   });
 
-  it('is phone-first with a desktop adaptation — bottom bar hides on lg, pills appear in the header', () => {
+  it('is phone-first and restores the classic staff sidebar on desktop (lg+)', () => {
     const source = readFileSync(new URL('../../../components/layout/ParentAppShell.tsx', import.meta.url), 'utf8');
     // Bottom bar: phones only.
     expect(source).toMatch(/fixed inset-x-0 bottom-0[^"]*lg:hidden/);
-    // Desktop: the same five destinations render as header pills.
-    expect(source).toContain('parent-nav-lg-');
-    expect(source).toMatch(/hidden[^"]*lg:flex/);
+    // Phone header: phones only.
+    expect(source).toMatch(/shadow-md lg:hidden/);
+    // Desktop: the previous Sidebar is restored, without its own mobile toggle
+    // (the parent shell supplies the phone chrome itself).
+    expect(source).toContain('<Sidebar currentPath={currentPath} onNavigate={navigate} mobileToggle={false} />');
+    expect(source).toContain('<div className="hidden lg:block">\n          <Sidebar');
+    // Old header-pill experiment removed.
+    expect(source).not.toContain('parent-nav-lg-');
   });
 });

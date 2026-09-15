@@ -15,7 +15,8 @@ const LANGUAGE_LABELS: Record<AppLanguage, { short: string; key: string }> = {
   ar: { short: 'عربي', key: 'language.arabic' },
 };
 
-function LanguageSwitcher() {
+/** Floating EN/ع switcher — used by DashboardLayout and the parent desktop layout. */
+export function LanguageSwitcher() {
   const { language, setLanguage, t } = useI18n();
 
   return (

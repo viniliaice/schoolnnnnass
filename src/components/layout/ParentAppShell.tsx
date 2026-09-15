@@ -1,21 +1,20 @@
-// Mobile-first app shell for the PARENT role.
-//
-// The generic DashboardLayout renders a long staff sidebar (dashboard, admin
-// tools, theme controls, "Active Session"…). Parents get this instead:
+// App shell for the PARENT role — adapted per device:
 //
 //   PHONE (<lg)                       DESKTOP (lg+)
-//   ┌──────────────────────────┐      ┌─────────────────────────────────┐
-//   │ header: logo · school · 🌐 │      │ header: logo · school · nav ·  🌐 │
-//   ├──────────────────────────┤      ├─────────────────────────────────┤
-//   │ content (max-w-2xl)      │      │ content (max-w-4xl)             │
-//   ├──────────────────────────┤      └─────────────────────────────────┘
-//   │ Home Children Results ✉ ⋯│      (same five destinations as top pills)
-//   └──────────────────────────┘
+//   ┌──────────────────────────┐      ┌────────┬───────────────────────────┐
+//   │ header: logo · school · 🌐 │      │ the    │ content + floating 🌐     │
+//   ├──────────────────────────┤      │ staff  │ (the previous desktop    │
+//   │ content (max-w-2xl)      │      │ sidebar│ experience, restored per │
+//   ├──────────────────────────┤      │ (old   │ request)                  │
+//   │ Home Children Results ✉ ⋯│      │ design)│                           │
+//   └──────────────────────────┘      └────────┴───────────────────────────┘
 //
-// Same five labels both ways — Parents never have to relearn the app when
-// they switch devices. The shell owns the current path (lightweight
-// state-based navigation, see DashboardLayout) and provides ParentContext —
-// children + active child — to everything it renders.
+// Phones keep the simple bottom-navigation app; desktops get the exact
+// sidebar parents used before the redesign (its Monthly/Midterm/Final links
+// open the unified Exam Results tabs — the paths still work).
+// The shell owns the current path (lightweight state-based navigation, see
+// DashboardLayout) and provides ParentContext — children + active child —
+// to everything it renders.
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
@@ -30,6 +29,8 @@ import {
 import { useRole } from '../../context/RoleContext';
 import { useI18n, type AppLanguage } from '../../lib/i18n/AppLanguageContext';
 import { ParentProvider } from '../../pages/parent/ParentContext';
+import { LanguageSwitcher } from './DashboardLayout';
+import { Sidebar } from './Sidebar';
 import { cn } from '../../utils/cn';
 import logo from '../../../assets/logo.png';
 
@@ -127,66 +128,60 @@ export function ParentAppShell({ children, initialPath = '/dashboard' }: ParentA
 
   return (
     <ParentProvider parentId={session.userId}>
-      <div className="min-h-screen bg-slate-50 text-slate-900">
-        {/* Compact header — identity + language; on desktop it also carries
-            the five destinations as top pills (bottom bar is phone-only) */}
-        <header className="sticky top-0 z-40 bg-linear-to-r from-violet-700 via-violet-600 to-indigo-700 shadow-md">
-          <div className="mx-auto flex h-14 w-full max-w-2xl items-center gap-3 px-4 lg:max-w-4xl">
-            <img
-              src={logo}
-              alt="MBK International School"
-              className="h-9 w-9 shrink-0 rounded-full bg-white/95 object-contain p-0.5"
-            />
-            <div className="min-w-0 flex-1 lg:flex-none">
-              <p className="truncate text-sm font-bold leading-tight text-white">MBK International School</p>
-              <p className="truncate text-[11px] leading-tight text-violet-200">
-                {t('parent.hello', 'Hello')}, {firstName}
-              </p>
+      <div className="min-h-screen bg-slate-50 text-slate-900 lg:flex">
+        {/* DESKTOP (lg+): the previous staff sidebar, restored. Its mobile
+            toggle/overlay stays off — phones use the chrome below. Its
+            Monthly/Midterm/Final links open the unified Exam Results tabs. */}
+        <div className="hidden lg:block">
+          <Sidebar currentPath={currentPath} onNavigate={navigate} mobileToggle={false} />
+        </div>
+
+        <div className="min-w-0 flex-1 flex flex-col">
+          {/* PHONE (<lg): compact header — identity + language only */}
+          <header className="sticky top-0 z-40 bg-linear-to-r from-violet-700 via-violet-600 to-indigo-700 shadow-md lg:hidden">
+            <div className="mx-auto flex h-14 w-full max-w-2xl items-center gap-3 px-4">
+              <img
+                src={logo}
+                alt="MBK International School"
+                className="h-9 w-9 shrink-0 rounded-full bg-white/95 object-contain p-0.5"
+              />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-bold leading-tight text-white">MBK International School</p>
+                <p className="truncate text-[11px] leading-tight text-violet-200">
+                  {t('parent.hello', 'Hello')}, {firstName}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setLanguage(language === 'en' ? 'ar' : 'en')}
+                className="flex min-h-9 items-center gap-1.5 rounded-full bg-white/15 px-3 text-xs font-bold text-white transition hover:bg-white/25"
+                aria-label={t('language.switch')}
+              >
+                <Languages className="h-4 w-4" aria-hidden="true" />
+                {LANGUAGE_SHORT[language === 'en' ? 'ar' : 'en']}
+              </button>
             </div>
+          </header>
 
-            {/* Desktop top-bar navigation — same five destinations, pill style */}
-            <nav aria-label={t('parent.navigation', 'Parent navigation')} className="hidden flex-1 items-center justify-center gap-1 lg:flex">
-              {PARENT_BOTTOM_NAV.map(item => {
-                const active = item.isActive(currentPath);
-                return (
-                  <button
-                    key={item.key}
-                    type="button"
-                    data-testid={`parent-nav-lg-${item.key}`}
-                    aria-current={active ? 'page' : undefined}
-                    onClick={() => navigate(item.path)}
-                    className={cn(
-                      'flex min-h-9 items-center gap-1.5 whitespace-nowrap rounded-full px-3 text-sm font-semibold transition-colors',
-                      active ? 'bg-white text-violet-700 shadow-sm' : 'text-violet-100 hover:bg-white/10 hover:text-white',
-                    )}
-                  >
-                    <item.icon className="h-4 w-4 shrink-0" aria-hidden="true" />
-                    {t(item.labelKey, item.fallback)}
-                  </button>
-                );
-              })}
-            </nav>
-
-            <div className="hidden lg:block lg:flex-1" aria-hidden="true" />
-
-            <button
-              type="button"
-              onClick={() => setLanguage(language === 'en' ? 'ar' : 'en')}
-              className="flex min-h-9 items-center gap-1.5 rounded-full bg-white/15 px-3 text-xs font-bold text-white transition hover:bg-white/25"
-              aria-label={t('language.switch')}
-            >
-              <Languages className="h-4 w-4" aria-hidden="true" />
-              {LANGUAGE_SHORT[language === 'en' ? 'ar' : 'en']}
-            </button>
+          {/* DESKTOP (lg+): the floating language switcher parents had before */}
+          <div className="hidden lg:block">
+            <LanguageSwitcher />
           </div>
-        </header>
 
-        {/* Page content — phone-first width, wider and unpadded on desktop */}
-        <main className="mx-auto w-full max-w-2xl px-4 pb-28 pt-5 lg:max-w-4xl lg:pb-10" id="parent-main">
-          {children(currentPath, navigate)}
-        </main>
+          {/* Page content — phone-first width; wider with room for the
+              floating language switcher on desktop */}
+          <main className="mx-auto w-full max-w-2xl flex-1 px-4 pb-28 pt-5 lg:max-w-4xl lg:px-8 lg:pb-10 lg:pt-20" id="parent-main">
+            {children(currentPath, navigate)}
+          </main>
 
-        {/* Fixed bottom navigation — the phone's primary navigation */}
+          <footer className="hidden border-t border-slate-200 px-4 py-3 text-center lg:block">
+            <p className="text-sm text-slate-400" style={{ fontFamily: "'Dancing Script', cursive", fontSize: '1rem' }}>
+              {t('app.madeBy', 'Made by')} <span className="font-bold text-indigo-500">Eng. Akso</span>
+            </p>
+          </footer>
+        </div>
+
+        {/* PHONE (<lg): fixed bottom navigation — the primary navigation */}
         <nav
           aria-label={t('parent.navigation', 'Parent navigation')}
           className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur pb-[env(safe-area-inset-bottom)] lg:hidden"

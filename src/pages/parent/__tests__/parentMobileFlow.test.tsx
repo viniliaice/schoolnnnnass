@@ -128,9 +128,15 @@ describe('Parent mobile app — full workflow on the real preview client', () =>
 
     // The bottom navigation IS the primary navigation (5 items, labelled).
     expect(navItems(host)).toEqual(['Home', 'Children', 'Results', 'Messages', 'More']);
-    // …and the SAME five destinations exist as desktop top-bar pills (lg+).
-    expect(host.querySelector('[data-testid="parent-nav-lg-home"]')).not.toBeNull();
-    expect(host.querySelector('[data-testid="parent-nav-lg-results"]')?.textContent).toContain('Results');
+    // …and on desktop the previous staff sidebar is restored for parents,
+    // including its classic links (Monthly/Midterm/Final deep-link into the
+    // unified Exam Results tabs) and the sign-out control.
+    expect(text(host)).toContain('Monthly Reports');
+    expect(text(host)).toContain('Midterm Reports');
+    expect(text(host)).toContain('Final Reports');
+    expect(text(host)).toContain('Streams');
+    expect(text(host)).toContain('Take Quiz');
+    expect(host.querySelector('button[title="Sign Out"]')).not.toBeNull();
 
     // Home: welcome + children + quick View Results + latest result + messages.
     expect(text(host)).toContain('Welcome, Maxamed');
@@ -144,10 +150,13 @@ describe('Parent mobile app — full workflow on the real preview client', () =>
     // "Your Family ID" must be completely gone from the parent dashboard.
     expect(text(host)).not.toContain('Family ID');
     expect(text(host)).not.toContain('MBK-0001');
-    // …and the admin-style stat grid / technical clutter is gone too.
-    expect(text(host)).not.toContain('Attendance Records');
-    expect(text(host)).not.toContain('Homework Items');
-    expect(text(host)).not.toContain('Active Session');
+    // …and the admin-style stat grid / technical clutter is gone from the
+    // HOME SCREEN itself (the restored desktop sidebar, requested after, is
+    // a staff-style chrome and carries its own classic labels).
+    const home = host.querySelector('[data-testid="parent-home"]')!;
+    expect(text(home as HTMLElement)).not.toContain('Attendance Records');
+    expect(text(home as HTMLElement)).not.toContain('Homework Items');
+    expect(text(home as HTMLElement)).not.toContain('Active Session');
   }, 30_000);
 
   it('Home → select child → Monthly → Midterm → Final (2–3 taps each)', async () => {
