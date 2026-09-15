@@ -128,7 +128,7 @@ export function ParentAppShell({ children, initialPath = '/dashboard' }: ParentA
 
   return (
     <ParentProvider parentId={session.userId}>
-      <div className="min-h-screen bg-slate-50 text-slate-900 lg:flex">
+      <div className="min-h-screen min-h-dvh bg-slate-50 text-slate-900 lg:flex">
         {/* DESKTOP (lg+): the previous staff sidebar, restored. Its mobile
             toggle/overlay stays off — phones use the chrome below. Its
             Monthly/Midterm/Final links open the unified Exam Results tabs. */}
@@ -170,7 +170,7 @@ export function ParentAppShell({ children, initialPath = '/dashboard' }: ParentA
 
           {/* Page content — phone-first width; wider with room for the
               floating language switcher on desktop */}
-          <main className="mx-auto w-full max-w-2xl flex-1 px-4 pb-28 pt-5 lg:max-w-4xl lg:px-8 lg:pb-10 lg:pt-20" id="parent-main">
+          <main className="parent-main mx-auto w-full max-w-2xl flex-1 px-4 pt-5 lg:max-w-4xl lg:px-8 lg:pt-20" id="parent-main">
             {children(currentPath, navigate)}
           </main>
 
@@ -184,7 +184,7 @@ export function ParentAppShell({ children, initialPath = '/dashboard' }: ParentA
         {/* PHONE (<lg): fixed bottom navigation — the primary navigation */}
         <nav
           aria-label={t('parent.navigation', 'Parent navigation')}
-          className="fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur pb-[env(safe-area-inset-bottom)] lg:hidden"
+          className="parent-bottom-nav fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur lg:hidden"
         >
           <div className="mx-auto flex w-full max-w-2xl items-stretch">
             {PARENT_BOTTOM_NAV.map(item => {
