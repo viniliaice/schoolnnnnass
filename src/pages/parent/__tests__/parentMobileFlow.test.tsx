@@ -128,6 +128,9 @@ describe('Parent mobile app — full workflow on the real preview client', () =>
 
     // The bottom navigation IS the primary navigation (5 items, labelled).
     expect(navItems(host)).toEqual(['Home', 'Children', 'Results', 'Messages', 'More']);
+    // …and the SAME five destinations exist as desktop top-bar pills (lg+).
+    expect(host.querySelector('[data-testid="parent-nav-lg-home"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="parent-nav-lg-results"]')?.textContent).toContain('Results');
 
     // Home: welcome + children + quick View Results + latest result + messages.
     expect(text(host)).toContain('Welcome, Maxamed');

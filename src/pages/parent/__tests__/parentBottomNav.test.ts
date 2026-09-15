@@ -65,4 +65,13 @@ describe('mobile overflow guard', () => {
     expect(source).toContain('env(safe-area-inset-bottom)');
     expect(source).toContain('fixed inset-x-0 bottom-0');
   });
+
+  it('is phone-first with a desktop adaptation — bottom bar hides on lg, pills appear in the header', () => {
+    const source = readFileSync(new URL('../../../components/layout/ParentAppShell.tsx', import.meta.url), 'utf8');
+    // Bottom bar: phones only.
+    expect(source).toMatch(/fixed inset-x-0 bottom-0[^"]*lg:hidden/);
+    // Desktop: the same five destinations render as header pills.
+    expect(source).toContain('parent-nav-lg-');
+    expect(source).toMatch(/hidden[^"]*lg:flex/);
+  });
 });
