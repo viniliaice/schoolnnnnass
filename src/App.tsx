@@ -60,6 +60,7 @@ import { ExamResults } from './pages/parent/ExamResults';
 import { MonthlyReport } from './pages/parent/MonthlyReport';
 import { MidtermReport } from './pages/parent/MidtermReport';
 import { FinalReport } from './pages/parent/FinalReport';
+import { WeeklyLearning } from './pages/parent/WeeklyLearning';
 import { MessagesPage } from './pages/shared/MessagesPage';
 import { StreamsPage } from './pages/shared/StreamsPage';
 
@@ -208,7 +209,8 @@ function AppContent() {
         // Parent routes
         if (session.role === 'parent') {
           switch (currentPath) {
-            case '/dashboard': return <ParentDashboard />;
+            case '/dashboard': return <ParentDashboard navigate={navigate} />;
+            case '/parent/weekly-learning': return <WeeklyLearning navigate={navigate} />;
             case '/parent/children': return <ChildrenView />;
             case '/parent/quizzes': return <ParentQuizzes />;
             case '/parent/results': return <ExamResults />;
@@ -217,7 +219,7 @@ function AppContent() {
             case '/parent/final': return <FinalReport />;
             case '/messages': return <MessagesPage />;
             case '/streams': return <StreamsPage />;
-            default: return <ParentDashboard />;
+            default: return <ParentDashboard navigate={navigate} />;
           }
         }
 

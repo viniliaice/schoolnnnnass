@@ -19,7 +19,7 @@ declare global {
 
 // --- Demo data for preview (when no real Supabase) ---
 const demoAcademicYears = [
-  { id: 'ay-2026', name: '2026/2027', startDate: '2026-06-01', endDate: '2027-05-31', isCurrent: true, createdAt: '2026-06-01' },
+  { id: 'ay-2026', name: '2026/2027', startDate: '2026-05-30', endDate: '2027-05-31', isCurrent: true, createdAt: '2026-06-01' },
   { id: 'ay-2025', name: '2025/2026', startDate: '2025-06-01', endDate: '2026-05-31', isCurrent: false, createdAt: '2025-06-01' },
 ];
 
@@ -274,6 +274,14 @@ const demoLessonPlans: any[] = (() => {
       titles: ['Week 2026-W15', 'Week 2026-W15', 'Week 2026-W15'],
       statuses: ['submitted', 'in_review', 'submitted'],
     },
+    // Isolated preview seed for Parent → This Week’s Learning. The current
+    // academic-year week on 15 Sep 2026 is W16. Approved rows are visible to
+    // the parent-safe mock RPC; the draft row proves unpublished work is hidden.
+    {
+      label: '2026-W16',
+      titles: ['English Reading', 'Mathematics Fractions', 'Private Draft', 'Science Habitats', 'Somali Writing', 'Arabic Vocabulary'],
+      statuses: ['approved', 'approved', 'draft', 'approved', 'approved', 'approved'],
+    },
   ];
 
   const rows: any[] = [];
@@ -306,28 +314,60 @@ const demoLessonPlans: any[] = (() => {
   return rows;
 })();
 
-const demoLessonPlanPeriods: any[] = demoLessonPlans.flatMap((plan: any) =>
-  ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday'].map((day, index) => ({
+const demoLessonPlanPeriods: any[] = demoLessonPlans.flatMap((plan: any) => {
+  const previewSubject = plan.title.split(' ')[0] || 'Learning';
+  const parentSeed = plan.week_label === '2026-W16';
+  const topicBySubject: Record<string, string> = {
+    English: 'Reading for Meaning', Mathematics: 'Equivalent Fractions',
+    Somali: 'Writing Clear Sentences', Arabic: 'Everyday Vocabulary',
+    Science: 'Living Things and Habitats', Private: 'Unpublished Topic',
+  };
+  const objectiveBySubject: Record<string, string> = {
+    English: 'Identify the main idea and two supporting details.',
+    Mathematics: 'Compare equivalent fractions using visual models.',
+    Somali: 'Write complete sentences using correct punctuation.',
+    Arabic: 'Use new everyday words in short spoken sentences.',
+    Science: 'Describe how a habitat meets the needs of living things.',
+    Private: 'This draft must never appear in the parent view.',
+  };
+  return ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday'].map((day, index) => ({
     id: `period-${plan.id}-${day}-1`,
     plan_id: plan.id,
     day,
     period_number: 1,
     class_name: plan.class_name,
-    subject: 'Mathematics',
+    subject: parentSeed ? previewSubject : 'Mathematics',
     is_free: false,
-    topic: `${plan.week_label} — ${day} topic`,
-    objective: 'Students explain the concept in their own words.',
-    activities: '1. Warm-up (10min) [] @Board | 2. Guided practice (25min) [] @Desks',
+    topic: parentSeed ? topicBySubject[previewSubject] || `${previewSubject} Learning` : `${plan.week_label} — ${day} topic`,
+    objective: parentSeed ? objectiveBySubject[previewSubject] || 'Build confidence with this week’s topic.' : 'Students explain the concept in their own words.',
+    activities: parentSeed ? 'Read examples together, discuss key ideas, and complete guided practice.' : '1. Warm-up (10min) [] @Board | 2. Guided practice (25min) [] @Desks',
     slide_number: null,
-    details: [
+    details: parentSeed ? [
+      { activity: 'Review examples together', time: '10min', resource: 'Student book', place: '' },
+      { activity: 'Discuss key ideas and complete guided practice', time: '25min', resource: 'Practice sheet', place: 'https://example.com/mbk-practice' },
+    ] : [
       { activity: 'Warm-up', time: '10min', resource: 'Board', place: 'Desks' },
       { activity: 'Guided practice', time: '25min', resource: 'Workbook', place: 'Desks' },
     ],
     sort_order: index,
     created_at: plan.created_at,
     updated_at: plan.created_at,
-  }))
-);
+  }));
+});
+
+const demoParentHomework = [{
+  id: 'homework-parent-preview-1',
+  studentId: 'stu-barwaaqo',
+  className: 'Grade 2-C',
+  subject: 'Mathematics',
+  title: 'Fraction practice',
+  description: 'Complete questions 1–6 on the fraction practice sheet.',
+  dueDate: '2026-09-16',
+  status: 'assigned',
+  teacherId: 'teacher-2',
+  createdAt: '2026-09-14T09:00:00.000Z',
+  lesson_plan_period_id: 'period-plan-2026-W16-2-Tuesday-1',
+}];
 
 function createMockSupabase(): SupabaseClient {
   const demoClasses = Array.from(new Set(demoStudents.map(s => s.className))).sort();
@@ -343,6 +383,9 @@ function createMockSupabase(): SupabaseClient {
     profiles: [...demoProfiles],
     report_comments: [],
     exams: [],
+    homework: [...demoParentHomework],
+    attendance: [],
+    quizzes: [],
     grade_scales: [],
     report_config: [{ id: 'default', caWeight: 60, midtermWeight: 20, finalWeight: 20, caTypes: ['CA', 'Homework', 'Classwork', 'Quiz', 'Attendance'], updatedAt: new Date().toISOString() }],
     lesson_plans: [...demoLessonPlans],
@@ -568,7 +611,51 @@ function createMockSupabase(): SupabaseClient {
       return { data: null, error: { message: 'Not implemented in mock', code: 'PGRST202' } };
     }
 
-    // ── Lesson plans — week aggregate + submitter roster (preview) ─────────
+    // ── Lesson plans — parent-safe projection + staff preview RPCs ─────────
+    if (fn === 'get_parent_weekly_learning') {
+      const student = demoStudents.find(s => s.id === params?.p_student_id && s.parentId === 'parent-1');
+      if (!student) return { data: null, error: { message: 'Student not available.', code: '42501' } };
+      const plans = demoLessonPlans.filter(plan =>
+        plan.week_label === params?.p_week_label
+        && plan.class_name === student.className
+        && plan.status === 'approved'
+      );
+      const start = new Date('2026-05-30T00:00:00');
+      const weekNumber = Number(String(params?.p_week_label || '').slice(-2));
+      start.setDate(start.getDate() + (Math.max(1, weekNumber) - 1) * 7);
+      const end = new Date(start);
+      end.setDate(end.getDate() + 4);
+      const iso = (date: Date) => date.toISOString().slice(0, 10);
+      const rows = demoLessonPlanPeriods
+        .filter(period => plans.some(plan => plan.id === period.plan_id) && !period.is_free)
+        .map(period => {
+          const homework = demoParentHomework.find(item =>
+            item.studentId === student.id && item.lesson_plan_period_id === period.id
+          );
+          return {
+            student_id: student.id,
+            student_name: student.name,
+            class_name: student.className,
+            week_label: params?.p_week_label,
+            week_start: iso(start),
+            week_end: iso(end),
+            lesson_id: period.id,
+            day: period.day,
+            subject: period.subject,
+            topic: period.topic,
+            learning_objective: period.objective,
+            what_we_are_learning: period.details.map((item: any) => item.activity).join(' · '),
+            resources: period.details.map((item: any) => ({
+              label: item.resource || null,
+              url: String(item.place || '').startsWith('https://') ? item.place : null,
+            })).filter((item: any) => item.label || item.url),
+            practice_title: homework?.title || null,
+            practice_description: homework?.description || null,
+            practice_due_date: homework?.dueDate || null,
+          };
+        });
+      return { data: rows, error: null };
+    }
     if (fn === 'list_lesson_plan_weeks') {
       const statuses = Array.isArray(params?.p_statuses) ? params.p_statuses : null;
       const counts = new Map<string, number>();

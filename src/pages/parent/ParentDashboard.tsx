@@ -3,13 +3,16 @@ import { useRole } from '../../context/RoleContext';
 import { getAnnouncementsForParent } from '../../lib/db/communications';
 import { getParentPortalSnapshot } from '../../lib/db/parent-portal';
 import { Announcement, AttendanceRecord, Exam, HomeworkRecord, Student, CA_TYPES, getGrade, isScoredExam } from '../../types';
-import { GraduationCap, BookOpen, TrendingUp, Award, CalendarCheck2, ClipboardList } from 'lucide-react';
+import { GraduationCap, BookOpen, TrendingUp, Award, CalendarCheck2, ClipboardList, ArrowRight } from 'lucide-react';
+import { getCurrentAcademicYear } from '../../lib/db/academic';
+import { getParentWeeklyLearning } from '../../lib/db/parentWeeklyLearning';
+import { makeWeekLabel, weekNumberForDate } from '../../utils/weekDates';
 import { supabase } from '../../lib/supabase';
 import { getParentFamilyCard } from '../../lib/db/familyPortal';
 import { FamilyIdCard, classifyFamilyCard, type FamilyCardState } from './components/FamilyIdCard';
 import { RecentReleases } from './components/RecentReleases';
 
-export function ParentDashboard() {
+export function ParentDashboard({ navigate }: { navigate?: (path: string) => void }) {
   const { session } = useRole();
   const [children, setChildren] = useState<Student[]>([]);
   const [exams, setExams] = useState<Exam[]>([]);
@@ -17,6 +20,7 @@ export function ParentDashboard() {
   const [homework, setHomework] = useState<HomeworkRecord[]>([]);
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [familyCard, setFamilyCard] = useState<FamilyCardState>({ status: 'loading' });
+  const [weeklySummary, setWeeklySummary] = useState<{ child: Student; subjects: number } | null>(null);
 
   useEffect(() => {
     if (!session) return;
@@ -38,6 +42,33 @@ export function ParentDashboard() {
       .then(card => setFamilyCard(classifyFamilyCard(false, card.familyId, card.students)))
       .catch(() => setFamilyCard({ status: 'pending', students: [] }));
   }, [session]);
+
+  useEffect(() => {
+    if (children.length === 0) {
+      setWeeklySummary(null);
+      return;
+    }
+    let cancelled = false;
+    const storedId = window.localStorage.getItem('parent-weekly-learning-child');
+    const child = children.find(item => item.id === storedId)
+      || [...children].sort((a, b) => a.name.localeCompare(b.name))[0];
+
+    getCurrentAcademicYear()
+      .then(async academicYear => {
+        if (!academicYear?.startDate) return [];
+        const label = makeWeekLabel(academicYear.startDate, weekNumberForDate(academicYear.startDate));
+        return getParentWeeklyLearning(child.id, label);
+      })
+      .then(lessons => {
+        const today = new Date().toLocaleDateString('en-GB', { weekday: 'long' });
+        const todayLessons = lessons.filter(item => item.day === today);
+        if (!cancelled) setWeeklySummary({ child, subjects: new Set(todayLessons.map(item => item.subject)).size });
+      })
+      .catch(() => {
+        if (!cancelled) setWeeklySummary({ child, subjects: 0 });
+      });
+    return () => { cancelled = true; };
+  }, [children]);
 
   useEffect(() => {
     if (!session) return;
@@ -115,6 +146,31 @@ export function ParentDashboard() {
         <h1 className="text-2xl font-bold text-slate-900">Parent Dashboard</h1>
         <p className="text-slate-500 mt-1">Welcome, {session?.userName}</p>
       </div>
+
+      <button
+        type="button"
+        onClick={() => navigate?.('/parent/weekly-learning')}
+        className="group w-full min-h-11 rounded-2xl border border-violet-200 bg-gradient-to-br from-violet-600 to-indigo-700 p-5 text-left text-white shadow-sm transition hover:shadow-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-offset-2"
+      >
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl" aria-hidden="true">📚</span>
+              <h2 className="text-lg font-bold">Today’s Learning</h2>
+            </div>
+            <p className="mt-2 text-sm leading-6 text-violet-100">See what your child is learning today.</p>
+            {weeklySummary && (
+              <p className="mt-2 break-words text-sm font-semibold">
+                {weeklySummary.child.name} · {weeklySummary.child.className}
+                {weeklySummary.subjects > 0 ? ` · ${weeklySummary.subjects} ${weeklySummary.subjects === 1 ? 'subject' : 'subjects'}` : ''}
+              </p>
+            )}
+            <span className="mt-4 inline-flex items-center gap-2 text-sm font-bold">
+              View Today’s Learning <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
+            </span>
+          </div>
+        </div>
+      </button>
 
       {/* M3 — own family ID + printable card (parentId-scoped) */}
       <FamilyIdCard state={familyCard} />
