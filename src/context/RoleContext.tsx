@@ -10,7 +10,7 @@ import {
 } from 'react';
 
 import type { RoleSession } from '../types';
-import { supabase, isPlaceholderEnv } from '../lib/supabase';
+import { supabase, isPlaceholderEnv, resolvePreviewProfile } from '../lib/supabase';
 import {
   buildRoleSession,
   getProfileByAuthId,
@@ -112,12 +112,18 @@ export function RoleProvider({ children }: { children: ReactNode }) {
 
   const login = useCallback(async (email: string, password: string) => {
     setError(null);
-    // In preview (placeholder Supabase), accept any credentials as admin demo
+    // Preview (placeholder Supabase): a KNOWN demo email signs in as that demo
+    // profile (parent1@example.com → parent app, etc.) so every role can be
+    // previewed; any other credentials sign in as the demo admin as before.
     if (isPlaceholderEnv) {
-      const mockSession: RoleSession = { role: 'admin', userId: 'preview-admin', userName: 'Preview Admin' };
+      const demo = resolvePreviewProfile(email);
+      const mockSession: RoleSession = demo
+        ? { role: demo.role, userId: demo.id, userName: demo.name }
+        : { role: 'admin', userId: 'preview-admin', userName: 'Preview Admin' };
+      const authId = demo?.authId ?? 'auth-preview-admin';
       setSession(mockSession);
-      setUser({ id: 'preview-admin', authId: 'auth-preview-admin', email: email || 'admin@mbk.edu' });
-      appliedAuthIdRef.current = 'auth-preview-admin';
+      setUser({ id: mockSession.userId, authId, email: email || 'admin@mbk.edu' });
+      appliedAuthIdRef.current = authId;
       setLoading(false);
       return;
     }

@@ -1,162 +1,172 @@
-import { useState, useEffect } from 'react';
-import { useRole } from '../../context/RoleContext';
-import { getStudentsByParent } from '../../lib/db/students';
+// PARENT — Midterm report section (one tab of the Exam Results screen).
+//
+// Renders for ONE student (the active child). Same data path as before
+// (getMidtermReport RPC + report_comments) with a phone-friendly layout:
+// subject cards on small screens, the full table on larger ones, and the
+// teacher comments that were previously fetched but never displayed.
+
+import { useEffect, useState } from 'react';
 import { getCurrentTerm } from '../../lib/db/academic';
 import { getMidtermReport, getReportCommentsForStudentTerm } from '../../lib/db/reports';
-import { Student } from '../../types';
-import type { MidtermReport } from '../../types';
+import type { MidtermReport, MidtermScore, Student, Term } from '../../types';
 import { FileBarChart } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { ReportCardShell } from './components/ReportCardShell';
+import { TeacherCommentsCard, type ReportCommentLike } from './components/TeacherCommentsCard';
 
-export function MidtermReport() {
-  const { session } = useRole();
-  const [children, setChildren] = useState<Student[]>([]);
+function gradeChipClass(grade: string): string {
+  return grade === 'A'
+    ? 'bg-emerald-100 text-emerald-700'
+    : grade === 'B'
+      ? 'bg-blue-100 text-blue-700'
+      : grade === 'C'
+        ? 'bg-amber-100 text-amber-700'
+        : grade === 'D'
+          ? 'bg-orange-100 text-orange-700'
+          : 'bg-red-100 text-red-700';
+}
+
+function scoreTone(percentage: number): string {
+  return percentage >= 80 ? 'text-emerald-600' : percentage >= 60 ? 'text-amber-600' : 'text-red-600';
+}
+
+/** Phone layout — one card per subject, no sideways scrolling. */
+function MidtermMobileRows({ scores }: { scores: MidtermScore[] }) {
+  return (
+    <div className="divide-y divide-slate-100 md:hidden">
+      {scores.map(score => (
+        <div key={score.subject} className="flex items-center justify-between gap-3 px-4 py-3">
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-bold uppercase tracking-wide text-slate-900">{score.subject}</p>
+            <p className="mt-1 text-xs text-slate-500">
+              {score.score}/{score.total}
+              <span className="mx-1 text-slate-300">·</span>Rank {score.subject_rank}
+              <span className="mx-1 text-slate-300">·</span>Class avg {score.class_average}%
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <span className={cn('text-lg font-extrabold', scoreTone(score.percentage))}>{score.percentage}%</span>
+            <span className={cn('rounded-full px-2.5 py-1 text-xs font-bold', gradeChipClass(score.grade))}>
+              {score.grade}
+            </span>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Larger screens — the original full table. */
+function MidtermDesktopTable({ report }: { report: MidtermReport }) {
+  return (
+    <div className="hidden overflow-x-auto md:block">
+      <table className="w-full">
+        <thead>
+          <tr className="border-b border-slate-200 bg-slate-50">
+            <th className="px-5 py-3 text-left text-xs font-semibold uppercase text-slate-500">Subject</th>
+            <th className="px-5 py-3 text-center text-xs font-semibold uppercase text-slate-500">Score</th>
+            <th className="px-5 py-3 text-center text-xs font-semibold uppercase text-slate-500">Total</th>
+            <th className="px-5 py-3 text-center text-xs font-semibold uppercase text-slate-500">Percentage</th>
+            <th className="px-5 py-3 text-center text-xs font-semibold uppercase text-slate-500">Grade</th>
+            <th className="px-5 py-3 text-center text-xs font-semibold uppercase text-slate-500">Subject Rank</th>
+            <th className="px-5 py-3 text-center text-xs font-semibold uppercase text-slate-500">Class Avg</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-slate-100">
+          {report.scores.map(score => (
+            <tr key={score.subject} className="hover:bg-slate-50">
+              <td className="px-5 py-4 text-sm font-semibold text-slate-800">{score.subject}</td>
+              <td className="px-5 py-4 text-center font-bold text-slate-700">{score.score}</td>
+              <td className="px-5 py-4 text-center text-slate-500">{score.total}</td>
+              <td className="px-5 py-4 text-center">
+                <span className={cn('font-bold', scoreTone(score.percentage))}>{score.percentage}%</span>
+              </td>
+              <td className="px-5 py-4 text-center">
+                <span className={cn('rounded-full px-3 py-1 text-xs font-bold', gradeChipClass(score.grade))}>
+                  {score.grade}
+                </span>
+              </td>
+              <td className="px-5 py-4 text-center text-slate-600">{score.subject_rank}</td>
+              <td className="px-5 py-4 text-center text-slate-600">{score.class_average}%</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+export function MidtermReportTab({ student, term }: { student: Student; term: Term | null }) {
   const [reportData, setReportData] = useState<MidtermReport | null>(null);
-  const [selectedChild, setSelectedChild] = useState('');
-  const [reportComments, setReportComments] = useState<string[]>([]);
+  const [comments, setComments] = useState<ReportCommentLike[]>([]);
 
   useEffect(() => {
-    if (!session) return;
-
-    const loadData = async () => {
-      const kids = await getStudentsByParent(session.userId);
-      setChildren(kids);
-      if (kids.length > 0) setSelectedChild(kids[0].id);
-    };
-
-    loadData();
-  }, [session]);
-
-  useEffect(() => {
-    if (!selectedChild) return;
+    let cancelled = false;
 
     const loadReport = async () => {
-      const term = await getCurrentTerm();
-      if (!term) return;
-      const report = await getMidtermReport(selectedChild, term.id);
+      const resolvedTerm = term ?? (await getCurrentTerm());
+      if (!resolvedTerm) return;
+
+      const report = await getMidtermReport(student.id, resolvedTerm.id);
+      if (cancelled) return;
       setReportData(report);
 
-      const comments = await getReportCommentsForStudentTerm(selectedChild, term.id);
-      setReportComments(comments.map(comment => comment.teacherComment || '').filter(Boolean));
+      const termComments = await getReportCommentsForStudentTerm(student.id, resolvedTerm.id).catch(
+        () => [] as ReportCommentLike[],
+      );
+      if (!cancelled) setComments(termComments);
     };
 
-    loadReport();
-  }, [selectedChild]);
+    loadReport().catch(() => undefined);
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [student.id, term?.id]);
 
-  const child = children.find(c => c.id === selectedChild);
-
-  const overallAvg = reportData?.scores.length
-    ? Math.round(reportData.scores.reduce((s, score) => s + score.percentage, 0) / reportData.scores.length)
+  const scores = reportData?.scores ?? [];
+  const overallAvg = scores.length
+    ? Math.round(scores.reduce((s, score) => s + score.percentage, 0) / scores.length)
     : 0;
-
   const rank = reportData ? `${reportData.overall_rank} / ${reportData.total_students}` : '—';
 
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-slate-900">Midterm Reports</h1>
-        <p className="text-slate-500 mt-1">Half-term examination results with rankings</p>
-      </div>
-
-      <div>
-        <label className="text-xs font-semibold text-slate-500 uppercase mb-1.5 block">Select Child</label>
-        <div className="flex gap-2 flex-wrap">
-          {children.map(c => (
-            <button key={c.id} onClick={() => setSelectedChild(c.id)}
-              className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
-                selectedChild === c.id ? 'bg-blue-100 text-blue-700 ring-2 ring-offset-1 ring-blue-200' : 'bg-white text-slate-500 border border-slate-200'
-              )}>{c.name}</button>
-          ))}
-        </div>
-      </div>
-
-      {child && (
-        <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-          <div className="bg-gradient-to-r from-blue-500 to-cyan-600 p-5">
-            <div className="flex items-center justify-between flex-wrap gap-4">
-              <div>
-                <h2 className="text-lg font-bold text-white">Midterm Examination Report</h2>
-                <p className="text-sm text-white/80">{child.name} · {child.className}</p>
-              </div>
-              <div className="flex gap-6">
-                <div className="text-center">
-                  <p className="text-3xl font-bold text-white">{overallAvg}%</p>
-                  <p className="text-xs text-white/70">Average</p>
-                </div>
-                <div className="text-center">
-                  <p className="text-3xl font-bold text-white">{rank}</p>
-                  <p className="text-xs text-white/70">Position</p>
-                </div>
+    <div className="space-y-4" data-testid="midterm-report">
+      <ReportCardShell
+        tone="blue"
+        title="Midterm Report"
+        subtitle={`${student.name} · ${student.className}${term?.name ? ` · ${term.name}` : ''}`}
+        stats={
+          scores.length > 0
+            ? [
+                { label: 'Average', value: `${overallAvg}%` },
+                { label: 'Position', value: rank },
+              ]
+            : []
+        }
+        testId="midterm-report-card"
+      >
+        {scores.length > 0 ? (
+          <>
+            <MidtermMobileRows scores={scores} />
+            <MidtermDesktopTable report={{ scores, overall_rank: reportData!.overall_rank, total_students: reportData!.total_students }} />
+            {/* Overall summary row — readable without parsing the table */}
+            <div className="flex items-center justify-between gap-3 border-t border-slate-100 bg-slate-50 px-4 py-3">
+              <p className="text-sm font-bold text-slate-800">Overall</p>
+              <div className="flex items-center gap-3">
+                <span className="text-xs text-slate-500">Position {rank}</span>
+                <span className="text-lg font-extrabold text-indigo-700">{overallAvg}%</span>
               </div>
             </div>
+          </>
+        ) : (
+          <div className="py-12 text-center text-slate-400">
+            <FileBarChart className="mx-auto mb-3 h-12 w-12 opacity-50" aria-hidden="true" />
+            <p className="font-medium">No midterm results available yet</p>
+            <p className="mt-1 text-xs">Midterm results appear here once the school publishes them.</p>
           </div>
+        )}
+      </ReportCardShell>
 
-          {reportData && reportData.scores.length > 0 ? (
-            <>
-              <div className="overflow-x-auto">
-                <table className="w-full">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200">
-                      <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Score</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Total</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Percentage</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Grade</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject Rank</th>
-                      <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Class Avg</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {reportData.scores.map(score => (
-                      <tr key={score.subject} className="hover:bg-slate-50">
-                        <td className="px-5 py-4 font-semibold text-slate-800 text-sm">{score.subject}</td>
-                        <td className="px-5 py-4 text-center font-bold text-slate-700">{score.score}</td>
-                        <td className="px-5 py-4 text-center text-slate-500">{score.total}</td>
-                        <td className="px-5 py-4 text-center">
-                          <span className={cn("font-bold",
-                            score.percentage >= 80 ? 'text-emerald-600' : score.percentage >= 60 ? 'text-amber-600' : 'text-red-600'
-                          )}>{score.percentage}%</span>
-                        </td>
-                        <td className="px-5 py-4 text-center">
-                          <span className={cn("px-3 py-1 rounded-full text-xs font-bold",
-                            score.grade === 'A' ? 'bg-emerald-100 text-emerald-700' :
-                            score.grade === 'B' ? 'bg-blue-100 text-blue-700' :
-                            score.grade === 'C' ? 'bg-amber-100 text-amber-700' :
-                            score.grade === 'D' ? 'bg-orange-100 text-orange-700' :
-                            'bg-red-100 text-red-700'
-                          )}>{score.grade}</span>
-                        </td>
-                        <td className="px-5 py-4 text-center text-slate-600">{score.subject_rank}</td>
-                        <td className="px-5 py-4 text-center text-slate-600">{score.class_average}%</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="bg-slate-50 font-bold">
-                      <td className="px-5 py-3 text-sm text-slate-800">OVERALL</td>
-                      <td className="px-5 py-3 text-center text-slate-800">—</td>
-                      <td className="px-5 py-3 text-center text-slate-500">—</td>
-                      <td className="px-5 py-3 text-center text-indigo-700">{overallAvg}%</td>
-                      <td className="px-5 py-3 text-center">
-                        <span className="px-3 py-1 rounded-full text-xs font-bold bg-indigo-100 text-indigo-700">
-                          {overallAvg >= 90 ? 'A' : overallAvg >= 80 ? 'B' : overallAvg >= 70 ? 'C' : overallAvg >= 60 ? 'D' : 'F'}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-center text-slate-800">{rank}</td>
-                      <td className="px-5 py-3 text-center text-slate-500">—</td>
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </>
-          ) : (
-            <div className="text-center py-12 text-slate-400">
-              <FileBarChart className="w-12 h-12 mx-auto mb-3 opacity-50" />
-              <p className="font-medium">No midterm results available</p>
-            </div>
-          )}
-        </div>
-      )}
+      <TeacherCommentsCard comments={comments} />
     </div>
   );
 }

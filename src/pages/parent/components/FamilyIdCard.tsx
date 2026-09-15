@@ -86,7 +86,7 @@ export function FamilyIdCard({ state }: { state: FamilyCardState }) {
       <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-wide text-emerald-900">
         <span aria-hidden>✓</span> Your Family ID
       </div>
-      <div className="mt-2 font-mono text-5xl font-black tracking-widest text-emerald-950">
+      <div className="mt-2 font-mono text-4xl font-black tracking-widest text-emerald-950 sm:text-5xl">
         {displayFamilyId(state.familyId)}
       </div>
 

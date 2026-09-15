@@ -1,143 +1,177 @@
-import { useState, useEffect } from 'react';
+// PARENT — Exam Results: the ONE place for all academic reports.
+//
+// Monthly, Midterm and Final reports used to be three separate items in a
+// long sidebar; parents had to remember which menu entry held which report.
+// Now there is a single screen:
+//
+//   ADE — Grade 2-B
+//   [ Monthly ] [ Midterm ] [ Final ]
+//
+// Picking a child here (or on Home / My Children) makes that child the
+// active student everywhere. The three tabs render the same data through the
+// same report functions as before — only the presentation changed.
+
+import { useEffect, useState } from 'react';
 import { useRole } from '../../context/RoleContext';
 import { getStudentsByParent } from '../../lib/db/students';
-import { getExamsByParent } from '../../lib/db/exams';
 import { getCurrentTerm } from '../../lib/db/academic';
-import { getReportCommentsForStudentTerm } from '../../lib/db/reports';
-import { Student, Exam, ExamType, EXAM_TYPES, isScoredExam } from '../../types';
-import { BookOpen } from 'lucide-react';
+import type { Student, Term } from '../../types';
+import { BookOpen, Calendar, ClipboardList, Award } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { useI18n } from '../../lib/i18n/AppLanguageContext';
+import { useParentContext } from './ParentContext';
+import { MonthlyReportTab } from './MonthlyReport';
+import { MidtermReportTab } from './MidtermReport';
+import { FinalReportTab } from './FinalReport';
 
-export function ExamResults() {
+export type ReportTab = 'monthly' | 'midterm' | 'final';
+
+const TABS: Array<{ id: ReportTab; label: string; icon: typeof Calendar; testId: string }> = [
+  { id: 'monthly', label: 'Monthly', icon: Calendar, testId: 'results-tab-monthly' },
+  { id: 'midterm', label: 'Midterm', icon: ClipboardList, testId: 'results-tab-midterm' },
+  { id: 'final', label: 'Final', icon: Award, testId: 'results-tab-final' },
+];
+
+export function ExamResults({ initialTab = 'monthly' }: { initialTab?: ReportTab }) {
   const { session } = useRole();
-  const [children, setChildren] = useState<Student[]>([]);
-  const [exams, setExams] = useState<Exam[]>([]);
-  const [selectedChild, setSelectedChild] = useState('all');
-  const [typeFilter, setTypeFilter] = useState<ExamType | 'all'>('all');
-  const [reportCommentsByExam, setReportCommentsByExam] = useState<Record<string, string>>({});
+  const { t } = useI18n();
+  const parentCtx = useParentContext();
+
+  // Fallback for hosts that render this page outside the parent shell
+  // (kept from the pre-redesign page): fetch children locally.
+  const [fallbackKids, setFallbackKids] = useState<Student[]>([]);
+  const [fallbackActiveId, setFallbackActiveId] = useState('');
+
+  const [activeTab, setActiveTab] = useState<ReportTab>(initialTab);
+  const [term, setTerm] = useState<Term | null>(null);
 
   useEffect(() => {
-    if (!session) return;
-
-    const loadData = async () => {
-      const term = await getCurrentTerm();
-      const [kids, examsData] = await Promise.all([
-        getStudentsByParent(session.userId),
-        getExamsByParent(session.userId, 'approved')
-      ]);
-      // Filter exams by current term if term exists
-      const filteredExams = term ? examsData.filter(e => e.termId === term.id) : examsData;
-      setChildren(kids);
-      setExams(filteredExams);
-    };
-
-    loadData();
-  }, [session]);
+    getCurrentTerm().then(setTerm).catch(() => setTerm(null));
+  }, []);
 
   useEffect(() => {
-    if (!session || selectedChild === 'all') {
-      setReportCommentsByExam({});
-      return;
-    }
+    if (parentCtx || !session) return;
+    getStudentsByParent(session.userId)
+      .then(kids => {
+        setFallbackKids(kids);
+        setFallbackActiveId(prev => (prev && kids.some(k => k.id === prev) ? prev : kids[0]?.id ?? ''));
+      })
+      .catch(() => setFallbackKids([]));
+  }, [parentCtx, session]);
 
-    const fetchComments = async () => {
-      const term = await getCurrentTerm();
-      if (!term) return;
+  const kids = parentCtx ? parentCtx.kids : fallbackKids;
+  const activeChildId = parentCtx ? parentCtx.activeChildId : fallbackActiveId || null;
+  const activeChild = kids.find(k => k.id === activeChildId) ?? kids[0] ?? null;
+  const handleSelectChild = (id: string) => {
+    if (parentCtx) parentCtx.selectChild(id);
+    else setFallbackActiveId(id);
+  };
 
-      const comments = await getReportCommentsForStudentTerm(selectedChild, term.id);
-      const map: Record<string, string> = {};
-      for (const comment of comments) {
-        if (comment.examId && comment.teacherComment) {
-          map[comment.examId] = comment.teacherComment;
-        }
-      }
-      setReportCommentsByExam(map);
-    };
+  // Keep the tab in sync when the host deep-links a specific report type.
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
 
-    fetchComments();
-  }, [session, selectedChild]);
-
-  const filtered = exams
-    .filter(e => selectedChild === 'all' || e.studentId === selectedChild)
-    .filter(e => typeFilter === 'all' || e.examType === typeFilter)
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+  if (kids.length === 0) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold text-slate-900">{t('nav.Exam Results', 'Exam Results')}</h1>
+          <p className="mt-1 text-slate-500">{t('parent.resultsSubtitle', 'Monthly, midterm and final reports')}</p>
+        </div>
+        <div className="py-12 text-center text-slate-400">
+          <BookOpen className="mx-auto mb-3 h-12 w-12 opacity-50" aria-hidden="true" />
+          <p className="font-medium">
+            {parentCtx?.loading
+              ? t('parent.loadingChildren', 'Loading your children…')
+              : t('parent.noChildren', 'No children are linked to your account yet.')}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5" data-testid="exam-results">
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">Exam Results</h1>
-        <p className="text-slate-500 mt-1">All approved exam results for your children</p>
+        <h1 className="text-2xl font-bold text-slate-900">{t('nav.Exam Results', 'Exam Results')}</h1>
+        <p className="mt-1 text-slate-500">{t('parent.resultsSubtitle', 'Monthly, midterm and final reports')}</p>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-3">
-        <div className="flex gap-2 flex-wrap">
-          <button onClick={() => setSelectedChild('all')}
-            className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
-              selectedChild === 'all' ? 'bg-violet-100 text-violet-700 ring-2 ring-offset-1 ring-violet-200' : 'bg-white text-slate-500 border border-slate-200'
-            )}>All Children</button>
-          {children.map(c => (
-            <button key={c.id} onClick={() => setSelectedChild(c.id)}
-              className={cn("px-4 py-2 rounded-xl text-sm font-medium transition-all",
-                selectedChild === c.id ? 'bg-violet-100 text-violet-700 ring-2 ring-offset-1 ring-violet-200' : 'bg-white text-slate-500 border border-slate-200'
-              )}>{c.name}</button>
-          ))}
+      {/* Child switcher — first names keep chips compact on narrow phones */}
+      {kids.length > 1 && (
+        <div className="flex flex-wrap gap-2" role="group" aria-label={t('parent.chooseChild', 'Choose a child')}>
+          {kids.map(child => {
+            const selected = child.id === activeChild?.id;
+            return (
+              <button
+                key={child.id}
+                type="button"
+                data-testid={`results-child-${child.id}`}
+                aria-pressed={selected}
+                onClick={() => handleSelectChild(child.id)}
+                className={cn(
+                  'min-h-11 max-w-full truncate rounded-full px-4 text-sm font-semibold transition-colors',
+                  selected
+                    ? 'bg-violet-600 text-white shadow-sm'
+                    : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
+                )}
+              >
+                {child.name.split(' ')[0]}
+              </button>
+            );
+          })}
         </div>
-        <select value={typeFilter} onChange={e => setTypeFilter(e.target.value as ExamType | 'all')}
-          className="px-4 py-2 rounded-xl border border-slate-200 text-sm bg-white focus:ring-2 focus:ring-violet-200 outline-none">
-          <option value="all">All Types</option>
-          {EXAM_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
-        </select>
-      </div>
+      )}
 
-      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead>
-              <tr className="bg-slate-50 border-b border-slate-200">
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Student</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Subject</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Type</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Month</th>
-                <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Score</th>
-                <th className="text-center px-5 py-3 text-xs font-semibold text-slate-500 uppercase">%</th>
-                <th className="text-left px-5 py-3 text-xs font-semibold text-slate-500 uppercase">Teacher Comment</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filtered.map(exam => {
-                const child = children.find(c => c.id === exam.studentId);
-                const pct = isScoredExam(exam) ? Math.round(((exam.score ?? 0) / exam.total) * 100) : null;
-                const stateLabel = exam.entryState === 'absent' ? 'Absent' : exam.entryState === 'not_applicable' ? 'N/A' : null;
-                return (
-                  <tr key={exam.id} className="hover:bg-slate-50 transition-colors">
-                    <td className="px-5 py-3 text-sm font-medium text-slate-800">{child?.name || '—'}</td>
-                    <td className="px-5 py-3 text-sm text-slate-600">{exam.subject}</td>
-                    <td className="px-5 py-3">
-                      <span className={cn("px-2 py-0.5 rounded-md text-xs font-medium",
-                        exam.examType === 'Final' ? 'bg-amber-100 text-amber-700' :
-                        exam.examType === 'Midterm' ? 'bg-blue-100 text-blue-700' :
-                        'bg-slate-100 text-slate-700'
-                      )}>{exam.examType}</span>
-                    </td>
-                    <td className="px-5 py-3 text-sm text-slate-600">{exam.month}</td>
-                    <td className="px-5 py-3 text-center font-bold text-sm text-slate-800">{stateLabel || `${exam.score}/${exam.total}`}</td>
-                    <td className="px-5 py-3 text-center">
-                      {pct == null ? <span className="text-sm font-medium text-slate-400">Excluded</span> : <span className={cn("text-sm font-bold", pct >= 80 ? 'text-emerald-600' : pct >= 60 ? 'text-amber-600' : 'text-red-600')}>{pct}%</span>}
-                    </td>
-                    <td className="px-5 py-3 text-sm text-slate-600">{reportCommentsByExam[exam.id] || '—'}</td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-        {filtered.length === 0 && (
-          <div className="text-center py-12 text-slate-400">
-            <BookOpen className="w-12 h-12 mx-auto mb-3 opacity-50" />
-            <p className="font-medium">No approved results found</p>
+      {/* Active child identity */}
+      {activeChild && (
+        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3.5" data-testid="results-active-child">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-700">
+            {activeChild.name.split(' ').map(n => n[0]).join('').substring(0, 2)}
           </div>
-        )}
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-base font-bold text-slate-900">{activeChild.name}</p>
+            <p className="truncate text-xs font-medium text-slate-500">
+              {activeChild.className}
+              {term?.name ? ` · ${term.name}` : ''}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* The three report tabs — big, equal, always visible */}
+      <div className="grid grid-cols-3 gap-1 rounded-2xl bg-slate-100 p-1" role="tablist" aria-label={t('parent.reportType', 'Report type')}>
+        {TABS.map(tab => {
+          const selected = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={selected}
+              data-testid={tab.testId}
+              onClick={() => setActiveTab(tab.id)}
+              className={cn(
+                'flex min-h-[52px] min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl px-1 transition-all sm:flex-row sm:gap-2',
+                selected ? 'bg-white text-violet-700 shadow-sm' : 'text-slate-500 hover:text-slate-700',
+              )}
+            >
+              <tab.icon className="h-5 w-5 shrink-0" aria-hidden="true" />
+              <span className="text-sm font-bold">{t(`parent.tab.${tab.id}`, tab.label)}</span>
+            </button>
+          );
+        })}
       </div>
+
+      {/* Active report — each tab fetches exactly the same data it always did */}
+      {activeChild && (
+        <div role="tabpanel" key={`${activeChild.id}-${activeTab}`}>
+          {activeTab === 'monthly' && <MonthlyReportTab student={activeChild} term={term} />}
+          {activeTab === 'midterm' && <MidtermReportTab student={activeChild} term={term} />}
+          {activeTab === 'final' && <FinalReportTab student={activeChild} term={term} />}
+        </div>
+      )}
     </div>
   );
 }
