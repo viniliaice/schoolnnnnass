@@ -5,3 +5,4 @@
 * [manage-students](manage-students.md)
 * [manage-subjects](manage-subjects.md)
 * [manage-users](manage-users.md)
+* [sidebar-navigation](sidebar-navigation.md)
