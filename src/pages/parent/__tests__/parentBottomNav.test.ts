@@ -60,10 +60,25 @@ describe('mobile overflow guard', () => {
     expect(css).toContain('overflow-x: clip');
   });
 
-  it('the bottom navigation is fixed and clears the phone safe area', () => {
+  it('the single bottom navigation stays viewport-fixed and clears the phone safe area', () => {
     const source = readFileSync(new URL('../../../components/layout/ParentAppShell.tsx', import.meta.url), 'utf8');
-    expect(source).toContain('env(safe-area-inset-bottom)');
-    expect(source).toContain('fixed inset-x-0 bottom-0');
+    const css = readFileSync(new URL('../../../index.css', import.meta.url), 'utf8');
+    const html = readFileSync(new URL('../../../../index.html', import.meta.url), 'utf8');
+
+    expect(source).toContain('parent-bottom-nav fixed inset-x-0 bottom-0');
+    expect(source.match(/<nav/g)).toHaveLength(1);
+    expect(css).toMatch(/\.parent-bottom-nav\s*\{[^}]*position:\s*fixed;[^}]*bottom:\s*0;/s);
+    expect(css).toMatch(/\.parent-bottom-nav\s*\{[^}]*env\(safe-area-inset-bottom, 0px\)/s);
+    expect(html).toContain('viewport-fit=cover');
+  });
+
+  it('reserves the bar height and safe area below mobile dashboard content', () => {
+    const source = readFileSync(new URL('../../../components/layout/ParentAppShell.tsx', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../../../index.css', import.meta.url), 'utf8');
+
+    expect(source).toContain('className="parent-main ');
+    expect(css).toContain('--parent-bottom-nav-height: 60px');
+    expect(css).toMatch(/\.parent-main\s*\{[^}]*padding-bottom:\s*calc\([^;]*safe-area-inset-bottom[^;]*\);/s);
   });
 
   it('is phone-first and restores the classic staff sidebar on desktop (lg+)', () => {

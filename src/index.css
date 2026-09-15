@@ -319,6 +319,35 @@ html, body, #root { min-height: 100%; background: var(--bg); }
    area (exam tables on md+) scrolls inside its own overflow-x-auto box. */
 html, body { overflow-x: clip; }
 
+/* Parent phone shell -------------------------------------------------------
+   Keep this in plain CSS rather than relying only on generated utility
+   classes. Mobile Safari and Android WebView must anchor the one navigation
+   element to the visual viewport for the entire document scroll. The content
+   clearance uses the exact same bar height and includes the device inset, so
+   the last dashboard card can always scroll completely above the bar. */
+:root {
+  --parent-bottom-nav-height: 60px;
+}
+
+.parent-bottom-nav {
+  position: fixed;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+.parent-main {
+  padding-bottom: calc(var(--parent-bottom-nav-height) + env(safe-area-inset-bottom, 0px) + 2rem);
+}
+
+@media (min-width: 64rem) {
+  .parent-main {
+    padding-bottom: 2.5rem;
+  }
+}
+
 html { transition: background-color var(--theme-transition), color var(--theme-transition); }
 
 body {
