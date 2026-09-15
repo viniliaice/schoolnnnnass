@@ -57,3 +57,35 @@ export async function getParentPortalSnapshot(parentId: string) {
     quizzes: (quizzes || []) as Quiz[],
   };
 }
+
+export interface AttendanceSummary {
+  present: number;
+  absent: number;
+  late: number;
+  total: number;
+}
+
+/**
+ * Simple per-child attendance tally for the parent portal (shown on the
+ * Monthly report tab "where appropriate"). Same RLS boundary as the
+ * dashboard snapshot above — a parent can only ever read their own child's
+ * attendance rows.
+ */
+export async function getChildAttendanceSummary(studentId: string): Promise<AttendanceSummary> {
+  const { data, error } = await supabase
+    .from('attendance')
+    .select('status')
+    .eq('studentId', studentId)
+    .order('date', { ascending: false })
+    .limit(180);
+  if (error) throw error;
+  const summary: AttendanceSummary = { present: 0, absent: 0, late: 0, total: 0 };
+  for (const row of (data || []) as Pick<AttendanceRecord, 'status'>[]) {
+    if (row.status === 'present') summary.present += 1;
+    else if (row.status === 'absent') summary.absent += 1;
+    else if (row.status === 'late') summary.late += 1;
+    else continue;
+    summary.total += 1;
+  }
+  return summary;
+}

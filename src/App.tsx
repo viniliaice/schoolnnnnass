@@ -52,14 +52,13 @@ import { UnitPlans } from './pages/teacher/UnitPlans';
 // Shared Reports
 import { ExamReport } from './pages/reports/ExamReport';
 
-// Parent Pages
+// Parent Pages (mobile-first parent app — see components/layout/ParentAppShell)
+import { ParentAppShell } from './components/layout/ParentAppShell';
 import { ParentDashboard } from './pages/parent/ParentDashboard';
 import { ParentQuizzes } from './pages/parent/ParentQuizzes';
 import { ChildrenView } from './pages/parent/ChildrenView';
 import { ExamResults } from './pages/parent/ExamResults';
-import { MonthlyReport } from './pages/parent/MonthlyReport';
-import { MidtermReport } from './pages/parent/MidtermReport';
-import { FinalReport } from './pages/parent/FinalReport';
+import { MorePage, PickupCardPage } from './pages/parent/MorePage';
 import { WeeklyLearning } from './pages/parent/WeeklyLearning';
 import { MessagesPage } from './pages/shared/MessagesPage';
 import { StreamsPage } from './pages/shared/StreamsPage';
@@ -84,6 +83,39 @@ function AppContent() {
 
   if (!isLoggedIn || !session) {
     return <LoginPage />;
+  }
+
+  // ── Parent app ──────────────────────────────────────────────────────────
+  // Parents get the mobile-first shell (bottom navigation: Home · Children ·
+  // Results · Messages · More) instead of the staff sidebar. Monthly/Midterm/
+  // Final are no longer separate destinations — their old paths open the
+  // unified Exam Results screen on the matching tab, so existing links keep
+  // working.
+  if (session.role === 'parent') {
+    return (
+      <ParentAppShell>
+        {(currentPath, navigate) => {
+          if (!canAccessRoute(session.role, currentPath)) {
+            return <RouteRedirect to={DEFAULT_ROUTE[session.role]} navigate={navigate} />;
+          }
+          switch (currentPath) {
+            case '/dashboard': return <ParentDashboard navigate={navigate} />;
+            case '/parent/children': return <ChildrenView navigate={navigate} />;
+            case '/parent/results': return <ExamResults key="results" />;
+            case '/parent/monthly': return <ExamResults key="results-monthly" initialTab="monthly" />;
+            case '/parent/midterm': return <ExamResults key="results-midterm" initialTab="midterm" />;
+            case '/parent/final': return <ExamResults key="results-final" initialTab="final" />;
+            case '/parent/more': return <MorePage navigate={navigate} />;
+            case '/parent/pickup-card': return <PickupCardPage />;
+            case '/parent/weekly-learning': return <WeeklyLearning navigate={navigate} />;
+            case '/parent/quizzes': return <ParentQuizzes />;
+            case '/messages': return <MessagesPage />;
+            case '/streams': return <StreamsPage />;
+            default: return <ParentDashboard navigate={navigate} />;
+          }
+        }}
+      </ParentAppShell>
+    );
   }
 
   return (
@@ -203,23 +235,6 @@ function AppContent() {
             case '/messages': return <MessagesPage />;
             case '/streams': return <StreamsPage />;
             default: return <OfficeDashboard navigate={navigate} />;
-          }
-        }
-
-        // Parent routes
-        if (session.role === 'parent') {
-          switch (currentPath) {
-            case '/dashboard': return <ParentDashboard navigate={navigate} />;
-            case '/parent/weekly-learning': return <WeeklyLearning navigate={navigate} />;
-            case '/parent/children': return <ChildrenView />;
-            case '/parent/quizzes': return <ParentQuizzes />;
-            case '/parent/results': return <ExamResults />;
-            case '/parent/monthly': return <MonthlyReport />;
-            case '/parent/midterm': return <MidtermReport />;
-            case '/parent/final': return <FinalReport />;
-            case '/messages': return <MessagesPage />;
-            case '/streams': return <StreamsPage />;
-            default: return <ParentDashboard navigate={navigate} />;
           }
         }
 

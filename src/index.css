@@ -313,6 +313,12 @@ html[data-theme="aurora"][data-mode="light"] {
 
 html, body, #root { min-height: 100%; background: var(--bg); }
 
+/* Parent/mobile safety net: no element should ever create sideways page
+   scrolling (screens down to 320px). `clip` (not `hidden`) keeps position:
+   sticky working for headers/tables. Content that legitimately needs a wide
+   area (exam tables on md+) scrolls inside its own overflow-x-auto box. */
+html, body { overflow-x: clip; }
+
 html { transition: background-color var(--theme-transition), color var(--theme-transition); }
 
 body {

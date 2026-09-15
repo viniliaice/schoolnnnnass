@@ -128,9 +128,16 @@ const roleBadgeColors: Record<Role, string> = {
 interface SidebarProps {
   currentPath: string;
   onNavigate: (path: string) => void;
+  /**
+   * When false, the floating mobile toggle button and the slide-over overlay
+   * are not rendered — used by the parent shell, which shows its own
+   * phone chrome (header + bottom navigation) and wants ONLY the desktop
+   * sidebar column from this component.
+   */
+  mobileToggle?: boolean;
 }
 
-export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
+export function Sidebar({ currentPath, onNavigate, mobileToggle = true }: SidebarProps) {
   const { session, logout } = useRole();
   const { t } = useI18n();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -217,15 +224,17 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
   return (
     <>
       {/* Mobile toggle */}
-      <button
-        onClick={() => setMobileOpen(true)}
-        className="lg:hidden fixed top-4 left-4 z-50 p-2.5 bg-white rounded-xl shadow-lg border border-slate-200 text-slate-600 hover:text-slate-900"
-      >
-        <Menu className="w-5 h-5" />
-      </button>
+      {mobileToggle && (
+        <button
+          onClick={() => setMobileOpen(true)}
+          className="lg:hidden fixed top-4 left-4 z-50 p-2.5 bg-white rounded-xl shadow-lg border border-slate-200 text-slate-600 hover:text-slate-900"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+      )}
 
       {/* Mobile overlay */}
-      {mobileOpen && (
+      {mobileToggle && mobileOpen && (
         <div className="lg:hidden fixed inset-0 z-50">
           <div className="absolute inset-0 bg-black/50" onClick={() => setMobileOpen(false)} />
           <div className="absolute left-0 top-0 bottom-0 w-72 animate-[slideRight_0.2s_ease-out]">

@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { normalizePhone } from './transport';
+import type { Role } from '../types';
 
 const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const rawSupabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -68,6 +69,21 @@ const demoProfiles: any[] = [
   { id: 'teacher-4', name: 'Mr. Abdirahman', email: 'abdirahman@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 4-A'], assignedSubjects: ['Social Studies'], createdAt: '2026-06-01', auth_id: 'auth-teacher-4' },
   { id: 'supervisor-1', name: 'Mr. Bashir (Supervisor)', email: 'supervisor@mbk.edu', role: 'supervisor', phone1: null, phone2: null, assignedClasses: [], assignedSubjects: [], createdAt: '2026-06-01', auth_id: 'auth-supervisor-1' },
 ];
+
+/**
+ * Preview-only: resolve a demo email to its demo profile so the sign-in form
+ * can preview any role (e.g. parent1@example.com → the parent app). Returns
+ * null in production (real Supabase handles sign-in) and for unknown emails,
+ * where the caller falls back to the demo admin — the long-standing preview
+ * behaviour. Mirrors the mock client's signInWithPassword lookup below.
+ */
+export function resolvePreviewProfile(email: string): { id: string; name: string; email: string; role: Role; authId: string } | null {
+  if (!isPlaceholderEnv) return null;
+  const wanted = String(email || '').trim().toLowerCase();
+  const profile = demoProfiles.find((p: any) => String(p.email || '').toLowerCase() === wanted);
+  if (!profile) return null;
+  return { id: profile.id, name: profile.name, email: profile.email, role: profile.role as Role, authId: profile.auth_id };
+}
 
 // --- Demo subjects + class_subjects (Lesson Planner / Unit Plans preview) ---
 const demoSubjects: any[] = [
@@ -355,6 +371,43 @@ const demoLessonPlanPeriods: any[] = demoLessonPlans.flatMap((plan: any) => {
   }));
 });
 
+// Demo approved exam results for the parent preview (parent-1's children).
+// Matches the Exam row shape; keeps the parent Home "New result" card and the
+// Exam Results screens alive in preview mode.
+const demoParentExams = [
+  { id: 'pex-1', studentId: 'stu-barwaaqo', subject: 'Mathematics', score: 18, total: 20, examType: 'Quiz', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'September', status: 'approved', parentId: 'parent-1', date: '2026-09-12', createdAt: '2026-09-12T08:00:00Z', teacherId: 'teacher-1', uploadedBy: null },
+  { id: 'pex-2', studentId: 'stu-barwaaqo', subject: 'English', score: 17, total: 20, examType: 'Classwork', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'September', status: 'approved', parentId: 'parent-1', date: '2026-09-08', createdAt: '2026-09-08T08:00:00Z', teacherId: 'teacher-1', uploadedBy: null },
+  { id: 'pex-3', studentId: 'stu-sara', subject: 'Mathematics', score: 15, total: 20, examType: 'Quiz', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'September', status: 'approved', parentId: 'parent-1', date: '2026-09-10', createdAt: '2026-09-10T08:00:00Z', teacherId: 'teacher-2', uploadedBy: null },
+  { id: 'pex-4', studentId: 'stu-sara', subject: 'English', score: 14, total: 20, examType: 'CA', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'August', status: 'approved', parentId: 'parent-1', date: '2026-08-20', createdAt: '2026-08-20T08:00:00Z', teacherId: 'teacher-2', uploadedBy: null },
+];
+
+// Demo school announcements for the parent Home "School Messages" card.
+// Rows mirror what a joined announcement_recipients select returns.
+const demoParentAnnouncementRecipients = [
+  {
+    id: 'precip-1',
+    parentId: 'parent-1',
+    announcements: {
+      id: 'ann-1',
+      className: 'Grade 2-C',
+      message: 'Reminder: Midterm exams start next Sunday. Please make sure your child revises the review sheets.',
+      createdBy: 'preview-admin',
+      createdAt: '2026-09-10T07:00:00Z',
+    },
+  },
+  {
+    id: 'precip-2',
+    parentId: 'parent-1',
+    announcements: {
+      id: 'ann-2',
+      className: 'All classes',
+      message: 'School closes at 12:00 on Thursday for staff training. Pickup starts at 11:30.',
+      createdBy: 'preview-admin',
+      createdAt: '2026-09-05T07:00:00Z',
+    },
+  },
+];
+
 const demoParentHomework = [{
   id: 'homework-parent-preview-1',
   studentId: 'stu-barwaaqo',
@@ -382,7 +435,8 @@ function createMockSupabase(): SupabaseClient {
     students: [...demoStudents],
     profiles: [...demoProfiles],
     report_comments: [],
-    exams: [],
+    exams: [...demoParentExams],
+    announcement_recipients: [...demoParentAnnouncementRecipients],
     homework: [...demoParentHomework],
     attendance: [],
     quizzes: [],
@@ -436,6 +490,24 @@ function createMockSupabase(): SupabaseClient {
           }
         } else if (f.op === 'is') {
           out = out.filter(r => (r[f.col] == null && f.val === null) || r[f.col] === f.val);
+        } else if (f.op === 'lt' || f.op === 'lte' || f.op === 'gt' || f.op === 'gte') {
+          // Comparison filters (used by the parent portal's quiz window:
+          // openDate <= today AND dueDate >= today). Numbers compare
+          // numerically; anything else compares as strings (ISO dates sort
+          // correctly lexicographically).
+          out = out.filter(r => {
+            const rv = r[f.col];
+            if (rv == null) return false;
+            const rn = Number(rv);
+            const vn = Number(f.val);
+            const c = !Number.isNaN(rn) && !Number.isNaN(vn) && String(rv).trim() !== '' && String(f.val).trim() !== ''
+              ? rn - vn
+              : String(rv).localeCompare(String(f.val));
+            if (f.op === 'lt') return c < 0;
+            if (f.op === 'lte') return c <= 0;
+            if (f.op === 'gt') return c > 0;
+            return c >= 0;
+          });
         }
       }
       if (inFilter.length > 0) {
@@ -479,6 +551,10 @@ function createMockSupabase(): SupabaseClient {
       neq: (col: string, val: any) => { filters.push({ col: col.replace(/"/g,''), val, op: 'neq' }); return chain; },
       in: (col: string, vals: any[]) => { inFilter.push({ col: col.replace(/"/g,''), vals }); return chain; },
       is: (col: string, val: any) => { filters.push({ col: col.replace(/"/g,''), val, op: 'is' }); return chain; },
+      lt: (col: string, val: any) => { filters.push({ col: col.replace(/"/g,''), val, op: 'lt' }); return chain; },
+      lte: (col: string, val: any) => { filters.push({ col: col.replace(/"/g,''), val, op: 'lte' }); return chain; },
+      gt: (col: string, val: any) => { filters.push({ col: col.replace(/"/g,''), val, op: 'gt' }); return chain; },
+      gte: (col: string, val: any) => { filters.push({ col: col.replace(/"/g,''), val, op: 'gte' }); return chain; },
       maybeSingle: async () => {
         const rows = resolveRows();
         return { data: rows[0] || null, error: null };
