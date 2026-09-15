@@ -420,7 +420,7 @@ describe('mobile drawer', () => {
   it('closes on the backdrop', async () => {
     await mount('admin');
     await click(hamburger());
-    await click(dialog()?.parentElement?.querySelector('[aria-hidden="true"]') ?? null);
+    await click(host.querySelector('#nav-backdrop'));
     expect(dialog()).toBeNull();
   });
 
@@ -433,11 +433,214 @@ describe('mobile drawer', () => {
     expect(dialog()).toBeNull();
   });
 
-  it('keeps the drawer menu in step with the desktop one', async () => {
+  it('is one element that switches between column and drawer — no duplicate ids', async () => {
     await mount('admin');
-    await click(sectionToggle('grades')); // expand on desktop
+    await click(sectionToggle('grades'));
+    expect(host.querySelectorAll('nav').length).toBe(1);
+
     await click(hamburger());
-    expect(dialog()?.querySelector('button[title="Bulk Upload Grades"]')).toBeTruthy();
+    // The old layout rendered the menu twice (column + drawer), which
+    // duplicated every id: the nav-section-* panels and ThemeSwitcher's
+    // #theme-select. aria-controls must resolve to exactly one panel.
+    const ids = [...host.querySelectorAll('[id]')].map(element => element.id);
+    const duplicates = ids.filter((id, index) => ids.indexOf(id) !== index);
+    expect(duplicates, `duplicate DOM ids: ${duplicates.join(', ')}`).toEqual([]);
+    expect(host.querySelectorAll('#theme-select').length).toBe(1);
+    expect(host.querySelectorAll('nav').length).toBe(1);
+    for (const id of [...host.querySelectorAll('[aria-controls]')].map(el => el.getAttribute('aria-controls')!)) {
+      // Attribute selector, not `#id`: jsdom has no CSS.escape.
+      expect(host.querySelectorAll(`[id="${id}"]`).length, `aria-controls → #${id}`).toBe(1);
+    }
+  });
+
+  it('closes the drawer when the window grows past the desktop breakpoint', async () => {
+    const listeners: Array<(event: MediaQueryListEvent) => void> = [];
+    const realMatchMedia = window.matchMedia;
+    window.matchMedia = ((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addEventListener: (_type: string, callback: (event: MediaQueryListEvent) => void) => listeners.push(callback),
+      removeEventListener: (_type: string, callback: (event: MediaQueryListEvent) => void) => {
+        const index = listeners.indexOf(callback);
+        if (index >= 0) listeners.splice(index, 1);
+      },
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      dispatchEvent: () => false,
+    })) as unknown as typeof window.matchMedia;
+
+    try {
+      await mount('admin');
+      await click(hamburger());
+      expect(dialog()).not.toBeNull();
+      expect(listeners.length).toBe(1);
+
+      // Without this the drawer is `lg:hidden` and the page would be left with
+      // no visible menu at all after the resize.
+      await act(async () => {
+        listeners.forEach(callback => callback({ matches: true } as MediaQueryListEvent));
+      });
+      expect(dialog()).toBeNull();
+
+      await act(async () => {
+        root.unmount();
+      });
+      expect(listeners.length).toBe(0);
+    } finally {
+      window.matchMedia = realMatchMedia;
+    }
+  });
+
+  it('moves focus into the drawer and back to the hamburger', async () => {
+    await mount('admin');
+    const trigger = hamburger()!;
+    await click(trigger);
+    expect(document.activeElement?.getAttribute('aria-label')).toBe('Close menu');
+
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('traps Tab inside the open drawer', async () => {
+    await mount('admin');
+    await click(hamburger());
+    const focusable = [...aside().querySelectorAll<HTMLElement>(
+      'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    )];
+    expect(focusable.length).toBeGreaterThan(3);
+
+    focusable[focusable.length - 1].focus();
+    const forward = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
+    await act(async () => {
+      document.dispatchEvent(forward);
+    });
+    expect(forward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(focusable[0]);
+
+    const backward = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true });
+    await act(async () => {
+      document.dispatchEvent(backward);
+    });
+    expect(backward.defaultPrevented).toBe(true);
+    expect(document.activeElement).toBe(focusable[focusable.length - 1]);
+  });
+
+  it('gives every row a touch-friendly height in the drawer', async () => {
+    await mount('admin');
+    await click(hamburger());
+    // 44px targets below lg; the desktop column stays compact.
+    for (const button of [...aside().querySelectorAll('nav button')]) {
+      expect(button.className, button.getAttribute('title') ?? '').toContain('max-lg:min-h-11');
+    }
+  });
+
+  it('sizes the drawer from the viewport and never clips a label', async () => {
+    await mount('admin');
+    await click(hamburger());
+    const drawer = aside();
+    // 86% of a 320px screen = 275px, capped at max-w-xs — the drawer can never
+    // be wider than the phone it is on, and the desktop column stays w-72.
+    expect(drawer.className).toContain('w-[86%]');
+    expect(drawer.className).toContain('max-w-xs');
+    expect(drawer.className).not.toContain('w-72');
+    // The menu scrolls on its own instead of pushing the page around.
+    expect(drawer.querySelector('nav')?.className).toContain('overflow-y-auto');
+    expect(drawer.querySelector('nav')?.className).toContain('overscroll-contain');
+    // Cut-off text on a narrow screen comes from clipping instead of wrapping,
+    // so no nav control may truncate and every label must be able to shrink.
+    for (const button of [...drawer.querySelectorAll('nav button')]) {
+      const name = button.getAttribute('title') ?? '';
+      expect(button.className, name).not.toContain('truncate');
+      expect(button.className, name).not.toContain('whitespace-nowrap');
+      expect(button.querySelector('span')?.className, name).toContain('min-w-0');
+    }
+  });
+
+  it('marks the page behind the open drawer inert and gives it back on close', async () => {
+    await mount('admin');
+    // DashboardLayout's <main> is a sibling of the sidebar in the real layout.
+    const page = document.createElement('main');
+    host.appendChild(page);
+
+    await click(hamburger());
+    expect(page.inert, 'content covered by an open drawer must be inert').toBe(true);
+
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+    });
+    expect(page.inert, 'closing the drawer must return the page').toBe(false);
+  });
+
+  it('anchors the drawer and its trigger to the reading direction', async () => {
+    window.localStorage.setItem('mbk-language', 'ar');
+    await mount('admin');
+    const trigger = host.querySelector<HTMLButtonElement>('button[aria-controls="app-sidebar"]');
+    await click(trigger);
+    const drawer = aside();
+    // `start-0` is the right edge in RTL, and the trigger follows the same
+    // side, so the button and the panel it opens are never in opposite
+    // corners — and the slide animation travels the way the panel does.
+    expect(drawer.className).toContain('start-0');
+    expect(drawer.className).not.toContain('left-0');
+    expect(drawer.className).toContain('slideLeft');
+    expect(trigger?.className).toContain('start-4');
+    expect(trigger?.className).not.toContain('left-4');
+  });
+});
+
+describe('several groups at once', () => {
+  it('keeps independent groups open side by side', async () => {
+    await mount('admin');
+    await click(sectionToggle('academic'));
+    await click(sectionToggle('grades'));
+    await click(sectionToggle('transport'));
+
+    expect(isOpen('academic')).toBe(true);
+    expect(isOpen('grades')).toBe(true);
+    expect(isOpen('transport')).toBe(true);
+    expect(hasRow('Unit Plans')).toBe(true);
+    expect(hasRow('Exam Reports')).toBe(true);
+    expect(hasRow('Family IDs')).toBe(true);
+    expect([...storedState().admin].sort()).toEqual(['academic', 'grades', 'transport']);
+  });
+
+  it('collapsing one group leaves the others open', async () => {
+    await mount('admin');
+    await click(sectionToggle('academic'));
+    await click(sectionToggle('grades'));
+    await click(sectionToggle('grades'));
+
+    expect(isOpen('academic')).toBe(true);
+    expect(isOpen('grades')).toBe(false);
+    expect(hasRow('Unit Plans')).toBe(true);
+    expect(hasRow('Exam Reports')).toBe(false);
+    expect(storedState().admin).toEqual(['academic']);
+  });
+
+  it('shows the hidden-page count only while a group is closed', async () => {
+    await mount('admin');
+    expect(sectionToggle('grades')?.textContent).toContain('4');
+    await click(sectionToggle('grades'));
+    expect(sectionToggle('grades')?.textContent).not.toContain('4');
+  });
+});
+
+describe('sub-pages keep their parent row lit', () => {
+  it('highlights Family IDs and opens Transport on the setup sub-page', async () => {
+    await mount('admin', '/admin/family-ids/setup');
+    expect(isOpen('transport')).toBe(true);
+    const lit = aside().querySelector<HTMLButtonElement>('button[aria-current="true"]');
+    expect(lit?.getAttribute('title')).toBe('Family IDs');
+    // Only an exact match claims aria-current="page".
+    expect(aside().querySelector('button[aria-current="page"]')).toBeNull();
+  });
+
+  it('leaves the menu unlit on a page no row points at', async () => {
+    await mount('teacher', '/teacher/results'); // UploadResults — not a menu row
+    expect(aside().querySelector('[aria-current]')).toBeNull();
   });
 });
 
@@ -456,4 +659,5 @@ describe('i18n', () => {
     await mount('admin');
     expect(document.documentElement.dir).toBe('rtl');
   });
+
 });

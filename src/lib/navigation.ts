@@ -20,7 +20,12 @@
 //  3. `label` doubles as the i18n key: rendered as t(`nav.${label}`, label),
 //     exactly like the old flat list. New labels need en + ar entries in
 //     lib/i18n/AppLanguageContext.tsx.
-//  4. Section `id`s are stable across roles ('academic' means the same thing
+//  4. Keep GROUP labels short (one word where possible). The column is 18rem
+//     wide and the drawer is capped at 20rem, so a header like "Attendance &
+//     Classwork" wraps onto two lines next to its icon, dot and chevron. The
+//     rows inside carry the detail: 'Classroom' holds Record Attendance,
+//     Assign Homework, Create Quiz and Grade Quizzes.
+//  5. Section `id`s are stable across roles ('academic' means the same thing
 //     for a teacher and an admin) because they are the localStorage keys for
 //     the remembered expand/collapse state.
 
@@ -136,7 +141,7 @@ export const NAV: Record<Role, RoleNav> = {
       },
       {
         id: 'classroom',
-        label: 'Attendance & Classwork',
+        label: 'Classroom',
         icon: CalendarCheck,
         items: [
           { label: 'Record Attendance', icon: CalendarCheck, path: '/admin/attendance' },
@@ -156,7 +161,7 @@ export const NAV: Record<Role, RoleNav> = {
       },
       {
         id: 'transport',
-        label: 'Transport & Gate',
+        label: 'Transport',
         icon: CarFront,
         items: [
           { label: 'Family IDs', icon: CreditCard, path: '/admin/family-ids' },
@@ -212,7 +217,7 @@ export const NAV: Record<Role, RoleNav> = {
       },
       {
         id: 'classroom',
-        label: 'Attendance & Classwork',
+        label: 'Classroom',
         icon: CalendarCheck,
         items: [
           { label: 'Record Attendance', icon: CalendarCheck, path: '/teacher/attendance' },
@@ -242,7 +247,7 @@ export const NAV: Record<Role, RoleNav> = {
     sections: [
       {
         id: 'reports',
-        label: 'Reports & Results',
+        label: 'Reports',
         icon: FileBarChart,
         items: [
           { label: 'Exam Results', icon: BookOpen, path: '/parent/results' },
@@ -299,7 +304,7 @@ export const NAV: Record<Role, RoleNav> = {
       },
       {
         id: 'classroom',
-        label: 'Attendance & Classwork',
+        label: 'Classroom',
         icon: CalendarCheck,
         items: [
           { label: 'Record Attendance', icon: CalendarCheck, path: '/supervisor/attendance' },
@@ -310,7 +315,7 @@ export const NAV: Record<Role, RoleNav> = {
       },
       {
         id: 'transport',
-        label: 'Transport & Gate',
+        label: 'Transport',
         icon: CarFront,
         items: [
           { label: 'Family IDs', icon: CreditCard, path: '/admin/family-ids' },
@@ -337,7 +342,7 @@ export const NAV: Record<Role, RoleNav> = {
     sections: [
       {
         id: 'transport',
-        label: 'Transport & Gate',
+        label: 'Transport',
         icon: CarFront,
         items: [
           { label: 'Family IDs', icon: CreditCard, path: '/admin/family-ids' },
@@ -386,6 +391,30 @@ export function navItemCount(role: Role | string | null | undefined): number {
 /** The section that owns `path`, or undefined for pinned/unknown paths. */
 export function sectionIdForPath(role: Role | string | null | undefined, path: string): string | undefined {
   return navForRole(role).sections.find(section => section.items.some(item => item.path === path))?.id;
+}
+
+/**
+ * The menu row that represents `path`.
+ *
+ * Exact match first, otherwise the deepest menu path that `path` is a child of
+ * — '/admin/family-ids/setup' resolves to '/admin/family-ids', so a sub-page
+ * reached *from* a menu row keeps that row highlighted and its group open
+ * instead of leaving the sidebar with no idea where you are.
+ */
+export function activeNavPath(role: Role | string | null | undefined, path: string): string | undefined {
+  const paths = navPathsForRole(role);
+  if (paths.includes(path)) return path;
+  let best: string | undefined;
+  for (const candidate of paths) {
+    if (path.startsWith(`${candidate}/`) && (!best || candidate.length > best.length)) best = candidate;
+  }
+  return best;
+}
+
+/** The section holding the row for `path` (child pages included). */
+export function activeSectionId(role: Role | string | null | undefined, path: string): string | undefined {
+  const resolved = activeNavPath(role, path);
+  return resolved ? sectionIdForPath(role, resolved) : undefined;
 }
 
 /* ------------------------------------------------------------------ *
@@ -447,6 +476,6 @@ export function saveOpenSections(role: Role | string | null | undefined, openIds
  * freshly loaded sidebar is short instead of showing all 27 admin links.
  */
 export function openSectionsForPath(role: Role | string | null | undefined, path: string): string[] {
-  const id = sectionIdForPath(role, path);
+  const id = activeSectionId(role, path);
   return id ? [id] : [];
 }

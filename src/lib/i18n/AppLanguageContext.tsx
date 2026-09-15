@@ -170,12 +170,12 @@ const dictionaries: Record<AppLanguage, Dictionary> = {
     'nav.Students': 'Students',
     'nav.Academic': 'Academic',
     'nav.Grades & Exams': 'Grades & Exams',
-    'nav.Attendance & Classwork': 'Attendance & Classwork',
+    'nav.Classroom': 'Classroom',
     'nav.Users & Staff': 'Users & Staff',
-    'nav.Transport & Gate': 'Transport & Gate',
+    'nav.Transport': 'Transport',
     'nav.Communications': 'Communications',
     'nav.Administration': 'Administration',
-    'nav.Reports & Results': 'Reports & Results',
+    'nav.Reports': 'Reports',
     'nav.Quizzes': 'Quizzes',
 
     // Item labels the flat menu rendered through the t() fallback only.
@@ -431,12 +431,12 @@ const dictionaries: Record<AppLanguage, Dictionary> = {
     'nav.Students': 'الطلاب',
     'nav.Academic': 'الشؤون الأكاديمية',
     'nav.Grades & Exams': 'الدرجات والاختبارات',
-    'nav.Attendance & Classwork': 'الحضور والأنشطة الصفية',
+    'nav.Classroom': 'الأنشطة الصفية',
     'nav.Users & Staff': 'المستخدمون والموظفون',
-    'nav.Transport & Gate': 'النقل والبوابة',
+    'nav.Transport': 'النقل',
     'nav.Communications': 'التواصل',
     'nav.Administration': 'الإدارة',
-    'nav.Reports & Results': 'التقارير والنتائج',
+    'nav.Reports': 'التقارير',
     'nav.Quizzes': 'الاختبارات القصيرة',
 
     // Item labels the flat menu rendered through the t() fallback only.

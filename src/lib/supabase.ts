@@ -740,6 +740,18 @@ function createMockSupabase(): SupabaseClient {
           }
         } else if (f.op === 'is') {
           out = out.filter(r => (r[f.col] == null && f.val === null) || r[f.col] === f.val);
+        } else if (f.op === 'neq') {
+          // `.neq()` pushed a filter that nothing ever applied, so preview-mode
+          // queries returned rows they should have excluded (communications.ts
+          // lists every profile but the caller; progress.ts asks for rows whose
+          // month is not null). Semantics follow Postgres: `col <> NULL` is
+          // "col IS NOT NULL", and NULL never satisfies a value comparison.
+          out = out.filter(r => {
+            const value = r[f.col];
+            if (f.val === null) return value !== null && value !== undefined;
+            if (value === null || value === undefined) return false;
+            return String(value) !== String(f.val);
+          });
         } else if (f.op === 'lt' || f.op === 'lte' || f.op === 'gt' || f.op === 'gte') {
           // Comparison filters (used by the parent portal's quiz window:
           // openDate <= today AND dueDate >= today). Numbers compare

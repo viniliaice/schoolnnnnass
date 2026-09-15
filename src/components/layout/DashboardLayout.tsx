@@ -19,8 +19,11 @@ const LANGUAGE_LABELS: Record<AppLanguage, { short: string; key: string }> = {
 export function LanguageSwitcher() {
   const { language, setLanguage, t } = useI18n();
 
+  // `end-4` mirrors the sidebar's `start-4` hamburger: identical in LTR, and in
+  // Arabic it keeps the switcher in the opposite corner from the drawer instead
+  // of sitting underneath it.
   return (
-    <div className="fixed right-4 top-4 z-40 rounded-2xl border border-slate-200 bg-white/95 p-1.5 shadow-lg backdrop-blur lg:right-6 lg:top-6">
+    <div className="fixed end-4 top-4 z-40 rounded-2xl border border-slate-200 bg-white/95 p-1.5 shadow-lg backdrop-blur lg:end-6 lg:top-6">
       <div className="flex items-center gap-1.5" role="group" aria-label={t('language.switch')}>
         <Languages className="ml-1 h-4 w-4 text-slate-400" />
         {(['en', 'ar'] as const).map((key) => {

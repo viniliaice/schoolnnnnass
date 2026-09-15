@@ -12,14 +12,16 @@
 //   * every label has an en + ar translation,
 //   * the remembered expand/collapse state round-trips per role.
 
-import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readdirSync, readFileSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   NAV,
   NAV_ROLES,
   NAV_STATE_KEY,
+  activeNavPath,
+  activeSectionId,
   loadOpenSections,
   navForRole,
   navItemCount,
@@ -216,6 +218,28 @@ describe('menu shape', () => {
     }
   });
 
+  // App.tsx has alias routes on purpose (/admin/academic and
+  // /admin/class-subjects render the same AcademicWorkspace, and admin can open
+  // the supervisor lesson-plan paths). Only one of each may appear in a menu,
+  // otherwise the same page is listed twice under two names.
+  it('never gives a role two rows that render the same page component', () => {
+    for (const role of NAV_ROLES) {
+      const componentByPath = new Map<string, string>();
+      for (const match of routeBlockFor(role).matchAll(/case '([^']+)':\s*return\s*<([A-Za-z0-9_]+)/g)) {
+        componentByPath.set(match[1], match[2]);
+      }
+      const seen = new Map<string, string>();
+      for (const path of navPathsForRole(role)) {
+        const component = componentByPath.get(path);
+        if (!component) continue; // rendered by the switch's `default:` branch
+        const previous = seen.get(component);
+        expect(previous, `${role}: ${path} and ${previous} both render ${component}`).toBeUndefined();
+        seen.set(component, path);
+      }
+      expect(seen.size, `${role}: no menu row resolved to a component`).toBeGreaterThan(3);
+    }
+  });
+
   it('reuses the same section ids across roles so saved state is portable', () => {
     expect(sectionIdForPath('admin', '/admin/lesson-plans')).toBe('academic');
     expect(sectionIdForPath('teacher', '/teacher/lesson-plans')).toBe('academic');
@@ -232,6 +256,26 @@ describe('menu shape', () => {
     expect(openSectionsForPath('teacher', '/dashboard')).toEqual([]);
   });
 
+  // The column is 18rem and the drawer caps at 20rem, so a long header wraps
+  // onto two lines next to its icon, dot and chevron. 'Attendance & Classwork'
+  // did exactly that — the group is now 'Classroom' and the rows inside carry
+  // the detail. These guards keep the menu on one line per row.
+  it('keeps group labels short enough for a 20rem drawer', () => {
+    for (const role of NAV_ROLES) {
+      for (const section of navForRole(role).sections) {
+        expect(section.label.length, `${role}/${section.id} label "${section.label}" is too long`).toBeLessThanOrEqual(16);
+      }
+    }
+  });
+
+  it('keeps row labels short enough to fit one line', () => {
+    for (const role of NAV_ROLES) {
+      for (const item of [...navForRole(role).pinned, ...navForRole(role).sections.flatMap(s => s.items)]) {
+        expect(item.label.length, `${role} row "${item.label}" is too long`).toBeLessThanOrEqual(24);
+      }
+    }
+  });
+
   it('tolerates an unexpected role value instead of crashing', () => {
     expect(navForRole('headmaster')).toEqual({ pinned: [], sections: [] });
     expect(navForRole(null)).toEqual({ pinned: [], sections: [] });
@@ -245,6 +289,86 @@ describe('menu shape', () => {
     expect(NAV_ROLES.sort()).toEqual(['admin', 'office', 'parent', 'supervisor', 'teacher']);
   });
 });
+
+describe('sub-pages resolve to their parent menu row', () => {
+  it('maps a setup sub-page to its row and group', () => {
+    expect(activeNavPath('admin', '/admin/family-ids/setup')).toBe('/admin/family-ids');
+    expect(activeSectionId('admin', '/admin/family-ids/setup')).toBe('transport');
+    expect(openSectionsForPath('admin', '/admin/family-ids/setup')).toEqual(['transport']);
+  });
+
+  it('returns an exact match unchanged', () => {
+    expect(activeNavPath('teacher', '/teacher/quizzes')).toBe('/teacher/quizzes');
+    expect(activeSectionId('teacher', '/teacher/quizzes')).toBe('classroom');
+  });
+
+  it('prefers the deepest matching parent', () => {
+    expect(activeNavPath('admin', '/admin/family-ids/setup/print')).toBe('/admin/family-ids');
+  });
+
+  it('does not match a sibling that merely shares a prefix', () => {
+    // '/admin/bulk' must never claim '/admin/bulk-grades'.
+    expect(activeNavPath('admin', '/admin/bulk-grades')).toBe('/admin/bulk-grades');
+    expect(activeNavPath('admin', '/admin/bulk/preview')).toBe('/admin/bulk');
+    expect(activeNavPath('admin', '/admin/quizzes-draft')).toBeUndefined();
+  });
+
+  it('gives up on pages no row points at', () => {
+    expect(activeNavPath('teacher', '/teacher/results')).toBeUndefined();
+    expect(activeSectionId('teacher', '/teacher/results')).toBeUndefined();
+    expect(activeNavPath('parent', '/admin/users')).toBeUndefined();
+  });
+});
+
+describe('hard-coded shortcuts elsewhere in the app stay reachable', () => {
+  // Dashboards and a few pages hard-code their own jump links (OfficeDashboard
+  // TOOLS, the dashboard quick-action cards, the Family IDs setup button). They
+  // are a second, informal navigation definition, so they must not drift away
+  // from the sidebar: anything they link to has to be a real route AND either a
+  // menu row or a sub-page of one.
+  const ROUTE_PREFIX = /^\/(admin|teacher|parent|supervisor|dashboard|gate|directory|messages|streams)(\/|$)/;
+
+  function hardcodedTargets(): Array<{ file: string; path: string }> {
+    const found: Array<{ file: string; path: string }> = [];
+    const walk = (dir: string) => {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        const full = resolve(dir, entry.name);
+        if (entry.isDirectory()) {
+          if (entry.name !== '__tests__') walk(full);
+        } else if (entry.name.endsWith('.tsx')) {
+          const source = readFileSync(full, 'utf8');
+          for (const match of source.matchAll(/'(\/[a-z0-9\-/]+)'/g)) {
+            if (ROUTE_PREFIX.test(match[1])) found.push({ file: relative(repoRoot, full), path: match[1] });
+          }
+        }
+      }
+    };
+    walk(resolve(repoRoot, 'src/pages'));
+    return found;
+  }
+
+  const targets = hardcodedTargets();
+
+  it('found the hard-coded jump links to check', () => {
+    expect(targets.length).toBeGreaterThan(5);
+    expect(targets.map(target => target.path)).toContain('/gate');
+    expect(targets.map(target => target.path)).toContain('/admin/family-ids/setup');
+  });
+
+  it('each one is rendered by some role and reachable from that sidebar', () => {
+    const everyMenuPath = NAV_ROLES.flatMap(role => navPathsForRole(role));
+    for (const target of targets) {
+      const renderedBy = NAV_ROLES.filter(role => rendersPath(role, target.path));
+      expect(renderedBy.length, `${target.file} links to ${target.path}, which no role renders`).toBeGreaterThan(0);
+
+      const reachable = everyMenuPath.some(
+        menuPath => target.path === menuPath || target.path.startsWith(`${menuPath}/`),
+      );
+      expect(reachable, `${target.file} links to ${target.path}, which no sidebar row reaches`).toBe(true);
+    }
+  });
+});
+
 
 describe('menu labels are translated', () => {
   const en = navKeysForLanguage('en');
