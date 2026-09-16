@@ -113,7 +113,7 @@ export function ExamResults({ initialTab = 'monthly' }: { initialTab?: ReportTab
                 className={cn(
                   'min-h-11 max-w-full truncate rounded-full px-4 text-sm font-semibold transition-colors',
                   selected
-                    ? 'bg-violet-600 text-white shadow-sm'
+                    ? 'bg-indigo-600 text-white shadow-sm'
                     : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
                 )}
               >
@@ -127,7 +127,7 @@ export function ExamResults({ initialTab = 'monthly' }: { initialTab?: ReportTab
       {/* Active child identity */}
       {activeChild && (
         <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-white p-3.5" data-testid="results-active-child">
-          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-violet-100 text-sm font-bold text-violet-700">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-sm font-bold text-indigo-600">
             {activeChild.name.split(' ').map(n => n[0]).join('').substring(0, 2)}
           </div>
           <div className="min-w-0 flex-1">
@@ -154,7 +154,7 @@ export function ExamResults({ initialTab = 'monthly' }: { initialTab?: ReportTab
               onClick={() => setActiveTab(tab.id)}
               className={cn(
                 'flex min-h-[52px] min-w-0 flex-col items-center justify-center gap-0.5 rounded-xl px-1 transition-all sm:flex-row sm:gap-2',
-                selected ? 'bg-white text-violet-700 shadow-sm' : 'text-slate-500 hover:text-slate-700',
+                selected ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700',
               )}
             >
               <tab.icon className="h-5 w-5 shrink-0" aria-hidden="true" />

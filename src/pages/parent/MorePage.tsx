@@ -51,7 +51,7 @@ const MORE_ROWS: MoreRow[] = [
     title: 'Today’s Learning',
     subtitle: 'What your child is learning this week',
     path: '/parent/weekly-learning',
-    iconClass: 'bg-violet-100 text-violet-600',
+    iconClass: 'bg-indigo-50 text-indigo-600',
   },
   {
     key: 'updates',
@@ -151,7 +151,7 @@ export function MorePage({ navigate }: { navigate: (path: string) => void }) {
                 className={cn(
                   'min-h-[48px] rounded-xl text-sm font-bold transition-colors',
                   language === option.id
-                    ? 'bg-violet-600 text-white'
+                    ? 'bg-indigo-600 text-white'
                     : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50',
                 )}
               >
@@ -168,7 +168,7 @@ export function MorePage({ navigate }: { navigate: (path: string) => void }) {
         <h2 className="text-sm font-bold uppercase tracking-wide text-slate-500">Account</h2>
         <div className="rounded-2xl border border-slate-200 bg-white p-4">
           <div className="flex items-center gap-3">
-            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-violet-100 text-base font-bold text-violet-700">
+            <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-indigo-50 text-base font-bold text-indigo-600">
               {(session?.userName ?? '?').split(' ').map(n => n[0]).join('').substring(0, 2)}
             </span>
             <div className="min-w-0 flex-1">
