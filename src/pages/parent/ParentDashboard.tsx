@@ -131,7 +131,7 @@ export function ParentDashboard({ navigate }: { navigate?: (path: string) => voi
           <button
             type="button"
             onClick={() => navigate?.('/parent/children')}
-            className="text-sm font-bold text-violet-700 hover:text-violet-900"
+            className="text-sm font-bold text-indigo-600 hover:text-indigo-700"
           >
             See all
           </button>
@@ -154,13 +154,13 @@ export function ParentDashboard({ navigate }: { navigate?: (path: string) => voi
                     onClick={() => openResultsFor(child.id)}
                     className={cn(
                       'flex min-h-[64px] w-full items-center gap-3 rounded-2xl border-2 bg-white p-3.5 text-left transition-colors',
-                      isActive ? 'border-violet-400' : 'border-slate-200 hover:border-violet-200',
+                      isActive ? 'border-indigo-300' : 'border-slate-200 hover:border-indigo-200',
                     )}
                   >
                     <span
                       className={cn(
                         'flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-sm font-bold',
-                        isActive ? 'bg-violet-600 text-white' : 'bg-violet-100 text-violet-700',
+                        isActive ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-600',
                       )}
                     >
                       {child.name.split(' ').map(n => n[0]).join('').substring(0, 2)}
@@ -169,7 +169,7 @@ export function ParentDashboard({ navigate }: { navigate?: (path: string) => voi
                       <span className="block truncate text-base font-bold text-slate-900">{child.name}</span>
                       <span className="block truncate text-xs font-medium text-slate-500">{child.className}</span>
                     </span>
-                    <span className="flex shrink-0 items-center gap-1 text-sm font-bold text-violet-700">
+                    <span className="flex shrink-0 items-center gap-1 text-sm font-bold text-indigo-600">
                       Results <ChevronRight className="h-4 w-4" aria-hidden="true" />
                     </span>
                   </button>
@@ -182,7 +182,7 @@ export function ParentDashboard({ navigate }: { navigate?: (path: string) => voi
               type="button"
               data-testid="home-view-results"
               onClick={() => openResultsFor(null)}
-              className="flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-violet-600 text-base font-bold text-white shadow-sm transition-colors hover:bg-violet-700"
+              className="flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-indigo-600 text-base font-bold text-white shadow-sm transition-colors hover:bg-indigo-700"
             >
               <GraduationCap className="h-5 w-5" aria-hidden="true" />
               View Results
@@ -198,7 +198,7 @@ export function ParentDashboard({ navigate }: { navigate?: (path: string) => voi
           <button
             type="button"
             onClick={() => navigate?.('/messages')}
-            className="text-sm font-bold text-violet-700 hover:text-violet-900"
+            className="text-sm font-bold text-indigo-600 hover:text-indigo-700"
           >
             See all
           </button>
@@ -226,14 +226,14 @@ export function ParentDashboard({ navigate }: { navigate?: (path: string) => voi
         type="button"
         data-testid="home-weekly-learning"
         onClick={() => navigate?.('/parent/weekly-learning')}
-        className="group flex min-h-11 w-full items-center justify-between gap-4 rounded-2xl bg-linear-to-r from-violet-600 to-indigo-700 p-5 text-left text-white shadow-sm transition-shadow hover:shadow-md"
+        className="group flex min-h-11 w-full items-center justify-between gap-4 rounded-2xl bg-indigo-600 p-5 text-left text-white shadow-sm transition-shadow hover:shadow-md"
       >
         <span className="min-w-0">
           <span className="flex items-center gap-2 text-lg font-bold">
             <BookOpen className="h-5 w-5 shrink-0" aria-hidden="true" />
             Today’s Learning
           </span>
-          <span className="mt-1 block text-sm leading-6 text-violet-100">See what your child is learning today.</span>
+          <span className="mt-1 block text-sm leading-6 text-white/80">See what your child is learning today.</span>
         </span>
         <ArrowRight className="h-5 w-5 shrink-0 transition-transform group-hover:translate-x-1" aria-hidden="true" />
       </button>

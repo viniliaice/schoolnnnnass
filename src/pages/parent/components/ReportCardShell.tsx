@@ -17,13 +17,13 @@ import { cn } from '../../../utils/cn';
 export type ReportTone = 'violet' | 'blue' | 'amber';
 
 const TONE_GRADIENTS: Record<ReportTone, string> = {
-  violet: 'from-violet-600 to-indigo-600',
+  violet: 'from-indigo-600 to-indigo-700',
   blue: 'from-blue-600 to-cyan-600',
   amber: 'from-amber-500 to-orange-600',
 };
 
 const TONE_NOTE: Record<ReportTone, string> = {
-  violet: 'bg-violet-50 border-violet-100 text-violet-800',
+  violet: 'bg-indigo-50 border-indigo-100 text-indigo-800',
   blue: 'bg-blue-50 border-blue-100 text-blue-800',
   amber: 'bg-amber-50 border-amber-100 text-amber-800',
 };

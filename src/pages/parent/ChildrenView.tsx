@@ -28,7 +28,7 @@ function ChildDetails({ childExams }: { childExams: Exam[] }) {
   return (
     <div className="border-t border-slate-100 px-4 py-4">
       <h3 className="mb-3 flex items-center gap-2 text-sm font-bold text-slate-800">
-        <BookOpen className="h-4 w-4 text-violet-500" aria-hidden="true" /> Subject performance
+        <BookOpen className="h-4 w-4 text-indigo-600" aria-hidden="true" /> Subject performance
       </h3>
       {subjects.length > 0 ? (
         <div className="space-y-3">
@@ -125,7 +125,7 @@ export function ChildrenView({ navigate }: { navigate?: (path: string) => void }
                 data-testid={`child-card-${child.id}`}
                 className={cn(
                   'overflow-hidden rounded-2xl border-2 bg-white transition-colors',
-                  isActive ? 'border-violet-400' : 'border-slate-200',
+                  isActive ? 'border-indigo-300' : 'border-slate-200',
                 )}
               >
                 {/* Card header — tapping selects this child for the whole app */}
@@ -137,7 +137,7 @@ export function ChildrenView({ navigate }: { navigate?: (path: string) => void }
                   <div
                     className={cn(
                       'flex h-14 w-14 shrink-0 items-center justify-center rounded-full text-lg font-bold',
-                      isActive ? 'bg-violet-600 text-white' : 'bg-violet-100 text-violet-700',
+                      isActive ? 'bg-indigo-600 text-white' : 'bg-indigo-50 text-indigo-600',
                     )}
                   >
                     {child.name.split(' ').map(n => n[0]).join('').substring(0, 2)}
@@ -146,11 +146,11 @@ export function ChildrenView({ navigate }: { navigate?: (path: string) => void }
                     <div className="flex items-center gap-2">
                       <h2 className="truncate text-lg font-bold text-slate-900">{child.name}</h2>
                       {isActive && (
-                        <CheckCircle2 className="h-5 w-5 shrink-0 text-violet-600" aria-label="Selected child" />
+                        <CheckCircle2 className="h-5 w-5 shrink-0 text-indigo-600" aria-label="Selected child" />
                       )}
                     </div>
                     <p className="mt-0.5 text-sm text-slate-500">
-                      <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-700">
+                      <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-600">
                         {child.className}
                       </span>
                     </p>
@@ -167,7 +167,7 @@ export function ChildrenView({ navigate }: { navigate?: (path: string) => void }
                     type="button"
                     data-testid={`child-view-results-${child.id}`}
                     onClick={() => viewResults(child)}
-                    className="flex min-h-[52px] items-center justify-center gap-2 bg-violet-600 text-sm font-bold text-white transition-colors hover:bg-violet-700"
+                    className="flex min-h-[52px] items-center justify-center gap-2 bg-indigo-600 text-sm font-bold text-white transition-colors hover:bg-indigo-700"
                   >
                     <BookOpen className="h-5 w-5" aria-hidden="true" />
                     View Results

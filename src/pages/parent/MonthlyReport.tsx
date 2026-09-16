@@ -80,7 +80,7 @@ export function MonthlyReportTab({ student, term }: { student: Student; term: Te
           id="parent-month-select"
           value={selectedMonth}
           onChange={e => setSelectedMonth(e.target.value)}
-          className="min-h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-base font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-violet-300"
+          className="min-h-12 w-full rounded-xl border border-slate-200 bg-white px-4 text-base font-semibold text-slate-800 outline-none focus:ring-2 focus:ring-indigo-300"
         >
           {MONTHS.map(m => (
             <option key={m} value={m}>
@@ -98,8 +98,8 @@ export function MonthlyReportTab({ student, term }: { student: Student; term: Te
                 className={cn(
                   'min-h-10 rounded-full px-4 text-sm font-semibold transition-colors',
                   selectedMonth === m
-                    ? 'bg-violet-600 text-white'
-                    : 'bg-violet-50 text-violet-700 hover:bg-violet-100',
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-indigo-50 text-indigo-600 hover:bg-indigo-100',
                 )}
               >
                 {m}

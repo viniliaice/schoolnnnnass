@@ -16,7 +16,7 @@ interface WeeklyLearningProps {
 
 const DAY_INDEX = new Map(DAYS_OF_WEEK.map((day, index) => [day, index]));
 const SUBJECT_ACCENTS = [
-  'border-l-violet-500', 'border-l-blue-500', 'border-l-emerald-500',
+  'border-l-indigo-500', 'border-l-blue-500', 'border-l-emerald-500',
   'border-l-amber-500', 'border-l-rose-500', 'border-l-cyan-500',
 ];
 
@@ -46,13 +46,13 @@ function LessonCard({ lesson }: { lesson: ParentWeeklyLesson }) {
     <article className={`overflow-hidden rounded-2xl border border-slate-200 border-l-4 bg-white shadow-sm ${SUBJECT_ACCENTS[hashSubject(lesson.subject)]}`}>
       <button
         type="button"
-        className="flex min-h-11 w-full items-start justify-between gap-3 p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500 focus-visible:ring-inset"
+        className="flex min-h-11 w-full items-start justify-between gap-3 p-4 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-inset"
         aria-expanded={expanded}
         aria-controls={panelId}
         onClick={() => setExpanded(value => !value)}
       >
         <span className="min-w-0 flex-1">
-          <span className="block text-sm font-bold text-violet-700">{lesson.subject}</span>
+          <span className="block text-sm font-bold text-indigo-600">{lesson.subject}</span>
           <span className="mt-1 block break-words text-base font-bold text-slate-900">{lesson.topic}</span>
           {lesson.whatWeAreLearning && (
             <span className="mt-1 line-clamp-2 block break-words text-sm leading-6 text-slate-600">
@@ -67,7 +67,7 @@ function LessonCard({ lesson }: { lesson: ParentWeeklyLesson }) {
           ) : (
             <span className="mt-3 block text-sm text-slate-500">Practice information not provided</span>
           )}
-          <span className="mt-3 block text-sm font-semibold text-violet-700">
+          <span className="mt-3 block text-sm font-semibold text-indigo-600">
             {expanded ? 'Hide lesson' : 'View lesson'}
           </span>
         </span>
@@ -87,7 +87,7 @@ function LessonCard({ lesson }: { lesson: ParentWeeklyLesson }) {
                 {lesson.resources.map((resource, index) => (
                   <li key={`${resource.label}-${resource.url}-${index}`} className="break-words">
                     {resource.url ? (
-                      <a className="font-semibold text-violet-700 underline decoration-violet-300 underline-offset-2" href={resource.url} target="_blank" rel="noreferrer">
+                      <a className="font-semibold text-indigo-600 underline decoration-indigo-300 underline-offset-2" href={resource.url} target="_blank" rel="noreferrer">
                         {resource.label || 'Open resource'}
                       </a>
                     ) : resource.label}
@@ -212,13 +212,13 @@ export function WeeklyLearning({ navigate }: WeeklyLearningProps) {
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 overflow-x-hidden">
-      <button type="button" onClick={() => navigate('/dashboard')} className="inline-flex min-h-11 items-center gap-2 rounded-xl px-2 text-sm font-semibold text-slate-600 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500">
+      <button type="button" onClick={() => navigate('/dashboard')} className="inline-flex min-h-11 items-center gap-2 rounded-xl px-2 text-sm font-semibold text-slate-600 hover:bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500">
         <ChevronLeft className="h-4 w-4" /> Dashboard
       </button>
 
       <header>
         <div className="flex items-center gap-3">
-          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-violet-100 text-violet-700"><BookOpen className="h-6 w-6" /></span>
+          <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-indigo-50 text-indigo-600"><BookOpen className="h-6 w-6" /></span>
           <div className="min-w-0">
             <h1 className="break-words text-2xl font-bold text-slate-900">Today’s Learning</h1>
             <p className="mt-1 text-sm font-medium text-slate-500">{new Date().toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' })}</p>
@@ -229,14 +229,14 @@ export function WeeklyLearning({ navigate }: WeeklyLearningProps) {
       {children.length > 1 && (
         <label className="block rounded-2xl border border-slate-200 bg-white p-4">
           <span className="mb-2 block text-sm font-bold text-slate-700">Select Child</span>
-          <select value={selectedStudentId} onChange={event => selectChild(event.target.value)} className="min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base font-semibold text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-200">
+          <select value={selectedStudentId} onChange={event => selectChild(event.target.value)} className="min-h-11 w-full rounded-xl border border-slate-300 bg-white px-3 text-base font-semibold text-slate-900 focus:border-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-200">
             {children.map(child => <option key={child.id} value={child.id}>{child.name} · {child.className}</option>)}
           </select>
         </label>
       )}
 
       {selectedChild && (
-        <div className="rounded-2xl border border-violet-100 bg-violet-50 p-4">
+        <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-4">
           <p className="break-words font-bold text-slate-900">{selectedChild.name}</p>
           <p className="mt-1 text-sm text-slate-600">Class: {effectiveClass}</p>
         </div>
@@ -258,8 +258,8 @@ export function WeeklyLearning({ navigate }: WeeklyLearningProps) {
       )}
 
       {!loadingSetup && !loadingLessons && !error && selectedChild && todayLessons.length === 0 && (
-        <div className="rounded-2xl border border-violet-100 bg-violet-50 p-6 text-center">
-          <BookOpen className="mx-auto h-8 w-8 text-violet-400" />
+        <div className="rounded-2xl border border-indigo-100 bg-indigo-50 p-6 text-center">
+          <BookOpen className="mx-auto h-8 w-8 text-indigo-400" />
           <p className="mt-3 font-semibold text-slate-700">Lesson information for today is not available yet.</p>
         </div>
       )}
@@ -274,7 +274,7 @@ export function WeeklyLearning({ navigate }: WeeklyLearningProps) {
             const dayLessons = lessonsByDay.get(day) || [];
             return (
               <section key={day} ref={isToday ? todayRef : undefined} className="scroll-mt-24" aria-labelledby={`day-${day}`}>
-                <div className={`mb-3 rounded-xl px-3 py-2 ${isToday ? 'bg-violet-600 text-white shadow-sm' : 'bg-slate-100 text-slate-700'}`}>
+                <div className={`mb-3 rounded-xl px-3 py-2 ${isToday ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 text-slate-700'}`}>
                   <h2 id={`day-${day}`} className="text-sm font-extrabold tracking-wide">
                     {isToday && <span className="mr-2 rounded-md bg-white/20 px-2 py-1">TODAY</span>}
                     {formatDayDate(dayDate)}

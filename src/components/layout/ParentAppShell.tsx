@@ -1,6 +1,6 @@
 // App shell for the PARENT role — adapted per device:
 //
-//   PHONE (<lg)                       DESKTOP (lg+)
+//   PHONE (<md)                       TABLET / DESKTOP (md+)
 //   ┌──────────────────────────┐      ┌────────┬───────────────────────────┐
 //   │ header: logo · school · 🌐 │      │ the    │ content + floating 🌐     │
 //   ├──────────────────────────┤      │ staff  │ (the previous desktop    │
@@ -9,9 +9,9 @@
 //   │ Home Children Results ✉ ⋯│      │ design)│                           │
 //   └──────────────────────────┘      └────────┴───────────────────────────┘
 //
-// Phones keep the simple bottom-navigation app; desktops get the exact
-// sidebar parents used before the redesign (its Monthly/Midterm/Final links
-// open the unified Exam Results tabs — the paths still work).
+// Phones keep the simple bottom-navigation app; tablets and desktops get the
+// exact sidebar parents used before the redesign (its Monthly/Midterm/Final
+// links open the unified Exam Results tabs — the paths still work).
 // The shell owns the current path (lightweight state-based navigation, see
 // DashboardLayout) and provides ParentContext — children + active child —
 // to everything it renders.
@@ -132,17 +132,17 @@ export function ParentAppShell({ children, initialPath = '/dashboard' }: ParentA
           containing block of the fixed bottom navigation below: the theme
           engine adds a backdrop-filter to `.bg-slate-50`, which would anchor
           the bar to this (page-height) div instead of the phone viewport. */}
-      <div className="app-shell min-h-screen min-h-dvh bg-slate-50 text-slate-900 lg:flex">
-        {/* DESKTOP (lg+): the previous staff sidebar, restored. Its mobile
+      <div className="app-shell min-h-screen min-h-dvh bg-slate-50 text-slate-900 md:flex">
+        {/* TABLET / DESKTOP (md+): the previous staff sidebar, restored. Its mobile
             toggle/overlay stays off — phones use the chrome below. Its
             Monthly/Midterm/Final links open the unified Exam Results tabs. */}
-        <div className="hidden lg:block">
-          <Sidebar currentPath={currentPath} onNavigate={navigate} mobileToggle={false} />
+        <div className="hidden md:block">
+          <Sidebar currentPath={currentPath} onNavigate={navigate} mobileToggle={false} breakpoint="md" />
         </div>
 
         <div className="min-w-0 flex-1 flex flex-col">
-          {/* PHONE (<lg): compact header — identity + language only */}
-          <header className="sticky top-0 z-40 bg-linear-to-r from-violet-700 via-violet-600 to-indigo-700 shadow-md lg:hidden">
+          {/* PHONE (<md): compact header — identity + language only */}
+          <header className="sticky top-0 z-40 bg-indigo-600 shadow-md md:hidden">
             <div className="mx-auto flex h-14 w-full max-w-2xl items-center gap-3 px-4">
               <img
                 src={logo}
@@ -151,7 +151,7 @@ export function ParentAppShell({ children, initialPath = '/dashboard' }: ParentA
               />
               <div className="min-w-0 flex-1">
                 <p className="truncate text-sm font-bold leading-tight text-white">MBK International School</p>
-                <p className="truncate text-[11px] leading-tight text-violet-200">
+                <p className="truncate text-[11px] leading-tight text-white/80">
                   {t('parent.hello', 'Hello')}, {firstName}
                 </p>
               </div>
@@ -167,28 +167,28 @@ export function ParentAppShell({ children, initialPath = '/dashboard' }: ParentA
             </div>
           </header>
 
-          {/* DESKTOP (lg+): the floating language switcher parents had before */}
-          <div className="hidden lg:block">
+          {/* TABLET / DESKTOP (md+): the floating language switcher parents had before */}
+          <div className="hidden md:block">
             <LanguageSwitcher />
           </div>
 
           {/* Page content — phone-first width; wider with room for the
-              floating language switcher on desktop */}
-          <main className="parent-main mx-auto w-full max-w-2xl flex-1 px-4 pt-5 lg:max-w-4xl lg:px-8 lg:pt-20" id="parent-main">
+              floating language switcher on tablet/desktop */}
+          <main className="parent-main mx-auto w-full max-w-2xl flex-1 px-4 pt-5 md:max-w-4xl md:px-8 md:pt-20" id="parent-main">
             {children(currentPath, navigate)}
           </main>
 
-          <footer className="hidden border-t border-slate-200 px-4 py-3 text-center lg:block">
+          <footer className="hidden border-t border-slate-200 px-4 py-3 text-center md:block">
             <p className="text-sm text-slate-400" style={{ fontFamily: "'Dancing Script', cursive", fontSize: '1rem' }}>
               {t('app.madeBy', 'Made by')} <span className="font-bold text-indigo-500">Eng. Akso</span>
             </p>
           </footer>
         </div>
 
-        {/* PHONE (<lg): fixed bottom navigation — the primary navigation */}
+        {/* PHONE (<md): fixed bottom navigation — the primary navigation */}
         <nav
           aria-label={t('parent.navigation', 'Parent navigation')}
-          className="parent-bottom-nav fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur lg:hidden"
+          className="parent-bottom-nav fixed inset-x-0 bottom-0 z-40 border-t border-slate-200 bg-white/95 backdrop-blur md:hidden"
         >
           <div className="mx-auto flex w-full max-w-2xl items-stretch">
             {PARENT_BOTTOM_NAV.map(item => {
@@ -202,14 +202,14 @@ export function ParentAppShell({ children, initialPath = '/dashboard' }: ParentA
                   onClick={() => navigate(item.path)}
                   className={cn(
                     'flex min-h-[60px] min-w-0 flex-1 flex-col items-center justify-center gap-0.5 py-2 transition-colors',
-                    active ? 'text-violet-700' : 'text-slate-500 hover:text-slate-700',
+                    active ? 'text-indigo-600' : 'text-slate-500 hover:text-slate-700',
                   )}
                 >
                   <item.icon className="h-6 w-6 shrink-0" aria-hidden="true" />
                   <span className="max-w-full truncate px-1 text-[11px] font-semibold leading-tight">
                     {t(item.labelKey, item.fallback)}
                   </span>
-                  {active && <span className="h-1 w-8 rounded-full bg-violet-600" aria-hidden="true" />}
+                  {active && <span className="h-1 w-8 rounded-full bg-indigo-600" aria-hidden="true" />}
                 </button>
               );
             })}

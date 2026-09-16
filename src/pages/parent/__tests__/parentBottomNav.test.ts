@@ -114,16 +114,16 @@ describe('mobile overflow guard', () => {
     expect(css).toMatch(/\.parent-main\s*\{[^}]*padding-bottom:\s*calc\([^;]*safe-area-inset-bottom[^;]*\);/s);
   });
 
-  it('is phone-first and restores the classic staff sidebar on desktop (lg+)', () => {
+  it('is phone-first and restores the classic staff sidebar on tablet/desktop (md+)', () => {
     const source = readFileSync(new URL('../../../components/layout/ParentAppShell.tsx', import.meta.url), 'utf8');
     // Bottom bar: phones only.
-    expect(source).toMatch(/fixed inset-x-0 bottom-0[^"]*lg:hidden/);
+    expect(source).toMatch(/fixed inset-x-0 bottom-0[^"]*md:hidden/);
     // Phone header: phones only.
-    expect(source).toMatch(/shadow-md lg:hidden/);
+    expect(source).toMatch(/shadow-md md:hidden/);
     // Desktop: the previous Sidebar is restored, without its own mobile toggle
     // (the parent shell supplies the phone chrome itself).
-    expect(source).toContain('<Sidebar currentPath={currentPath} onNavigate={navigate} mobileToggle={false} />');
-    expect(source).toContain('<div className="hidden lg:block">\n          <Sidebar');
+    expect(source).toContain('<Sidebar currentPath={currentPath} onNavigate={navigate} mobileToggle={false} breakpoint="md" />');
+    expect(source).toContain('<div className="hidden md:block">\n          <Sidebar');
     // Old header-pill experiment removed.
     expect(source).not.toContain('parent-nav-lg-');
   });
