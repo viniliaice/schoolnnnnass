@@ -1,6 +1,11 @@
 export function normalizeSomaliPhoneToWa(phone: string): string {
-  const digits = phone.replace(/[^\d]/g, '');
+  let digits = (phone || '').replace(/[^\d]/g, '');
   if (!digits) return '';
+  if (digits.startsWith('00252')) {
+    digits = digits.slice(2);
+  } else if (digits.startsWith('00')) {
+    digits = digits.slice(2);
+  }
   if (digits.startsWith('252')) return digits;
   if (digits.startsWith('0')) return `252${digits.slice(1)}`;
   // Already local without 0, e.g. 634... -> add 252
@@ -64,15 +69,71 @@ export function buildReportWhatsAppMessage(params: {
   );
 }
 
+export function buildParentCredentialWhatsAppMessage(parentEmail: string): string {
+  const email = (parentEmail || '').trim();
+  return `Walidka sharafta leh, app cusub oo walidka ka arki karo ardadu website-ka waa: https://schoolnnnnass.vercel.app waxaad ku gasho username: ${email} iyo password: ${email}.`;
+}
+
 export function buildParentCredentialWhatsAppLink(params: {
   phone: string;
   email: string;
-  password: string;
-}) {
+  password?: string;
+}): string {
+  const email = (params.email || '').trim();
+  if (!email || email === 'undefined' || email === 'null') {
+    throw new Error('Parent email not found');
+  }
   const phone = normalizeSomaliPhoneToWa(params.phone);
-  const message =
-    'Walidka sharafta leh websitekan kala xariir darajadu ardada schoolka ku dhigto, website url https://schoolnnnnass.vercel.app/ \n' +
-    `Email: ${params.email}\n` +
-    `Password: ${params.password}`;
+  if (!phone) {
+    throw new Error('Parent phone not found');
+  }
+  const message = buildParentCredentialWhatsAppMessage(email);
   return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`;
+}
+
+export interface SendParentWhatsAppOptions {
+  parent?: {
+    email?: string | null;
+    phone1?: string | null;
+    phone2?: string | null;
+  } | null;
+  student?: {
+    parentPhone?: string | null;
+  } | null;
+  onToast: (toast: { type: 'error' | 'success' | 'warning' | 'info'; title: string; description?: string }) => void;
+}
+
+export function sendParentCredentialWhatsApp({
+  parent,
+  student,
+  onToast,
+}: SendParentWhatsAppOptions): boolean {
+  const email = (parent?.email || '').trim();
+  if (!email || email === 'undefined' || email === 'null') {
+    onToast({ type: 'error', title: 'Parent email not found' });
+    return false;
+  }
+
+  const rawPhone = (parent?.phone1 || parent?.phone2 || student?.parentPhone || '').trim();
+  if (!rawPhone) {
+    onToast({ type: 'error', title: 'Parent phone not found' });
+    return false;
+  }
+
+  const phone = normalizeSomaliPhoneToWa(rawPhone);
+  if (!phone) {
+    onToast({ type: 'error', title: 'Parent phone not found' });
+    return false;
+  }
+
+  try {
+    const url = buildParentCredentialWhatsAppLink({ phone, email });
+    if (typeof window !== 'undefined' && window.open) {
+      window.open(url, '_blank', 'noopener,noreferrer');
+    }
+    return true;
+  } catch (err: any) {
+    onToast({ type: 'error', title: err?.message || 'Failed to open WhatsApp' });
+    return false;
+  }
 }

@@ -13,7 +13,7 @@ import { DataTable } from '../../components/ui/DataTable';
 import { Plus, Trash2, Edit, GraduationCap, Search, MessageCircle, Loader2, UserCheck } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ColumnDef } from '@tanstack/react-table';
-import { buildParentCredentialWhatsAppLink } from '../../lib/whatsapp';
+import { buildParentCredentialWhatsAppLink, sendParentCredentialWhatsApp } from '../../lib/whatsapp';
 
 export function ManageStudents() {
   const { addToast } = useToast();
@@ -184,14 +184,8 @@ export function ManageStudents() {
 
   const filtered = students.filter(s => classFilter.length === 0 || classFilter.includes(s.className));
 
-  function handleSendWhatsApp(parent: User) {
-    const phone = parent.phone1 || parent.phone2;
-    if (!phone || !parent.email || !parent.password) {
-      addToast({ type: 'error', title: 'Parent must have phone, email and password' });
-      return;
-    }
-    const url = buildParentCredentialWhatsAppLink({ phone, email: parent.email, password: parent.password });
-    window.open(url, '_blank', 'noopener,noreferrer');
+  function handleSendWhatsApp(parent?: User | null, student?: Student | null) {
+    sendParentCredentialWhatsApp({ parent, student, onToast: addToast });
   }
 
   const columns: ColumnDef<Student>[] = [
@@ -234,11 +228,11 @@ export function ManageStudents() {
         if (parent) {
           return (
             <div className="space-y-1">
-              <span className="text-sm text-gray-900 font-medium">{parent.name} — {parent.phone1 || parent.phone2 || 'No phone'}</span>
+              <span className="text-sm text-gray-900 font-medium">{parent.name} — {parent.phone1 || parent.phone2 || student.parentPhone || 'No phone'}</span>
               <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={() => handleSendWhatsApp(parent)}
+                  onClick={() => handleSendWhatsApp(parent, student)}
                   className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-lg bg-emerald-50 text-emerald-700 hover:bg-emerald-100"
                 >
                   <MessageCircle className="w-3.5 h-3.5" />
