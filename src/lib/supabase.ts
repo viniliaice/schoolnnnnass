@@ -54,6 +54,7 @@ const demoStudents = [
   { id: 'stu-aisha', name: 'Aisha Hassan', className: 'Grade 2-C', parentId: null, createdAt: '2026-06-01', govId: 'MBK-2C-003', transport: 'CAR', parentPhone: null, familyId: null },
   { id: 'stu-mohamed', name: 'Mohamed Farah', className: 'Grade 2-C', parentId: 'parent-3', createdAt: '2026-06-01', govId: 'MBK-2C-004', transport: 'Bus 1', parentPhone: '252634500000', familyId: '0003' },
   { id: 'stu-sara', name: 'Sara Abdullahi', className: 'Grade 1-A', parentId: 'parent-1', createdAt: '2026-06-01', govId: 'MBK-1A-001', transport: 'Bus 2', parentPhone: '252634506719', familyId: '0004' },
+  { id: 'stu-hassan', name: 'Hassan Jaamac', className: 'Grade 2-C', parentId: 'parent-no-email', createdAt: '2026-06-01', govId: 'MBK-2C-005', transport: 'Bus 2', parentPhone: '252634599999', familyId: '0005' },
 ];
 
 const demoProfiles: any[] = [
@@ -61,6 +62,7 @@ const demoProfiles: any[] = [
   { id: 'parent-1', name: 'Maxamed Heeban', email: 'parent1@example.com', role: 'parent', phone1: '252634506719', phone2: '252634506720', xafada: 'Jigjiga Yar', createdAt: '2026-06-01', auth_id: 'auth-parent-1' },
   { id: 'parent-2', name: 'Ali Yusuf', email: 'parent2@example.com', role: 'parent', phone1: '252634511111', phone2: null, createdAt: '2026-06-01', auth_id: 'auth-parent-2' },
   { id: 'parent-3', name: 'Farah Mohamed', email: 'parent3@example.com', role: 'parent', phone1: '252634500000', phone2: null, createdAt: '2026-06-01', auth_id: 'auth-parent-3' },
+  { id: 'parent-no-email', name: 'Sahra Jaamac', email: '', role: 'parent', phone1: '252634599999', phone2: null, createdAt: '2026-06-01', auth_id: 'auth-parent-no-email' },
   { id: 'teacher-1', name: 'Ms. Fatima', email: 'fatima@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 2-C'], assignedSubjects: ['English','Mathematics'], createdAt: '2026-06-01', auth_id: 'auth-teacher-1' },
   { id: 'teacher-2', name: 'Mr. Omar', email: 'omar@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 1-A'], assignedSubjects: ['Mathematics'], createdAt: '2026-06-01', auth_id: 'auth-teacher-2' },
   { id: 'teacher-3', name: 'Ms. Hodan', email: 'hodan@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 3-B'], assignedSubjects: ['Science'], createdAt: '2026-06-01', auth_id: 'auth-teacher-3' },
