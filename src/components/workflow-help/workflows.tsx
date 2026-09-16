@@ -148,7 +148,7 @@ export const bulkGradeUploadHelp: WorkflowHelpConfig = {
               <MockCheck>Social Studies</MockCheck>
             </div>
             <Mark n={3}>
-              <p className="mt-2 text-xs text-slate-500">27 students currently in Grade 5-A.</p>
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">27 students currently in Grade 5-A.</p>
             </Mark>
           </div>
         </div>
@@ -173,7 +173,7 @@ export const bulkGradeUploadHelp: WorkflowHelpConfig = {
       visual: (
         <div className="space-y-3">
           <div className="flex items-center justify-between gap-2">
-            <p className="text-[11px] font-semibold text-slate-500">Assessment blocks</p>
+            <p className="text-[11px] font-semibold text-slate-500 dark:text-slate-400">Assessment blocks</p>
             <MockButton tone="outline" className="px-2.5 py-1 text-xs">
               Select all
             </MockButton>
@@ -186,8 +186,8 @@ export const bulkGradeUploadHelp: WorkflowHelpConfig = {
             <MockSelect label="Assessment date" value="2026-09-14" />
           </div>
           <div className="grid gap-2 sm:grid-cols-2">
-            <div className="rounded-xl border border-slate-200 p-2.5">
-              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">Homework</p>
+            <div className="rounded-xl border border-slate-200 p-2.5 dark:border-slate-700">
+              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Homework</p>
               <div className="grid grid-cols-2 gap-1">
                 {['HW1 / 5', 'HW2 / 5', 'HW3 / 5', 'HW4 / 5'].map(label => (
                   <MockCheck key={label} checked>
@@ -197,8 +197,8 @@ export const bulkGradeUploadHelp: WorkflowHelpConfig = {
               </div>
             </div>
             <Mark n={2} block>
-              <div className="rounded-xl border border-slate-200 p-2.5">
-                <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">CPW</p>
+              <div className="rounded-xl border border-slate-200 p-2.5 dark:border-slate-700">
+                <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">CPW</p>
                 <div className="grid grid-cols-2 gap-1">
                   {['CPW1 / 15', 'CPW2 / 15', 'CPW3 / 15', 'CPW4 / 15'].map(label => (
                     <MockCheck key={label} checked>
@@ -208,12 +208,12 @@ export const bulkGradeUploadHelp: WorkflowHelpConfig = {
                 </div>
               </div>
             </Mark>
-            <div className="rounded-xl border border-slate-200 p-2.5">
-              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">Attendance</p>
+            <div className="rounded-xl border border-slate-200 p-2.5 dark:border-slate-700">
+              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Attendance</p>
               <MockCheck checked>Attendance / 20</MockCheck>
             </div>
-            <div className="rounded-xl border border-slate-200 p-2.5">
-              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">Midterm · Akhlaaq</p>
+            <div className="rounded-xl border border-slate-200 p-2.5 dark:border-slate-700">
+              <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500 dark:text-slate-400">Midterm · Akhlaaq</p>
               <div className="space-y-1">
                 <MockCheck checked>MT / 20</MockCheck>
                 <MockCheck checked>Akhlaaq / 10</MockCheck>
@@ -241,7 +241,7 @@ export const bulkGradeUploadHelp: WorkflowHelpConfig = {
       visual: (
         <div className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-sm font-semibold text-slate-800">Upload the completed workbook</p>
+            <p className="text-sm font-semibold text-slate-800 dark:text-slate-200">Upload the completed workbook</p>
             <Mark n={2}>
               <MockButton tone="outline" className="border-teal-200 bg-teal-50 text-teal-700">
                 <Download className="h-4 w-4" /> Download example
@@ -250,10 +250,10 @@ export const bulkGradeUploadHelp: WorkflowHelpConfig = {
           </div>
           {bulkGradeSpreadsheet}
           <Mark n={5} block className="mt-3">
-            <div className="flex flex-col items-center rounded-2xl border-2 border-dashed border-slate-200 p-4 text-center">
+            <div className="flex flex-col items-center rounded-2xl border-2 border-dashed border-slate-200 p-4 text-center dark:border-slate-700">
               <FileSpreadsheet className="mb-1.5 h-7 w-7 text-teal-600" />
-              <p className="text-xs font-semibold text-slate-800">Select or drop the grade workbook</p>
-              <p className="text-[11px] text-slate-500">Excel only, maximum 5 MB.</p>
+              <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">Select or drop the grade workbook</p>
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">Excel only, maximum 5 MB.</p>
             </div>
           </Mark>
         </div>
@@ -339,9 +339,9 @@ export const bulkGradeUploadHelp: WorkflowHelpConfig = {
             <MockCountCard label="Grades changing" count={4} tone="amber" />
             <MockCountCard label="Records in upload" count={24} tone="slate" />
           </div>
-          <div className="overflow-hidden rounded-xl border border-slate-200">
+          <div className="overflow-hidden rounded-xl border border-slate-200 dark:border-slate-700">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                 <tr>
                   <th className="px-2 py-1.5">Student</th>
                   <th className="px-2 py-1.5">Subject</th>
@@ -352,10 +352,10 @@ export const bulkGradeUploadHelp: WorkflowHelpConfig = {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 <tr>
-                  <td className="px-2 py-1.5 font-semibold text-slate-800">Axmed Cabdale</td>
-                  <td className="px-2 py-1.5 text-slate-600">Mathematics</td>
-                  <td className="px-2 py-1.5 text-slate-600">HW1</td>
-                  <td className="px-2 py-1.5 text-slate-400">
+                  <td className="px-2 py-1.5 font-semibold text-slate-800 dark:text-slate-200">Axmed Cabdale</td>
+                  <td className="px-2 py-1.5 text-slate-600 dark:text-slate-300">Mathematics</td>
+                  <td className="px-2 py-1.5 text-slate-600 dark:text-slate-300">HW1</td>
+                  <td className="px-2 py-1.5 text-slate-400 dark:text-slate-500">
                     <Mark n={1}>—</Mark>
                   </td>
                   <td className="px-2 py-1.5">
@@ -363,10 +363,10 @@ export const bulkGradeUploadHelp: WorkflowHelpConfig = {
                   </td>
                 </tr>
                 <tr>
-                  <td className="px-2 py-1.5 font-semibold text-slate-800">Fartun Axmed</td>
-                  <td className="px-2 py-1.5 text-slate-600">Science</td>
-                  <td className="px-2 py-1.5 text-slate-600">CPW2</td>
-                  <td className="px-2 py-1.5 text-slate-500">12</td>
+                  <td className="px-2 py-1.5 font-semibold text-slate-800 dark:text-slate-200">Fartun Axmed</td>
+                  <td className="px-2 py-1.5 text-slate-600 dark:text-slate-300">Science</td>
+                  <td className="px-2 py-1.5 text-slate-600 dark:text-slate-300">CPW2</td>
+                  <td className="px-2 py-1.5 text-slate-500 dark:text-slate-400">12</td>
                   <td className="px-2 py-1.5">
                     <Mark n={2}>
                       <ScoreCell tone="note">→ 14</ScoreCell>
@@ -415,15 +415,15 @@ export const bulkGradeUploadHelp: WorkflowHelpConfig = {
               ['Errors', '0'],
               ['Assessment blocks', 'HW1–HW4, CPW1, MT'],
             ].map(([label, value]) => (
-              <div key={label} className="rounded-xl bg-slate-50 p-2">
-                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400">{label}</p>
-                <p className="mt-0.5 text-xs font-semibold text-slate-800">{value}</p>
+              <div key={label} className="rounded-xl bg-slate-50 p-2 dark:bg-slate-800">
+                <p className="text-[9px] font-bold uppercase tracking-wide text-slate-400 dark:text-slate-500">{label}</p>
+                <p className="mt-0.5 text-xs font-semibold text-slate-800 dark:text-slate-200">{value}</p>
               </div>
             ))}
           </div>
           <Mark n={2} tone="red" block>
             <div className="flex items-start gap-2 rounded-xl border border-red-200 bg-red-50 p-3 text-left text-xs text-red-900">
-              <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-red-300 bg-white text-[10px] font-bold text-red-600">
+              <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border border-red-300 bg-white text-[10px] font-bold text-red-600 dark:bg-slate-800">
                 ✓
               </span>
               I understand that the 1 approved grade shown in the review will be replaced and returned to Pending review.
@@ -506,10 +506,10 @@ export const lessonPlanHelp: WorkflowHelpConfig = {
             </Mark>
           </div>
           <Mark n={3} block>
-            <div className="flex items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white py-2">
-              <span className="text-slate-400">‹</span>
-              <span className="text-sm font-semibold text-slate-700">7 Sep – 11 Sep 2026</span>
-              <span className="text-slate-400">›</span>
+            <div className="flex items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white py-2 dark:border-slate-700 dark:bg-slate-800">
+              <span className="text-slate-400 dark:text-slate-500">‹</span>
+              <span className="text-sm font-semibold text-slate-700 dark:text-slate-300">7 Sep – 11 Sep 2026</span>
+              <span className="text-slate-400 dark:text-slate-500">›</span>
             </div>
           </Mark>
           <MockInput label="Title" value="Week 31 – Fractions" optional />
@@ -540,17 +540,17 @@ export const lessonPlanHelp: WorkflowHelpConfig = {
         'Each cell is one period of one day: choose a subject (or Free Period) and add the topic, objective, slide number and activities. The app autosaves — the “All changes saved” pill appears after a few seconds.',
       visual: (
         <div className="space-y-3">
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
-            <div className="grid grid-cols-5 border-b border-slate-200 bg-slate-50 text-center text-[10px] font-semibold text-slate-600">
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
+            <div className="grid grid-cols-5 border-b border-slate-200 bg-slate-50 text-center text-[10px] font-semibold text-slate-600 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
               <div className="py-1.5">Sat 5/9</div>
-              <div className="border-l border-slate-200 py-1.5">Sun 6/9</div>
-              <div className="border-l border-slate-200 py-1.5">Mon 7/9</div>
-              <div className="border-l border-slate-200 py-1.5">Tue 8/9</div>
-              <div className="border-l border-slate-200 py-1.5">Wed 9/9</div>
+              <div className="border-l border-slate-200 py-1.5 dark:border-slate-700">Sun 6/9</div>
+              <div className="border-l border-slate-200 py-1.5 dark:border-slate-700">Mon 7/9</div>
+              <div className="border-l border-slate-200 py-1.5 dark:border-slate-700">Tue 8/9</div>
+              <div className="border-l border-slate-200 py-1.5 dark:border-slate-700">Wed 9/9</div>
             </div>
             <div className="grid grid-cols-5">
-              <div className="p-2 text-[10px] text-slate-400">P1</div>
-              <div className="col-span-2 border-l border-slate-100 p-2 text-left">
+              <div className="p-2 text-[10px] text-slate-400 dark:text-slate-500">P1</div>
+              <div className="col-span-2 border-l border-slate-100 p-2 text-left dark:border-slate-700">
                 <div className="space-y-1">
                   <Mark n={1} block>
                     <MockSelect label="Subj:" value="Mathematics" />
@@ -562,16 +562,16 @@ export const lessonPlanHelp: WorkflowHelpConfig = {
                     <MockInput label="Objective" value="Add halves to make a whole" />
                   </Mark>
                   <Mark n={4} block>
-                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-700">
+                    <div className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1.5 text-xs text-slate-700 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
                       <span className="font-semibold">Activities</span>
                       <p className="mt-0.5">1. Warm-up quiz (10 min)</p>
                     </div>
                   </Mark>
                 </div>
               </div>
-              <div className="col-span-2 border-l border-slate-100 p-2">
+              <div className="col-span-2 border-l border-slate-100 p-2 dark:border-slate-700">
                 <div className="flex h-full items-center justify-center">
-                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-medium text-slate-600">
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[10px] font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">
                     Free Period
                   </span>
                 </div>
@@ -579,11 +579,11 @@ export const lessonPlanHelp: WorkflowHelpConfig = {
             </div>
           </div>
           <Mark n={5} block>
-            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2">
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-800">
               <MockButton tone="outline" className="px-3 py-1.5 text-xs">
                 <Upload className="h-3.5 w-3.5" /> Upload from Excel
               </MockButton>
-              <span className="text-[10px] text-slate-400">Supports .xlsx, .xls, .csv</span>
+              <span className="text-[10px] text-slate-400 dark:text-slate-500">Supports .xlsx, .xls, .csv</span>
               <span className="rounded-lg border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-medium text-emerald-700">
                 week31.xlsx
               </span>
@@ -647,7 +647,7 @@ export const lessonPlanHelp: WorkflowHelpConfig = {
               [
                 <ScoreCell key="c" tone="note">8/9/2026</ScoreCell>,
                 '1',
-                <span key="s" className="font-semibold text-slate-500">Free</span>,
+                <span key="s" className="font-semibold text-slate-500 dark:text-slate-400">Free</span>,
                 '',
                 '',
                 '',
@@ -712,10 +712,10 @@ export const lessonPlanHelp: WorkflowHelpConfig = {
                 <p className="text-[11px] text-emerald-700">
                   Once submitted, the plan goes to your supervisor and an AI review is generated automatically.
                 </p>
-                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/70">
+                <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-white/70 dark:bg-slate-800/70">
                   <div className="h-full w-full rounded-full bg-emerald-500" />
                 </div>
-                <p className="mt-1 text-[10px] text-slate-500">100% complete</p>
+                <p className="mt-1 text-[10px] text-slate-500 dark:text-slate-400">100% complete</p>
               </div>
             </div>
           </Mark>
@@ -764,17 +764,17 @@ export const lessonPlanHelp: WorkflowHelpConfig = {
         'All your plans live here. Open a draft to keep editing; submitted plans show their status and stay read-only until your supervisor requests revisions.',
       visual: (
         <div className="space-y-2">
-          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2">
+          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-800">
             <div>
-              <p className="text-xs font-semibold text-slate-800">Week 30 – Grade 5-A</p>
-              <p className="text-[10px] text-slate-500">7 Sep – 11 Sep 2026</p>
+              <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">Week 30 – Grade 5-A</p>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400">7 Sep – 11 Sep 2026</p>
             </div>
             <span className="rounded-full bg-indigo-50 px-2 py-0.5 text-[10px] font-bold text-indigo-700">draft</span>
           </div>
-          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2">
+          <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-800">
             <div>
-              <p className="text-xs font-semibold text-slate-800">Week 29 – Grade 5-A</p>
-              <p className="text-[10px] text-slate-500">31 Aug – 4 Sep 2026</p>
+              <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">Week 29 – Grade 5-A</p>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400">31 Aug – 4 Sep 2026</p>
             </div>
             <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-bold text-emerald-700">
               submitted · read-only
@@ -841,10 +841,10 @@ export const unitPlanHelp: WorkflowHelpConfig = {
         'Unit plans group your lesson plans into curriculum units. Press New Unit Plan in the top-right corner to open the form. There is no spreadsheet to upload — the unit is created directly in the app.',
       visual: (
         <div className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-800">
             <div>
               <p className="text-sm font-bold text-slate-900">Unit Plans</p>
-              <p className="text-xs text-slate-500">Group your lesson plans into curriculum units</p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">Group your lesson plans into curriculum units</p>
             </div>
             <Mark n={1}>
               <MockButton tone="indigo">
@@ -852,10 +852,10 @@ export const unitPlanHelp: WorkflowHelpConfig = {
               </MockButton>
             </Mark>
           </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-center">
-            <Layers className="mx-auto mb-1.5 h-6 w-6 text-slate-400" />
-            <p className="text-xs font-semibold text-slate-800">No unit plans yet</p>
-            <p className="text-[11px] text-slate-500">Create your first unit to start grouping your lesson plans.</p>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-5 text-center dark:border-slate-700 dark:bg-slate-800">
+            <Layers className="mx-auto mb-1.5 h-6 w-6 text-slate-400 dark:text-slate-500" />
+            <p className="text-xs font-semibold text-slate-800 dark:text-slate-200">No unit plans yet</p>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">Create your first unit to start grouping your lesson plans.</p>
             <Mark n={2} className="mt-2">
               <MockButton tone="indigo" className="px-3 py-1.5 text-xs">
                 Create Unit Plan
@@ -906,16 +906,16 @@ export const unitPlanHelp: WorkflowHelpConfig = {
             </div>
             <div className="sm:col-span-2">
               <Mark n={6} block>
-                <label className="block text-xs font-medium text-slate-600">
+                <label className="block text-xs font-medium text-slate-600 dark:text-slate-300">
                   Learning Objectives *
-                  <span className="mt-1 block rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 leading-relaxed text-slate-700">
+                  <span className="mt-1 block rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 leading-relaxed text-slate-700 dark:bg-slate-800 dark:text-slate-300">
                     Add and subtract fractions with like denominators; compare decimal numbers…
                   </span>
                 </label>
               </Mark>
             </div>
           </div>
-          <p className="text-[11px] text-slate-500">Term: 30 Aug 2026 – 31 Dec 2026</p>
+          <p className="text-[11px] text-slate-500 dark:text-slate-400">Term: 30 Aug 2026 – 31 Dec 2026</p>
         </div>
       ),
       legend: (
@@ -977,9 +977,9 @@ export const unitPlanHelp: WorkflowHelpConfig = {
         'Your units are listed with class, subject and weeks. Use the eye icon to view the full unit, the pencil to edit it, and the bin to delete it.',
       visual: (
         <div className="space-y-3">
-          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white">
+          <div className="overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-800">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500">
+              <thead className="bg-slate-50 text-[10px] uppercase text-slate-500 dark:bg-slate-800 dark:text-slate-400">
                 <tr>
                   <th className="px-2 py-1.5">Name</th>
                   <th className="px-2 py-1.5">Class</th>
@@ -990,10 +990,10 @@ export const unitPlanHelp: WorkflowHelpConfig = {
               </thead>
               <tbody className="divide-y divide-slate-100">
                 <tr>
-                  <td className="px-2 py-1.5 font-semibold text-slate-800">Fractions &amp; Decimals</td>
-                  <td className="px-2 py-1.5 text-slate-600">Grade 5-A</td>
-                  <td className="px-2 py-1.5 text-slate-600">Mathematics</td>
-                  <td className="px-2 py-1.5 text-slate-600">Week 5 - Week 8</td>
+                  <td className="px-2 py-1.5 font-semibold text-slate-800 dark:text-slate-200">Fractions &amp; Decimals</td>
+                  <td className="px-2 py-1.5 text-slate-600 dark:text-slate-300">Grade 5-A</td>
+                  <td className="px-2 py-1.5 text-slate-600 dark:text-slate-300">Mathematics</td>
+                  <td className="px-2 py-1.5 text-slate-600 dark:text-slate-300">Week 5 - Week 8</td>
                   <td className="px-2 py-1.5 text-right">
                     <span className="inline-flex gap-1">
                       <Mark n={1}>
@@ -1020,8 +1020,8 @@ export const unitPlanHelp: WorkflowHelpConfig = {
           <Mark n={4} block>
             <div className="rounded-xl border border-indigo-100 bg-indigo-50/60 p-3 text-left">
               <p className="text-xs font-bold text-indigo-900">Fractions &amp; Decimals</p>
-              <p className="text-[11px] text-slate-500">Grade 5-A · Mathematics · Term 1</p>
-              <div className="mt-2 rounded-lg bg-white p-2 text-[11px] leading-relaxed text-slate-700">
+              <p className="text-[11px] text-slate-500 dark:text-slate-400">Grade 5-A · Mathematics · Term 1</p>
+              <div className="mt-2 rounded-lg bg-white p-2 text-[11px] leading-relaxed text-slate-700 dark:bg-slate-800 dark:text-slate-300">
                 <span className="font-bold">Learning objectives:</span> Add and subtract fractions with like
                 denominators; compare decimal numbers…
               </div>
