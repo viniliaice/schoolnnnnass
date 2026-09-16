@@ -72,6 +72,39 @@ describe('mobile overflow guard', () => {
     expect(html).toContain('viewport-fit=cover');
   });
 
+  it('keeps the shell root from becoming the containing block of the fixed bar', () => {
+    // `position: fixed; bottom: 0` only lands on the phone viewport if NO
+    // ancestor creates a containing block. `backdrop-filter`, `filter`,
+    // `transform`, `perspective` and `contain: paint|layout` all do — and the
+    // theme engine adds `backdrop-filter` to `.bg-slate-50`, which is the
+    // shell root's background. When that happened the bar was laid out at the
+    // bottom of the page-height shell instead of the viewport, i.e. phones had
+    // to scroll to the end of the page to see it. The `.app-shell` reset is
+    // what keeps the fixed chrome actually fixed.
+    const source = readFileSync(new URL('../../../components/layout/ParentAppShell.tsx', import.meta.url), 'utf8');
+    const css = readFileSync(new URL('../../../index.css', import.meta.url), 'utf8');
+
+    // Shell root is marked, on the same element that carries `bg-slate-50`.
+    expect(source).toMatch(/className="app-shell [^"]*bg-slate-50/);
+    // …and the reset neutralises every property that could re-anchor it.
+    expect(css).toMatch(/\.app-shell\s*\{[^}]*backdrop-filter:\s*none\s*!important;/s);
+    expect(css).toMatch(/\.app-shell\s*\{[^}]*filter:\s*none\s*!important;/s);
+    expect(css).toMatch(/\.app-shell\s*\{[^}]*transform:\s*none\s*!important;/s);
+    expect(css).toMatch(/\.app-shell\s*\{[^}]*contain:\s*none\s*!important;/s);
+    // The reset must stay `!important`: the theme rule it overrides is an
+    // un-layered `.bg-slate-50 { … }` block declared later in the same file.
+    expect(css).toMatch(/\.bg-slate-50[^{]*\{[^}]*backdrop-filter:/s);
+  });
+
+  it('does not leave the entrance animation filling forever (it would re-anchor fixed chrome)', () => {
+    // A filled animation (`both`/`forwards`) keeps the keyframe `transform` on
+    // cards and content wrappers permanently, which makes them containing
+    // blocks for the `fixed` dialogs / prompts they render.
+    const css = readFileSync(new URL('../../../index.css', import.meta.url), 'utf8');
+    expect(css).toMatch(/animation:\s*themeFade\s+420ms\s+ease;/);
+    expect(css).not.toMatch(/animation:\s*themeFade\s+420ms\s+ease\s+(both|forwards)/);
+  });
+
   it('reserves the bar height and safe area below mobile dashboard content', () => {
     const source = readFileSync(new URL('../../../components/layout/ParentAppShell.tsx', import.meta.url), 'utf8');
     const css = readFileSync(new URL('../../../index.css', import.meta.url), 'utf8');

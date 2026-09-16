@@ -57,11 +57,11 @@ export function DashboardLayout({ children, initialPath = '/dashboard', fullscre
 
   // Mobile-first full-screen routes (no sidebar, no footer, edge-to-edge).
   if (fullscreenPaths.includes(currentPath)) {
-    return <main className="min-h-screen bg-slate-100">{children(currentPath, navigate)}</main>;
+    return <main className="app-shell min-h-screen bg-slate-100">{children(currentPath, navigate)}</main>;
   }
 
   return (
-    <div className="flex min-h-screen bg-slate-50">
+    <div className="app-shell flex min-h-screen bg-slate-50">
       <Sidebar currentPath={currentPath} onNavigate={navigate} />
       <main className="relative flex-1 min-w-0 flex flex-col">
         <LanguageSwitcher />

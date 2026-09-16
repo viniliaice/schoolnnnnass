@@ -319,6 +319,32 @@ html, body, #root { min-height: 100%; background: var(--bg); }
    area (exam tables on md+) scrolls inside its own overflow-x-auto box. */
 html, body { overflow-x: clip; }
 
+/* App shell roots ----------------------------------------------------------
+   A shell root must NEVER become the containing block of the `position:
+   fixed` chrome it renders, otherwise `bottom: 0` / `inset-0` resolve against
+   the shell (which is `min-h-screen` and grows with the page) instead of the
+   viewport — and the "fixed" element ends up at the end of the document, so
+   phones have to scroll to reach it.
+
+   `backdrop-filter`, `filter`, `transform`, `perspective` and `contain:
+   paint|layout` all create that containing block. The theme engine below adds
+   `backdrop-filter` to `.bg-slate-50` / `.bg-gray-100`, and both shells use
+   `bg-slate-50` as their page background, so without this reset the parent
+   bottom navigation scrolls with the page (the reported mobile bug), and the
+   floating language switcher + mobile sidebar drawer do the same.
+
+   The reset is intentionally load-bearing for every shell: keep `.app-shell`
+   on the ParentAppShell and DashboardLayout roots. */
+.app-shell {
+  -webkit-backdrop-filter: none !important;
+  backdrop-filter: none !important;
+  filter: none !important;
+  transform: none !important;
+  perspective: none !important;
+  contain: none !important;
+  will-change: auto !important;
+}
+
 /* Parent phone shell -------------------------------------------------------
    Keep this in plain CSS rather than relying only on generated utility
    classes. Mobile Safari and Android WebView must anchor the one navigation
@@ -389,7 +415,12 @@ body::after {
   animation: var(--motion-glow);
 }
 
-#root > * { position: relative; z-index: 1; }
+/* Raise app content above the ambient background layers — but never touch
+   elements that ask for `position: fixed` themselves (the toast container is
+   a direct child of #root): this id-level rule would otherwise out-specify
+   their `fixed` utility and leave toasts in normal flow at the top of the
+   document, where phones have to scroll to see them. */
+#root > *:not(.fixed) { position: relative; z-index: 1; }
 
 #root::before {
   content: var(--ornament);
@@ -673,7 +704,14 @@ html[data-mode="light"] .theme-button-primary { color: #fff !important; }
 .theme-segmented { background: color-mix(in srgb, var(--bg) 70%, transparent); border: 1px solid var(--border); }
 .theme-option-active { color: var(--text); background: var(--button-gradient); box-shadow: 0 8px 22px color-mix(in srgb, var(--primary) 26%, transparent); }
 
-main > div, .max-w-5xl, .rounded-2xl, .rounded-3xl, article { animation: themeFade 420ms ease both; }
+/* Entrance fade. Deliberately NO fill mode (`both`/`forwards`): a filled
+   animation keeps the keyframe `transform` on the element forever, which
+   makes it a containing block for `position: fixed` descendants — that pushed
+   dialogs ("Add User" modals), the Messages "New Message" prompt and other
+   viewport-pinned chrome inside the page content, so they had to be scrolled
+   into view. Without a fill mode the animation still runs identically and the
+   element is left with its natural (untransformed) style afterwards. */
+main > div, .max-w-5xl, .rounded-2xl, .rounded-3xl, article { animation: themeFade 420ms ease; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
