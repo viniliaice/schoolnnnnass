@@ -32,8 +32,17 @@ describe('database helpers', () => {
 
   it('getStudents returns rows from supabase', async () => {
     const students = [{ id: 's1', name: 'Student1' }];
+    // New implementation uses .select().order().range() with pagination.
+    const makeChain = (data: any) => {
+      const chain: any = {};
+      chain.order = () => chain;
+      chain.range = () => Promise.resolve({ data, error: null });
+      chain.then = (onFulfilled: any, onRejected: any) =>
+        Promise.resolve({ data, error: null }).then(onFulfilled, onRejected);
+      return chain;
+    };
     mockFrom.mockImplementation((_table: string) => ({
-      select: (_sel: any) => Promise.resolve({ data: students, error: null })
+      select: (_sel: any) => makeChain(students),
     }));
 
     const res = await getStudents();

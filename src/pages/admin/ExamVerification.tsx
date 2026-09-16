@@ -24,7 +24,10 @@ import { Skeleton } from '../../components/ui/Skeleton';
 import { clampPage, getTotalPages, getVisibleRange, sortExamsByStudentName } from './examVerificationUtils';
 
 const DEFAULT_PAGE_SIZE = 150;
-const STUDENT_FETCH_LIMIT = 1000;
+// Previously 1000 — that accidentally truncated rosters with >1000 students.
+// getStudentsByClasses now paginates, but we request up to 10k to ensure the
+// full filtered roster is available for exam verification.
+const STUDENT_FETCH_LIMIT = 10_000;
 
 export function ExamVerification() {
   const { session } = useRole();

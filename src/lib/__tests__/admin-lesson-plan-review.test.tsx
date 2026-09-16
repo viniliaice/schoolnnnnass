@@ -48,6 +48,7 @@ vi.mock('../supabase', () => {
   chain.eq = () => chain;
   chain.in = () => chain;
   chain.order = () => chain;
+  chain.range = () => chain;
   chain.limit = () => chain;
   chain.maybeSingle = async () => ({ data: null, error: null });
   chain.single = async () => ({ data: null, error: null });
