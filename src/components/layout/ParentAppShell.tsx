@@ -128,7 +128,11 @@ export function ParentAppShell({ children, initialPath = '/dashboard' }: ParentA
 
   return (
     <ParentProvider parentId={session.userId}>
-      <div className="min-h-screen min-h-dvh bg-slate-50 text-slate-900 lg:flex">
+      {/* `app-shell` (see index.css) keeps this root from becoming the
+          containing block of the fixed bottom navigation below: the theme
+          engine adds a backdrop-filter to `.bg-slate-50`, which would anchor
+          the bar to this (page-height) div instead of the phone viewport. */}
+      <div className="app-shell min-h-screen min-h-dvh bg-slate-50 text-slate-900 lg:flex">
         {/* DESKTOP (lg+): the previous staff sidebar, restored. Its mobile
             toggle/overlay stays off — phones use the chrome below. Its
             Monthly/Midterm/Final links open the unified Exam Results tabs. */}
