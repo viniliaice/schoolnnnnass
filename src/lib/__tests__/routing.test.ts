@@ -31,7 +31,9 @@ describe('canAccessRoute — office role', () => {
     expect(Object.keys(ROUTE_ACCESS).sort()).toEqual([
       '/admin/class-import', '/admin/drivers', '/admin/family-ids', '/admin/family-ids/setup',
       '/admin/grade-corrections', '/admin/lesson-plan-submissions', '/admin/lesson-plans',
+      '/admin/monitor', '/admin/monitor-marks',
       '/directory', '/gate', '/supervisor/lesson-plan-submissions', '/supervisor/lesson-plans',
+      '/supervisor/monitor-marks',
     ]);
   });
 });
@@ -125,5 +127,27 @@ describe('lesson plan submission tracking route — same roles as review', () =>
     }
     // Supervisors do not get the admin-prefixed path either, like review.
     expect(canAccessRoute('supervisor', '/admin/lesson-plan-submissions')).toBe(false);
+  });
+});
+
+describe('monitor marks entries route — same roles as lesson-plan tracking', () => {
+  it('lets admin open both admin paths', () => {
+    expect(canAccessRoute('admin', '/admin/monitor')).toBe(true);
+    expect(canAccessRoute('admin', '/admin/monitor-marks')).toBe(true);
+    expect(canAccessRoute('admin', '/supervisor/monitor-marks')).toBe(true);
+  });
+
+  it('lets supervisors open their own path only', () => {
+    expect(canAccessRoute('supervisor', '/supervisor/monitor-marks')).toBe(true);
+    expect(canAccessRoute('supervisor', '/admin/monitor')).toBe(false);
+    expect(canAccessRoute('supervisor', '/admin/monitor-marks')).toBe(false);
+  });
+
+  it('keeps teachers, parents, and office off the monitor', () => {
+    for (const role of ['office', 'teacher', 'parent'] as const) {
+      expect(canAccessRoute(role, '/admin/monitor'), role).toBe(false);
+      expect(canAccessRoute(role, '/admin/monitor-marks'), role).toBe(false);
+      expect(canAccessRoute(role, '/supervisor/monitor-marks'), role).toBe(false);
+    }
   });
 });

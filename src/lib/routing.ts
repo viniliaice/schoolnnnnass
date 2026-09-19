@@ -53,6 +53,14 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   '/admin/lesson-plan-submissions': ['admin'],
   '/supervisor/lesson-plan-submissions': ['admin', 'supervisor'],
 
+  // Monitor Marks Entries (teacher mark-entry/upload completion). Mirrors the
+  // lesson-plan submission tracker's two-path setup. The underlying
+  // get_monitor_marks_entries RPC (20260918) further restricts data access to
+  // admin/supervisor, and scopes teachers to their own assignments.
+  '/admin/monitor': ['admin'],
+  '/admin/monitor-marks': ['admin'],
+  '/supervisor/monitor-marks': ['admin', 'supervisor'],
+
   // Read-only student directory (name, grade, transport, family ID).
   '/directory': ['admin', 'supervisor', 'office'],
 };

@@ -88,6 +88,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Unit Plans', icon: Layers, path: '/supervisor/unit-plans' },
     { label: 'Exam Verifications', icon: ClipboardCheck, path: '/supervisor/verifications' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/supervisor/reports' },
+    { label: 'Monitor Teacher', icon: ListChecks, path: '/supervisor/monitor-marks' },
     { label: 'Messages', icon: Mail, path: '/messages' },
     { label: 'Streams', icon: Activity, path: '/streams' },
     { label: 'Record Attendance', icon: CalendarCheck, path: '/supervisor/attendance' },
