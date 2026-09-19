@@ -45,7 +45,11 @@ export interface MarksEntryRow {
   percentage: number;
   status: MarksEntryStatus;
   lastUpdated: string | null;
-  caEntered: number;
+  /**
+   * Monthly components. Homework is the CA component ("Homework (CA)"); the
+   * monitor does not carry a separate CA count. Quiz counts every Quiz record,
+   * including bulk-uploaded monthly tests labelled MT.
+   */
   homeworkEntered: number;
   classworkEntered: number;
   quizEntered: number;
@@ -108,6 +112,12 @@ export interface RawMarksEntryRow {
   status?: unknown;
   last_updated?: unknown;
   lastUpdated?: unknown;
+  /**
+   * Still returned by the RPC because its monthly completion rule honours
+   * legacy CA-type records, but intentionally NOT mapped onto MarksEntryRow:
+   * the page treats Homework as the CA component and never shows a separate
+   * CA count.
+   */
   ca_entered?: unknown;
   caEntered?: unknown;
   homework_entered?: unknown;
@@ -193,7 +203,6 @@ export function normalizeMarksEntryRow(raw: RawMarksEntryRow): MarksEntryRow {
     nonNegativeInt(raw.entered_students ?? raw.enteredStudents),
   );
   const percentage = Math.min(100, Math.max(0, numberValue(raw.percentage)));
-  const caEntered = nonNegativeInt(raw.ca_entered ?? raw.caEntered);
   const homeworkEntered = nonNegativeInt(raw.homework_entered ?? raw.homeworkEntered);
   const classworkEntered = nonNegativeInt(raw.classwork_entered ?? raw.classworkEntered);
   const quizEntered = nonNegativeInt(raw.quiz_entered ?? raw.quizEntered);
@@ -203,11 +212,13 @@ export function normalizeMarksEntryRow(raw: RawMarksEntryRow): MarksEntryRow {
     ? booleanValue(raw.coursework_complete ?? raw.courseworkComplete)
       && booleanValue(raw.quiz_complete ?? raw.quizComplete)
     : expectedStudents > 0 && enteredStudents >= expectedStudents;
+  // The RPC's percentage and completion flags already apply the monthly
+  // coursework rule, so the four displayed components are enough here.
   const status = marksEntryStatus(
     expectedStudents,
     enteredStudents,
     percentage,
-    caEntered + homeworkEntered + classworkEntered + quizEntered + attendanceEntered,
+    homeworkEntered + classworkEntered + quizEntered + attendanceEntered,
     complete,
   );
 
@@ -228,7 +239,6 @@ export function normalizeMarksEntryRow(raw: RawMarksEntryRow): MarksEntryRow {
     percentage,
     status,
     lastUpdated: nullableString(raw.last_updated ?? raw.lastUpdated),
-    caEntered,
     homeworkEntered,
     classworkEntered,
     quizEntered,
