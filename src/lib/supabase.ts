@@ -55,6 +55,14 @@ const demoStudents = [
   { id: 'stu-mohamed', name: 'Mohamed Farah', className: 'Grade 2-C', parentId: 'parent-3', createdAt: '2026-06-01', govId: 'MBK-2C-004', transport: 'Bus 1', parentPhone: '252634500000', familyId: '0003' },
   { id: 'stu-sara', name: 'Sara Abdullahi', className: 'Grade 1-A', parentId: 'parent-1', createdAt: '2026-06-01', govId: 'MBK-1A-001', transport: 'Bus 2', parentPhone: '252634506719', familyId: '0004' },
   { id: 'stu-hassan', name: 'Hassan Jaamac', className: 'Grade 2-C', parentId: 'parent-no-email', createdAt: '2026-06-01', govId: 'MBK-2C-005', transport: 'Bus 2', parentPhone: '252634599999', familyId: '0005' },
+  { id: 'stu-layla', name: 'Layla Osman', className: 'Grade 1-A', parentId: null, createdAt: '2026-06-01', govId: 'MBK-1A-002', transport: 'WALKER', parentPhone: null, familyId: null },
+  { id: 'stu-yusuf', name: 'Yusuf Warsame', className: 'Grade 1-A', parentId: null, createdAt: '2026-06-01', govId: 'MBK-1A-003', transport: 'CAR', parentPhone: null, familyId: null },
+  { id: 'stu-left', name: 'Khadra Left', className: 'Grade 1-A', parentId: null, createdAt: '2026-06-01', govId: 'MBK-1A-004', transport: 'LEFT', parentPhone: null, familyId: null },
+  { id: 'stu-nimco', name: 'Nimco Ali', className: 'Grade 3-B', parentId: null, createdAt: '2026-06-01', govId: 'MBK-3B-001', transport: 'Bus 1', parentPhone: null, familyId: null },
+  { id: 'stu-abdi', name: 'Abdi Salan', className: 'Grade 3-B', parentId: null, createdAt: '2026-06-01', govId: 'MBK-3B-002', transport: 'WALKER', parentPhone: null, familyId: null },
+  { id: 'stu-hodan-s', name: 'Hodan Muse', className: 'Grade 3-B', parentId: null, createdAt: '2026-06-01', govId: 'MBK-3B-003', transport: 'CAR', parentPhone: null, familyId: null },
+  { id: 'stu-farah4', name: 'Farah Aden', className: 'Grade 4-A', parentId: null, createdAt: '2026-06-01', govId: 'MBK-4A-001', transport: 'Bus 3', parentPhone: null, familyId: null },
+  { id: 'stu-amina4', name: 'Amina Dualeh', className: 'Grade 4-A', parentId: null, createdAt: '2026-06-01', govId: 'MBK-4A-002', transport: 'WALKER', parentPhone: null, familyId: null },
 ];
 
 const demoProfiles: any[] = [
@@ -376,6 +384,55 @@ const demoLessonPlanPeriods: any[] = demoLessonPlans.flatMap((plan: any) => {
 // Demo approved exam results for the parent preview (parent-1's children).
 // Matches the Exam row shape; keeps the parent Home "New result" card and the
 // Exam Results screens alive in preview mode.
+function examRow(id: string, studentId: string, subjectId: string, subject: string, examType: string, teacherId: string, month = 'September'): any {
+  return {
+    id,
+    studentId,
+    subjectId,
+    subject,
+    score: 16,
+    total: 20,
+    examType,
+    assessmentLabel: null,
+    entryState: 'scored',
+    termId: 'term-1',
+    month,
+    status: 'approved',
+    parentId: null,
+    date: '2026-09-12',
+    createdAt: '2026-09-12T08:00:00Z',
+    teacherId,
+    uploadedBy: null,
+  };
+}
+
+const grade2c = ['stu-barwaaqo', 'stu-ahmed', 'stu-aisha', 'stu-mohamed', 'stu-hassan'];
+const grade1aActive = ['stu-sara', 'stu-layla', 'stu-yusuf'];
+
+const demoMonitorExams: any[] = [
+  // Grade 2-C Mathematics (Fatima) — complete: CA + Quiz for every student.
+  ...grade2c.flatMap((sid, i) => [
+    examRow(`mex-2c-math-ca-${i}`, sid, 'sub-math', 'Mathematics', 'CA', 'teacher-1'),
+    examRow(`mex-2c-math-qz-${i}`, sid, 'sub-math', 'Mathematics', 'Quiz', 'teacher-1'),
+  ]),
+  // Grade 2-C English (Fatima) — in progress: first 2 students have CA + Quiz.
+  ...grade2c.slice(0, 2).flatMap((sid, i) => [
+    examRow(`mex-2c-eng-ca-${i}`, sid, 'sub-english', 'English', 'CA', 'teacher-1'),
+    examRow(`mex-2c-eng-qz-${i}`, sid, 'sub-english', 'English', 'Quiz', 'teacher-1'),
+  ]),
+  examRow('mex-2c-eng-ca-2', 'stu-aisha', 'sub-english', 'English', 'CA', 'teacher-1'),
+  // Grade 1-A Mathematics (Omar) — complete for the 3 active students (LEFT excluded).
+  ...grade1aActive.flatMap((sid, i) => [
+    examRow(`mex-1a-math-ca-${i}`, sid, 'sub-math', 'Mathematics', 'CA', 'teacher-2'),
+    examRow(`mex-1a-math-qz-${i}`, sid, 'sub-math', 'Mathematics', 'Quiz', 'teacher-2'),
+  ]),
+  // Grade 1-A English (Fatima) — in progress: 1 of 3.
+  examRow('mex-1a-eng-ca-0', 'stu-sara', 'sub-english', 'English', 'CA', 'teacher-1'),
+  examRow('mex-1a-eng-qz-0', 'stu-sara', 'sub-english', 'English', 'Quiz', 'teacher-1'),
+  // Midterm sample for Grade 2-C Math — 3 of 5 (exam-type filter).
+  ...grade2c.slice(0, 3).map((sid, i) => examRow(`mex-2c-math-mt-${i}`, sid, 'sub-math', 'Mathematics', 'Midterm', 'teacher-1')),
+];
+
 const demoParentExams = [
   { id: 'pex-1', studentId: 'stu-barwaaqo', subject: 'Mathematics', score: 18, total: 20, examType: 'Quiz', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'September', status: 'approved', parentId: 'parent-1', date: '2026-09-12', createdAt: '2026-09-12T08:00:00Z', teacherId: 'teacher-1', uploadedBy: null },
   { id: 'pex-2', studentId: 'stu-barwaaqo', subject: 'English', score: 17, total: 20, examType: 'Classwork', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'September', status: 'approved', parentId: 'parent-1', date: '2026-09-08', createdAt: '2026-09-08T08:00:00Z', teacherId: 'teacher-1', uploadedBy: null },
@@ -437,7 +494,7 @@ function createMockSupabase(): SupabaseClient {
     students: [...demoStudents],
     profiles: [...demoProfiles],
     report_comments: [],
-    exams: [...demoParentExams],
+    exams: [...demoParentExams, ...demoMonitorExams],
     announcement_recipients: [...demoParentAnnouncementRecipients],
     homework: [...demoParentHomework],
     attendance: [],
@@ -835,6 +892,119 @@ function createMockSupabase(): SupabaseClient {
       if (!d) return { data: null, error: { message: 'Driver not found.' } };
       d.students = d.students.filter(s => s.id !== params.p_student_id);
       return { data: { personId: params.p_pickup_id, studentId: params.p_student_id, removed: true }, error: null };
+    }
+    if (fn === 'update_authorized_pickup_photo') {
+      const d = pickupDrivers.find(x => x.id === params.p_pickup_id);
+      if (!d) return { data: null, error: { message: 'Driver not found.' } };
+      d.photoPath = params.p_photo_path || null;
+      return { data: driverSummary(d), error: null };
+    }
+    if (fn === 'find_authorized_pickup_by_phone') {
+      const phone = params.p_phone ?? '';
+      const d = pickupDrivers.find(x => normalizePhone(x.phoneNumber) === normalizePhone(phone) && normalizePhone(phone) !== '');
+      return { data: d ? driverSummary(d) : null, error: null };
+    }
+    if (fn === 'search_authorized_pickups') {
+      const q = (params.p_query ?? '').trim().toLowerCase();
+      const list = pickupDrivers
+        .filter(d => !q || d.name.toLowerCase().includes(q) || d.phoneNumber.includes(q))
+        .map(driverSummary);
+      return { data: list, error: null };
+    }
+    if (fn === 'get_family_pickups') {
+      return { data: [], error: null };
+    }
+
+    // For class_students_for_term etc fallback
+    return { data: null, error: { message: `Mock RPC ${fn} not implemented`, code: 'PGRST202' } };
+  };
+
+  // Realtime is how the lesson-plan detail, message, and announcement pages
+  // stay live in production. The preview has no Postgres to subscribe to, so
+  // channels become inert no-ops: pages render from the demo tables and
+  // simply never receive push updates. Without these, any page that opens a
+  // channel — e.g. selecting a lesson plan on Lesson Plan Review, which the
+  // submission tracker's View action does — crashes with
+  // "supabase.channel is not a function".
+  const makeChannel = () => {
+    const builder: Record<string, unknown> = {};
+    builder.on = () => builder;
+    builder.subscribe = () => builder;
+    return builder;
+  };
+
+  const mockStorage = {
+    from: (_bucket: string) => ({
+      upload: async (path: string, blob: Blob) => {
+        try {
+          const dataUrl = await blobToDataUrl(blob);
+          pickupPhotoStore.set(path, dataUrl);
+          return { data: { path }, error: null };
+        } catch {
+          return { data: null, error: { message: 'Could not upload the photo.' } };
+        }
+      },
+      remove: async (paths: string[]) => {
+        for (const p of paths) pickupPhotoStore.delete(p);
+        return { data: paths, error: null };
+      },
+      createSignedUrl: async (path: string) => {
+        const url = pickupPhotoStore.get(path);
+        return url
+          ? { data: { signedUrl: url }, error: null }
+          : { data: null, error: { message: 'Object not found' } };
+      },
+    }),
+  };
+
+  return {
+    auth: mockAuth as any,
+    from: mockFrom as any,
+    rpc: mockRpc as any,
+    storage: mockStorage as any,
+    channel: (_name?: string) => makeChannel(),
+    removeChannel: async () => 'ok' as const,
+    // Edge functions only run against a real backend; answer honestly so a
+    // preview click on "submit" reports a failure instead of crashing on
+    // `supabase.functions is undefined`.
+    functions: {
+      invoke: async () => ({
+        data: null,
+        error: { message: 'Preview mode — edge functions are disabled.' },
+      }),
+    },
+  } as unknown as SupabaseClient;
+}
+
+export const supabase: SupabaseClient = globalThis.__supabase__
+  ? globalThis.__supabase__
+  : isPlaceholderEnv
+    ? createMockSupabase()
+    : createClient(supabaseUrl, supabaseAnonKey, {
+        auth: {
+          persistSession: true,
+          autoRefreshToken: true,
+          detectSessionInUrl: true,
+        },
+      });
+
+/**
+ * A Supabase client pinned to a specific access token. Every REST request is
+ * authenticated as that user regardless of the shared client's session state.
+ * Used by createUser() so create_user_profile runs as the admin even though
+ * signUp() swapped the shared client's session to the new user.
+ */
+export function createAuthedClient(accessToken: string): SupabaseClient {
+  if (isPlaceholderEnv) return createMockSupabase();
+  return createClient(supabaseUrl!, supabaseAnonKey!, {
+    accessToken: async () => accessToken,
+  });
+}
+
+if (import.meta.env.DEV) {
+  globalThis.__supabase__ = supabase;
+}
+d: params.p_pickup_id, studentId: params.p_student_id, removed: true }, error: null };
     }
     if (fn === 'update_authorized_pickup_photo') {
       const d = pickupDrivers.find(x => x.id === params.p_pickup_id);
