@@ -115,7 +115,7 @@ describe('marks-entry-tracking — derived row semantics', () => {
 
 describe('marks-entry-tracking — monthly components (Homework is the CA component)', () => {
   // The exact snake_case shape monitor_marks_entries returns for
-  // ENGLISH · Kayse Maxamad · Grade 2-C · August after 20260919b.
+  // ENGLISH · Kayse Maxamad · Grade 2-C · August after 20260919b/20260919c.
   const rpcRow: RawMarksEntryRow = {
     assignment_id: 'cs-2c-english',
     teacher_id: 'teacher-1',
@@ -135,6 +135,7 @@ describe('marks-entry-tracking — monthly components (Homework is the CA compon
     last_updated: '2026-08-20T10:00:00+00:00',
     ca_entered: 0,
     homework_entered: 34,
+    homework_ca_entered: 34,
     classwork_entered: 34,
     quiz_entered: 34,
     attendance_entered: 34,
@@ -162,7 +163,26 @@ describe('marks-entry-tracking — monthly components (Homework is the CA compon
     const normalized = normalizeMarksEntryRow({ ...rpcRow, ca_entered: 42 });
     expect(normalized).not.toHaveProperty('caEntered');
     expect(normalized).not.toHaveProperty('ca_entered');
-    // Homework (CA) is the Homework count itself, not Homework plus CA.
+    // ca_entered alone never feeds the tile: only the RPC's per-student union
+    // column (homework_ca_entered) may fold legacy CA records in.
+    expect(normalized.homeworkEntered).toBe(34);
+  });
+
+  it('maps the Homework (CA) union count (Homework or legacy CA, once per student)', () => {
+    const normalized = normalizeMarksEntryRow({
+      ...rpcRow,
+      ca_entered: 12,
+      homework_entered: 34,
+      homework_ca_entered: 40,
+    });
+    expect(normalized.homeworkEntered).toBe(40);
+    expect(normalized).not.toHaveProperty('caEntered');
+  });
+
+  it('falls back to the plain homework count when the RPC predates 20260919c', () => {
+    const legacyRow: RawMarksEntryRow = { ...rpcRow };
+    delete legacyRow.homework_ca_entered;
+    const normalized = normalizeMarksEntryRow(legacyRow);
     expect(normalized.homeworkEntered).toBe(34);
   });
 

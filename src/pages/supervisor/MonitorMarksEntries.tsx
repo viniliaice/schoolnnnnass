@@ -186,7 +186,7 @@ function EntryDetails({ row, onClose }: { row: MarksEntryRow; onClose: () => voi
             <CompletionBar row={row} />
             {monthly && (
               <p className="mt-3 text-xs leading-5 text-slate-500">
-                Monthly completion follows the existing rule: coursework is Homework (CA) plus Classwork for every student, and Quiz for every student. Quiz counts every quiz record, including bulk-uploaded monthly tests labelled MT. The percentage is the same blended component coverage used by the existing teacher monitor.
+                Monthly completion follows the existing rule: coursework is CA for every student or Homework plus Classwork for every student, and Quiz for every student. Homework (CA) counts Homework records together with legacy CA records; Quiz counts every quiz record, including bulk-uploaded monthly tests labelled MT. The percentage is the same blended component coverage used by the existing teacher monitor.
               </p>
             )}
           </div>
@@ -389,7 +389,7 @@ export function MonitorMarksEntries() {
           </div>
         </div>
         {examScope === 'monthly' && (
-          <p className="mt-3 text-xs leading-5 text-slate-500">Monthly uses the existing coursework rule: Homework (CA) plus Classwork, together with Quiz. Every quiz record counts toward Quiz, including bulk-uploaded monthly tests labelled MT, matching the monthly report.</p>
+          <p className="mt-3 text-xs leading-5 text-slate-500">Monthly uses the existing coursework rule: CA, or Homework plus Classwork, together with Quiz. Homework (CA) counts Homework and legacy CA records; every quiz record counts toward Quiz, including bulk-uploaded monthly tests labelled MT, matching the monthly report.</p>
         )}
       </section>
 

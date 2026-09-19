@@ -46,9 +46,11 @@ export interface MarksEntryRow {
   status: MarksEntryStatus;
   lastUpdated: string | null;
   /**
-   * Monthly components. Homework is the CA component ("Homework (CA)"); the
-   * monitor does not carry a separate CA count. Quiz counts every Quiz record,
-   * including bulk-uploaded monthly tests labelled MT.
+   * Monthly components. Homework is the CA component ("Homework (CA)"): this
+   * count is the RPC's homework_ca_entered — students with a Homework record
+   * or a legacy CA record, counted once per student. The monitor does not
+   * carry a separate CA count. Quiz counts every Quiz record, including
+   * bulk-uploaded monthly tests labelled MT.
    */
   homeworkEntered: number;
   classworkEntered: number;
@@ -116,10 +118,18 @@ export interface RawMarksEntryRow {
    * Still returned by the RPC because its monthly completion rule honours
    * legacy CA-type records, but intentionally NOT mapped onto MarksEntryRow:
    * the page treats Homework as the CA component and never shows a separate
-   * CA count.
+   * CA count. Legacy CA records are folded into homeworkEntered through
+   * homework_ca_entered below instead.
    */
   ca_entered?: unknown;
   caEntered?: unknown;
+  /**
+   * Homework (CA) component coverage from 20260919c: students with a Homework
+   * record or a legacy CA record, counted once per student. Falls back to the
+   * plain homework count when the RPC predates that migration.
+   */
+  homework_ca_entered?: unknown;
+  homeworkCaEntered?: unknown;
   homework_entered?: unknown;
   homeworkEntered?: unknown;
   classwork_entered?: unknown;
@@ -203,7 +213,13 @@ export function normalizeMarksEntryRow(raw: RawMarksEntryRow): MarksEntryRow {
     nonNegativeInt(raw.entered_students ?? raw.enteredStudents),
   );
   const percentage = Math.min(100, Math.max(0, numberValue(raw.percentage)));
-  const homeworkEntered = nonNegativeInt(raw.homework_entered ?? raw.homeworkEntered);
+  // Homework (CA) tile: prefer the RPC's per-student Homework-or-legacy-CA
+  // union (20260919c) so the coursework that drives the monthly completion
+  // rule and percentage is the same coursework the tile shows. Databases
+  // running the older RPC fall back to the plain homework count.
+  const homeworkEntered = nonNegativeInt(
+    raw.homework_ca_entered ?? raw.homeworkCaEntered ?? raw.homework_entered ?? raw.homeworkEntered,
+  );
   const classworkEntered = nonNegativeInt(raw.classwork_entered ?? raw.classworkEntered);
   const quizEntered = nonNegativeInt(raw.quiz_entered ?? raw.quizEntered);
   const attendanceEntered = nonNegativeInt(raw.attendance_entered ?? raw.attendanceEntered);
