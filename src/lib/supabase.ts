@@ -1044,6 +1044,10 @@ function createMockSupabase(): SupabaseClient {
   };
 
   return {
+    // Version marker lets Vite HMR replace an older cached preview client
+    // after a new preview-only RPC is added. Without it, globalThis.__supabase__
+    // could keep the old mockRpc implementation until a full browser reload.
+    __marksMonitorPreviewVersion: 1,
     auth: mockAuth as any,
     from: mockFrom as any,
     rpc: mockRpc as any,
@@ -1062,17 +1066,19 @@ function createMockSupabase(): SupabaseClient {
   } as unknown as SupabaseClient;
 }
 
-export const supabase: SupabaseClient = globalThis.__supabase__
-  ? globalThis.__supabase__
-  : isPlaceholderEnv
-    ? createMockSupabase()
-    : createClient(supabaseUrl, supabaseAnonKey, {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-          detectSessionInUrl: true,
-        },
-      });
+const cachedSupabase = globalThis.__supabase__ as (SupabaseClient & { __marksMonitorPreviewVersion?: number }) | undefined;
+
+export const supabase: SupabaseClient = isPlaceholderEnv
+  ? cachedSupabase?.__marksMonitorPreviewVersion === 1
+    ? cachedSupabase
+    : createMockSupabase()
+  : cachedSupabase ?? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    });
 
 /**
  * A Supabase client pinned to a specific access token. Every REST request is
