@@ -31,7 +31,8 @@ describe('canAccessRoute — office role', () => {
     expect(Object.keys(ROUTE_ACCESS).sort()).toEqual([
       '/admin/class-import', '/admin/drivers', '/admin/family-ids', '/admin/family-ids/setup',
       '/admin/grade-corrections', '/admin/lesson-plan-submissions', '/admin/lesson-plans',
-      '/directory', '/gate', '/supervisor/lesson-plan-submissions', '/supervisor/lesson-plans',
+      '/admin/monitor-marks', '/directory', '/gate', '/supervisor/lesson-plan-submissions',
+      '/supervisor/lesson-plans', '/supervisor/monitor-marks',
     ]);
   });
 });
