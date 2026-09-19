@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   FileSpreadsheet, Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, CalendarRange, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil, ListChecks
+  CalendarCheck, CalendarRange, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil, ListChecks, BarChart3
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -46,6 +46,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Class Progress', icon: Calendar, path: '/admin/class-progress' },
     { label: 'Promote Classes', icon: ArrowUpDown, path: '/admin/promotion' },
     { label: 'Monitor Teacher', icon: ClipboardCheck, path: '/admin/monitor' },
+    { label: 'Monitor Marks Entries', icon: BarChart3, path: '/admin/monitor-marks' },
     { label: 'AI Review Logs', icon: Activity, path: '/admin/ai-logs' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/admin/exam-reports' },
     { label: 'Family IDs', icon: CreditCard, path: '/admin/family-ids' },
@@ -84,6 +85,7 @@ const navItems: Record<Role, NavItem[]> = {
     // "Submission Tracking" answers who has/hasn't submitted this week;
     // "Lesson Plans" is the detailed review page.
     { label: 'Submission Tracking', icon: ListChecks, path: '/supervisor/lesson-plan-submissions' },
+    { label: 'Monitor Marks Entries', icon: BarChart3, path: '/supervisor/monitor-marks' },
     { label: 'Lesson Plans', icon: NotepadText, path: '/supervisor/lesson-plans' },
     { label: 'Unit Plans', icon: Layers, path: '/supervisor/unit-plans' },
     { label: 'Exam Verifications', icon: ClipboardCheck, path: '/supervisor/verifications' },
