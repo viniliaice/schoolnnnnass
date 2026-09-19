@@ -53,6 +53,11 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   '/admin/lesson-plan-submissions': ['admin'],
   '/supervisor/lesson-plan-submissions': ['admin', 'supervisor'],
 
+  // Derived marks-entry monitoring. The RPC independently enforces the same
+  // admin/supervisor roles and limits supervisors to their assigned classes.
+  '/admin/monitor-marks': ['admin'],
+  '/supervisor/monitor-marks': ['admin', 'supervisor'],
+
   // Read-only student directory (name, grade, transport, family ID).
   '/directory': ['admin', 'supervisor', 'office'],
 };

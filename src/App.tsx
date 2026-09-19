@@ -26,6 +26,7 @@ import { StudentDirectory } from './pages/office/StudentDirectory';
 import { ExamVerification } from './pages/admin/ExamVerification';
 import { GradeCorrections } from './pages/admin/GradeCorrections';
 import { MonitorTeachers } from './pages/admin/MonitorTeachers';
+import { MonitorMarksEntries } from './pages/supervisor/MonitorMarksEntries';
 import { ClassProgress } from './pages/admin/ClassProgress';
 import { ClassAnnouncements } from './pages/admin/ClassAnnouncements';
 import { ClassPromotion } from './pages/admin/ClassPromotion';
@@ -147,6 +148,8 @@ function AppContent() {
             case '/admin/exams': return <ExamVerification />;
             case '/admin/grade-corrections': return <GradeCorrections />;
             case '/admin/monitor': return <MonitorTeachers />;
+            case '/admin/monitor-marks': return <MonitorMarksEntries />;
+            case '/supervisor/monitor-marks': return <MonitorMarksEntries />;
             case '/admin/ai-logs': return <AiReviewLogs />;
             case '/admin/class-progress': return <ClassProgress />;
             case '/admin/exam-reports': return <ExamReport />;
@@ -192,6 +195,7 @@ function AppContent() {
               case '/supervisor/reports': return <ExamReport />;
               case '/supervisor/lesson-plans': return <LessonPlanReview navigate={navigate} />;
               case '/supervisor/lesson-plan-submissions': return <LessonPlanSubmissions navigate={navigate} />;
+              case '/supervisor/monitor-marks': return <MonitorMarksEntries />;
               case '/supervisor/unit-plans': return <UnitPlans />;
               case '/supervisor/attendance': return <RecordAttendance />;
               case '/supervisor/homework': return <AssignHomework />;

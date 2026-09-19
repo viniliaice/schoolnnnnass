@@ -383,6 +383,24 @@ const demoParentExams = [
   { id: 'pex-4', studentId: 'stu-sara', subject: 'English', score: 14, total: 20, examType: 'CA', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'August', status: 'approved', parentId: 'parent-1', date: '2026-08-20', createdAt: '2026-08-20T08:00:00Z', teacherId: 'teacher-2', uploadedBy: null },
 ];
 
+// Preview-only marks used by the Monitor Marks Entries page when the app is
+// running without VITE_SUPABASE_* credentials. Production uses the secured
+// monitor_marks_entries RPC and never reads this data.
+const demoMarksMonitorExams = [
+  { id: 'monitor-1', studentId: 'stu-sara', subjectId: 'sub-english', subject: 'English', examType: 'CA', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'September', teacherId: 'teacher-1', createdAt: '2026-09-08T08:00:00Z' },
+  { id: 'monitor-2', studentId: 'stu-sara', subjectId: 'sub-english', subject: 'English', examType: 'Quiz', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'September', teacherId: 'teacher-1', createdAt: '2026-09-09T08:00:00Z' },
+  { id: 'monitor-3', studentId: 'stu-sara', subjectId: 'sub-math', subject: 'Mathematics', examType: 'Final', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: null, teacherId: 'teacher-2', createdAt: '2026-09-15T08:00:00Z' },
+  { id: 'monitor-4', studentId: 'stu-barwaaqo', subjectId: 'sub-english', subject: 'English', examType: 'CA', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'September', teacherId: 'teacher-1', createdAt: '2026-09-03T08:00:00Z' },
+  { id: 'monitor-5', studentId: 'stu-barwaaqo', subjectId: 'sub-english', subject: 'English', examType: 'Quiz', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'September', teacherId: 'teacher-1', createdAt: '2026-09-04T08:00:00Z' },
+  { id: 'monitor-6', studentId: 'stu-ahmed', subjectId: 'sub-english', subject: 'English', examType: 'Homework', assessmentLabel: 'HW1', entryState: 'scored', termId: 'term-1', month: 'September', teacherId: 'teacher-1', createdAt: '2026-09-05T08:00:00Z' },
+  { id: 'monitor-7', studentId: 'stu-ahmed', subjectId: 'sub-english', subject: 'English', examType: 'Classwork', assessmentLabel: 'CPW1', entryState: 'scored', termId: 'term-1', month: 'September', teacherId: 'teacher-1', createdAt: '2026-09-06T08:00:00Z' },
+  { id: 'monitor-8', studentId: 'stu-ahmed', subjectId: 'sub-english', subject: 'English', examType: 'Quiz', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'September', teacherId: 'teacher-1', createdAt: '2026-09-07T08:00:00Z' },
+  { id: 'monitor-9', studentId: 'stu-aisha', subjectId: 'sub-english', subject: 'English', examType: 'Classwork', assessmentLabel: 'CPW1', entryState: 'scored', termId: 'term-1', month: 'September', teacherId: 'teacher-1', createdAt: '2026-09-10T08:00:00Z' },
+  { id: 'monitor-10', studentId: 'stu-hassan', subjectId: 'sub-english', subject: 'English', examType: 'Quiz', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: 'September', teacherId: 'teacher-1', createdAt: '2026-09-11T08:00:00Z' },
+  { id: 'monitor-11', studentId: 'stu-barwaaqo', subjectId: 'sub-math', subject: 'Mathematics', examType: 'Midterm', assessmentLabel: null, entryState: 'scored', termId: 'term-1', month: null, teacherId: 'teacher-1', createdAt: '2026-09-12T08:00:00Z' },
+  { id: 'monitor-12', studentId: 'stu-ahmed', subjectId: 'sub-math', subject: 'Mathematics', examType: 'Quiz', assessmentLabel: 'MT', entryState: 'scored', termId: 'term-1', month: null, teacherId: 'teacher-1', createdAt: '2026-09-13T08:00:00Z' },
+];
+
 // Demo school announcements for the parent Home "School Messages" card.
 // Rows mirror what a joined announcement_recipients select returns.
 const demoParentAnnouncementRecipients = [
@@ -423,6 +441,123 @@ const demoParentHomework = [{
   createdAt: '2026-09-14T09:00:00.000Z',
   lesson_plan_period_id: 'period-plan-2026-W16-2-Tuesday-1',
 }];
+
+function demoMarksMonitorRows(params: any): any[] {
+  const scope = String(params?.p_exam_scope ?? 'monthly').trim().toLowerCase();
+  const selectedMonth = String(params?.p_month ?? '').trim() || null;
+  const selectedTeacher = String(params?.p_teacher_id ?? '').trim();
+  const selectedClass = String(params?.p_class_name ?? '').trim();
+  const selectedSubject = String(params?.p_subject_id ?? '').trim();
+
+  const inScope = (exam: any) => {
+    if (scope === 'monthly') return ['CA', 'Homework', 'Classwork', 'Quiz', 'Attendance'].includes(exam.examType)
+      && String(exam.assessmentLabel ?? '').trim().toUpperCase() !== 'MT';
+    if (scope === 'midterm') return exam.examType === 'Midterm'
+      || (exam.examType === 'Quiz' && String(exam.assessmentLabel ?? '').trim().toUpperCase() === 'MT');
+    if (scope === 'final') return exam.examType === 'Final';
+    if (scope === 'ca') return exam.examType === 'CA';
+    if (scope === 'homework') return exam.examType === 'Homework';
+    if (scope === 'classwork') return exam.examType === 'Classwork';
+    if (scope === 'quiz') return exam.examType === 'Quiz'
+      && String(exam.assessmentLabel ?? '').trim().toUpperCase() !== 'MT';
+    if (scope === 'attendance') return exam.examType === 'Attendance';
+    if (scope === 'discipline') return exam.examType === 'Discipline';
+    return false;
+  };
+
+  return demoClassSubjects
+    .filter((assignment: any) => String(assignment.teacherId || '').trim())
+    .filter((assignment: any) => !selectedTeacher || assignment.teacherId === selectedTeacher)
+    .filter((assignment: any) => !selectedClass || assignment.className === selectedClass)
+    .filter((assignment: any) => !selectedSubject || assignment.subjectId === selectedSubject)
+    .map((assignment: any) => {
+      const subjectName = assignment.subjects?.name ?? assignment.subjectId;
+      const expectedStudents = demoStudents.filter((student: any) =>
+        student.className === assignment.className && String(student.transport ?? '').toUpperCase() !== 'LEFT'
+      );
+      const exams = demoMarksMonitorExams.filter((exam: any) =>
+        exam.studentId
+        && expectedStudents.some((student: any) => student.id === exam.studentId)
+        && exam.teacherId === assignment.teacherId
+        && (exam.subjectId === assignment.subjectId || exam.subject === subjectName || exam.subject === assignment.subjectId)
+        && exam.termId === (params?.p_term_id ?? 'term-1')
+        && (!selectedMonth || exam.month === selectedMonth)
+        && inScope(exam)
+      );
+      const flags = new Map<string, { ca: boolean; homework: boolean; classwork: boolean; quiz: boolean; attendance: boolean; any: boolean; lastUpdated: string | null }>();
+      for (const student of expectedStudents) {
+        const studentExams = exams.filter((exam: any) => exam.studentId === student.id);
+        flags.set(student.id, {
+          ca: studentExams.some((exam: any) => exam.examType === 'CA'),
+          homework: studentExams.some((exam: any) => exam.examType === 'Homework'),
+          classwork: studentExams.some((exam: any) => exam.examType === 'Classwork'),
+          quiz: studentExams.some((exam: any) => exam.examType === 'Quiz'),
+          attendance: studentExams.some((exam: any) => exam.examType === 'Attendance'),
+          any: studentExams.length > 0,
+          lastUpdated: studentExams.reduce((latest: string | null, exam: any) => !latest || exam.createdAt > latest ? exam.createdAt : latest, null),
+        });
+      }
+      const expected = expectedStudents.length;
+      const count = (key: 'ca' | 'homework' | 'classwork' | 'quiz' | 'attendance') => expectedStudents.filter((student: any) => flags.get(student.id)?.[key]).length;
+      const caEntered = count('ca');
+      const homeworkEntered = count('homework');
+      const classworkEntered = count('classwork');
+      const quizEntered = count('quiz');
+      const attendanceEntered = count('attendance');
+      const completeForStudent = (student: any) => {
+        const flag = flags.get(student.id);
+        if (!flag) return false;
+        return scope === 'monthly'
+          ? (flag.ca || (flag.homework && flag.classwork)) && flag.quiz
+          : flag.any;
+      };
+      const entered = expectedStudents.filter(completeForStudent).length;
+      const courseworkComplete = expected > 0 && (caEntered >= expected || (homeworkEntered >= expected && classworkEntered >= expected));
+      const quizComplete = expected > 0 && quizEntered >= expected;
+      const courseworkProgress = expected > 0
+        ? Math.max(Math.min(caEntered / expected, 1), (Math.min(homeworkEntered / expected, 1) + Math.min(classworkEntered / expected, 1)) / 2)
+        : 0;
+      const percentage = expected === 0
+        ? 0
+        : scope === 'monthly'
+          ? Math.round(((courseworkProgress + Math.min(quizEntered / expected, 1)) / 2) * 10000) / 100
+          : Math.round((entered / expected) * 10000) / 100;
+      const componentEntries = caEntered + homeworkEntered + classworkEntered + quizEntered + attendanceEntered;
+      const lastUpdated = exams.reduce((latest: string | null, exam: any) => !latest || exam.createdAt > latest ? exam.createdAt : latest, null);
+      const status = expected > 0 && entered >= expected
+        ? 'complete'
+        : percentage > 0 || componentEntries > 0 || entered > 0
+          ? 'in_progress'
+          : 'not_started';
+
+      return {
+        assignment_id: assignment.id,
+        teacher_id: assignment.teacherId,
+        teacher_name: demoProfiles.find((profile: any) => profile.id === assignment.teacherId)?.name ?? assignment.teacherId,
+        class_name: assignment.className,
+        subject_id: assignment.subjectId,
+        subject_name: subjectName,
+        academic_year_id: params?.p_academic_year_id ?? 'ay-2026',
+        term_id: params?.p_term_id ?? 'term-1',
+        exam_scope: scope,
+        month: selectedMonth,
+        expected_students: expected,
+        entered_students: entered,
+        missing_students: expectedStudents.filter((student: any) => !completeForStudent(student)).map((student: any) => ({ id: student.id, name: student.name })),
+        percentage,
+        completion_status: status,
+        last_updated: lastUpdated,
+        ca_entered: caEntered,
+        homework_entered: homeworkEntered,
+        classwork_entered: classworkEntered,
+        quiz_entered: quizEntered,
+        attendance_entered: attendanceEntered,
+        coursework_complete: courseworkComplete,
+        quiz_complete: quizComplete,
+        monthly_complete_students: entered,
+      };
+    });
+}
 
 function createMockSupabase(): SupabaseClient {
   const demoClasses = Array.from(new Set(demoStudents.map(s => s.className))).sort();
@@ -649,6 +784,14 @@ function createMockSupabase(): SupabaseClient {
   const mockFrom = (table: string) => makeChain(table);
 
   const mockRpc = async (fn: string, params?: any) => {
+    // The real app calls the SECURITY DEFINER monitor RPC. In the no-env
+    // preview there is no Postgres, so return the same derived, assignment-
+    // first shape from sanitized demo data rather than reporting a missing
+    // function. This branch is unreachable when real Supabase credentials are
+    // configured; production permissions remain enforced by SQL.
+    if (fn === 'monitor_marks_entries') {
+      return { data: demoMarksMonitorRows(params), error: null };
+    }
     if (fn === 'get_monthly_report') {
       const rows = demoMonthlyRowsFor(params?.p_student_id, params?.p_term_id);
       return { data: rows, error: null };
@@ -901,6 +1044,10 @@ function createMockSupabase(): SupabaseClient {
   };
 
   return {
+    // Version marker lets Vite HMR replace an older cached preview client
+    // after a new preview-only RPC is added. Without it, globalThis.__supabase__
+    // could keep the old mockRpc implementation until a full browser reload.
+    __marksMonitorPreviewVersion: 1,
     auth: mockAuth as any,
     from: mockFrom as any,
     rpc: mockRpc as any,
@@ -919,17 +1066,19 @@ function createMockSupabase(): SupabaseClient {
   } as unknown as SupabaseClient;
 }
 
-export const supabase: SupabaseClient = globalThis.__supabase__
-  ? globalThis.__supabase__
-  : isPlaceholderEnv
-    ? createMockSupabase()
-    : createClient(supabaseUrl, supabaseAnonKey, {
-        auth: {
-          persistSession: true,
-          autoRefreshToken: true,
-          detectSessionInUrl: true,
-        },
-      });
+const cachedSupabase = globalThis.__supabase__ as (SupabaseClient & { __marksMonitorPreviewVersion?: number }) | undefined;
+
+export const supabase: SupabaseClient = isPlaceholderEnv
+  ? cachedSupabase?.__marksMonitorPreviewVersion === 1
+    ? cachedSupabase
+    : createMockSupabase()
+  : cachedSupabase ?? createClient(supabaseUrl, supabaseAnonKey, {
+      auth: {
+        persistSession: true,
+        autoRefreshToken: true,
+        detectSessionInUrl: true,
+      },
+    });
 
 /**
  * A Supabase client pinned to a specific access token. Every REST request is
