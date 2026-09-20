@@ -23,6 +23,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
     { label: 'Manage Users', icon: Users, path: '/admin/users' },
     { label: 'Manage Students', icon: GraduationCap, path: '/admin/students' },
+    { label: 'Duplicate Students', icon: Users, path: '/admin/duplicate-students' },
     { label: 'Class Updates / Import', icon: ArrowLeftRight, path: '/admin/class-import' },
     { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
     { label: 'Unit Plans', icon: Layers, path: '/admin/unit-plans' },
@@ -81,6 +82,7 @@ const navItems: Record<Role, NavItem[]> = {
   ],
   supervisor: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
+    { label: 'Duplicate Students', icon: Users, path: '/admin/duplicate-students' },
     { label: 'My Classes', icon: GraduationCap, path: '/supervisor/students' },
     // "Submission Tracking" answers who has/hasn't submitted this week;
     // "Lesson Plans" is the detailed review page.
