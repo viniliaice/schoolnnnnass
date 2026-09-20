@@ -33,7 +33,44 @@ async function installMonitorSchema(db: PgTestDb) {
   `);
   const history = readMigration('20260906b_student_enrollments_history.sql');
   await db.exec(extractStatementContaining(history, 'FUNCTION public.class_students_for_term', '$$;'));
+  // Applied in production order: the original monitor, then the Quiz fix on top.
   await db.exec(readMigration('20260919_marks_entry_tracking.sql'));
+  await db.exec(readMigration('20260919b_marks_monitor_quiz_component.sql'));
+  await db.exec(readMigration('20260919c_marks_monitor_homework_ca_tile.sql'));
+}
+
+/**
+ * Seeds the reported scenario: a 42-student class whose August marks came from
+ * the class-specific bulk upload for `enteredCount` students. Bulk upload
+ * stores Homework as HW1, Classwork as CPW1, Attendance as ATTENDANCE and the
+ * monthly test (the Quiz component) as examType 'Quiz' + assessmentLabel 'MT'.
+ */
+async function seedBulkUploadedMonth(db: PgTestDb, options: { classSize: number; enteredCount: number }) {
+  const students = Array.from({ length: options.classSize }, (_, index) => {
+    const n = index + 1;
+    return `('g2c-${n}','Grade Two Student ${String(n).padStart(2, '0')}','Grade 2-C',NULL)`;
+  }).join(',');
+  const enrollments = Array.from({ length: options.classSize }, (_, index) => {
+    const n = index + 1;
+    return `('enr-g2c-${n}','g2c-${n}','Grade 2-C','ay-1','term-1','2026-08-01','backfill')`;
+  }).join(',');
+  const exams = Array.from({ length: options.enteredCount }, (_, index) => {
+    const s = `g2c-${index + 1}`;
+    const row = (id: string, examType: string, label: string, total: number, score: number) =>
+      `('${id}-${s}','${s}','english','English','${examType}','${label}','term-1','August','pending','scored','2026-08-20','2026-08-20T10:00:00Z','teacher-1',${total},${score})`;
+    return [
+      row('hw', 'Homework', 'HW1', 5, 4),
+      row('cw', 'Classwork', 'CPW1', 15, 12),
+      row('att', 'Attendance', 'ATTENDANCE', 20, 18),
+      row('mt', 'Quiz', 'MT', 20, 15),
+    ].join(',');
+  }).join(',');
+  await db.exec(`
+    INSERT INTO public.students(id,name,"className",transport) VALUES ${students};
+    INSERT INTO public.student_enrollments(id,"studentId","className","academicYearId","termId","effectiveFrom",reason) VALUES ${enrollments};
+    INSERT INTO public.class_subjects(id,"className","subjectId","teacherId") VALUES ('cs-2c-english','Grade 2-C','english','teacher-1');
+    INSERT INTO public.exams(id,"studentId","subjectId",subject,"examType","assessmentLabel","termId",month,status,"entryState",date,"createdAt","teacherId",total,score) VALUES ${exams};
+  `);
 }
 
 async function seed(db: PgTestDb) {
@@ -79,10 +116,10 @@ async function seed(db: PgTestDb) {
   `);
 }
 
-async function monitor(db: PgTestDb, scope: string, className: string | null = null) {
+async function monitor(db: PgTestDb, scope: string, className: string | null = null, month = 'October') {
   const { rows } = await db.query<any>(
     `SELECT * FROM public.monitor_marks_entries($1,$2,$3,$4,$5,$6,$7)`,
-    ['ay-1', 'term-1', scope, 'October', null, className, null],
+    ['ay-1', 'term-1', scope, month, null, className, null],
   );
   return rows;
 }
@@ -148,7 +185,7 @@ d('monitor_marks_entries — real Postgres via PGlite', () => {
     expect(new Date(row.last_updated).toISOString()).toBe('2026-10-11T10:00:00.000Z');
   });
 
-  it('reuses the existing monthly coursework rule and keeps MT in the midterm scope', async () => {
+  it('reuses the existing monthly coursework rule, counts every Quiz record, and keeps MT visible to midterm', async () => {
     await db.setAuthUid(AUTH_ADMIN);
     await db.exec('DELETE FROM public.exams');
     await db.exec(`
@@ -164,20 +201,162 @@ d('monitor_marks_entries — real Postgres via PGlite', () => {
     const monthly = (await monitor(db, 'monthly', 'Grade 5-A'))[0];
     expect(monthly).toMatchObject({
       expected_students: 3,
+      // s-1 (CA + Quiz) and s-2 (Homework + Classwork + Quiz) are complete;
+      // s-3 has a Quiz (bulk MT) but no coursework, so it stays missing.
       entered_students: 2,
       ca_entered: 1,
       homework_entered: 1,
+      homework_ca_entered: 2, // s-1 via CA, s-2 via Homework: two students
       classwork_entered: 1,
-      quiz_entered: 2,
+      quiz_entered: 3,
       coursework_complete: false,
-      quiz_complete: false,
+      quiz_complete: true,
       completion_status: 'in_progress',
     });
-    expect(Number(monthly.percentage)).toBeCloseTo(50, 2);
+    expect(monthly.missing_students).toEqual([{ id: 's-3', name: 'Cumar Omar' }]);
+    // Existing blended rule: (max(1/3, (1/3 + 1/3) / 2) + 3/3) / 2 = 66.67%.
+    expect(Number(monthly.percentage)).toBeCloseTo(66.67, 2);
 
     const midterm = (await monitor(db, 'midterm', 'Grade 5-A'))[0];
     expect(midterm.entered_students).toBe(2); // explicit Midterm + Quiz/MT are both supported
     expect(midterm.missing_students).toEqual([{ id: 's-1', name: 'Ayaan Ali' }]);
+  });
+
+  it('shows the coursework behind a legacy CA month in the Homework (CA) count', async () => {
+    // Manual entry (UploadResults) still writes examType 'CA' — it is the
+    // form's default type. The completion rule and percentage honour those
+    // rows, so before 20260919c such a month read "Complete · 100%" next to
+    // "Homework (CA) 0/3": the coursework that made it complete was invisible
+    // in the only coursework tile.
+    await db.setAuthUid(AUTH_ADMIN);
+    await db.exec('DELETE FROM public.exams');
+    await db.exec(`
+      INSERT INTO public.exams(id,"studentId","subjectId",subject,"examType","assessmentLabel","termId",month,status,"entryState",date,"createdAt","teacherId",total,score) VALUES
+        ('ca-1','s-1','english','English','CA',NULL,'term-1','October','approved','scored','2026-10-01','2026-10-01T10:00:00Z','teacher-1',10,8),
+        ('ca-2','s-2','english','English','CA',NULL,'term-1','October','approved','scored','2026-10-01','2026-10-01T10:01:00Z','teacher-1',10,7),
+        ('ca-3','s-3','english','English','CA',NULL,'term-1','October','approved','scored','2026-10-01','2026-10-01T10:02:00Z','teacher-1',10,9),
+        ('quiz-1','s-1','english','English','Quiz',NULL,'term-1','October','approved','scored','2026-10-04','2026-10-04T10:00:00Z','teacher-1',20,16),
+        ('quiz-2','s-2','english','English','Quiz',NULL,'term-1','October','approved','scored','2026-10-04','2026-10-04T10:01:00Z','teacher-1',20,15),
+        ('quiz-3','s-3','english','English','Quiz',NULL,'term-1','October','approved','scored','2026-10-04','2026-10-04T10:02:00Z','teacher-1',20,14);
+    `);
+    const row = (await monitor(db, 'monthly', 'Grade 5-A'))[0];
+    expect(row).toMatchObject({
+      expected_students: 3,
+      entered_students: 3,
+      ca_entered: 3,
+      homework_entered: 0,
+      homework_ca_entered: 3, // the Homework (CA) tile now shows the CA coursework
+      classwork_entered: 0,
+      quiz_entered: 3,
+      coursework_complete: true,
+      quiz_complete: true,
+      monthly_complete_students: 3,
+      completion_status: 'complete',
+    });
+    expect(Number(row.percentage)).toBeCloseTo(100, 2);
+    expect(row.missing_students).toEqual([]);
+  });
+
+  it('folds legacy CA records into the Homework (CA) count once per student', async () => {
+    await db.setAuthUid(AUTH_ADMIN);
+    await db.exec('DELETE FROM public.exams');
+    await db.exec(`
+      INSERT INTO public.exams(id,"studentId","subjectId",subject,"examType","assessmentLabel","termId",month,status,"entryState",date,"createdAt","teacherId",total,score) VALUES
+        ('ca-1','s-1','english','English','CA',NULL,'term-1','October','approved','scored','2026-10-01','2026-10-01T10:00:00Z','teacher-1',10,8),
+        ('ca-2','s-2','english','English','CA',NULL,'term-1','October','approved','scored','2026-10-01','2026-10-01T10:01:00Z','teacher-1',10,7),
+        ('hw-2','s-2','english','English','Homework','HW1','term-1','October','approved','scored','2026-10-02','2026-10-02T10:00:00Z','teacher-1',5,4),
+        ('quiz-1','s-1','english','English','Quiz',NULL,'term-1','October','approved','scored','2026-10-04','2026-10-04T10:00:00Z','teacher-1',20,16),
+        ('quiz-2','s-2','english','English','Quiz',NULL,'term-1','October','approved','scored','2026-10-04','2026-10-04T10:01:00Z','teacher-1',20,15),
+        ('quiz-3','s-3','english','English','Quiz',NULL,'term-1','October','approved','scored','2026-10-04','2026-10-04T10:02:00Z','teacher-1',20,14);
+    `);
+    const row = (await monitor(db, 'monthly', 'Grade 5-A'))[0];
+    expect(row).toMatchObject({
+      expected_students: 3,
+      ca_entered: 2,
+      homework_entered: 1,
+      // s-2 has both a CA and a Homework record but is one student: the
+      // per-student union is 2, never the naive sum 3.
+      homework_ca_entered: 2,
+      quiz_entered: 3,
+      entered_students: 2, // s-3 has a quiz but no coursework
+      coursework_complete: false,
+      completion_status: 'in_progress',
+    });
+    expect(row.missing_students).toEqual([{ id: 's-3', name: 'Cumar Omar' }]);
+    // Unchanged blended rule: (max(2/3, (1/3 + 0) / 2) + 3/3) / 2 = 83.33%.
+    expect(Number(row.percentage)).toBeCloseTo(83.33, 2);
+  });
+
+  it('detects bulk-uploaded MT quizzes as the monthly Quiz component instead of reporting 0', async () => {
+    // ENGLISH · Grade 2-C · August: 42 on the roster, 34 bulk uploaded.
+    await db.setAuthUid(AUTH_ADMIN);
+    await db.exec('DELETE FROM public.exams');
+    await seedBulkUploadedMonth(db, { classSize: 42, enteredCount: 34 });
+
+    const row = (await monitor(db, 'monthly', 'Grade 2-C', 'August'))[0];
+    expect(row).toMatchObject({
+      assignment_id: 'cs-2c-english',
+      expected_students: 42,
+      homework_entered: 34,
+      homework_ca_entered: 34, // no CA rows: the union equals the homework count
+      classwork_entered: 34,
+      quiz_entered: 34, // previously 0: every Quiz/MT row was filtered out
+      attendance_entered: 34,
+      entered_students: 34,
+      monthly_complete_students: 34,
+      coursework_complete: false,
+      quiz_complete: false,
+      completion_status: 'in_progress',
+    });
+    expect(row.quiz_entered).not.toBe(0);
+    expect(row.missing_students).toHaveLength(8);
+    expect(row.missing_students.map((student: { id: string }) => student.id)).toEqual(
+      Array.from({ length: 8 }, (_, index) => `g2c-${35 + index}`),
+    );
+    // Existing monitor rule, unchanged: ((34/42 + 34/42) / 2 + 34/42) / 2 = 80.95%.
+    expect(Number(row.percentage)).toBeCloseTo(80.95, 2);
+  });
+
+  it('reaches complete once every roster student has coursework and a quiz, and the quiz-only scope agrees', async () => {
+    await db.setAuthUid(AUTH_ADMIN);
+    await db.exec('DELETE FROM public.exams');
+    await seedBulkUploadedMonth(db, { classSize: 42, enteredCount: 42 });
+
+    const monthly = (await monitor(db, 'monthly', 'Grade 2-C', 'August'))[0];
+    expect(monthly).toMatchObject({
+      expected_students: 42,
+      entered_students: 42,
+      quiz_entered: 42,
+      coursework_complete: true,
+      quiz_complete: true,
+      completion_status: 'complete',
+      missing_students: [],
+    });
+    expect(Number(monthly.percentage)).toBe(100);
+
+    const quizScope = (await monitor(db, 'quiz', 'Grade 2-C', 'August'))[0];
+    expect(quizScope).toMatchObject({ expected_students: 42, entered_students: 42, completion_status: 'complete' });
+  });
+
+  it('counts a student once when both a plain Quiz and an MT quiz exist, and still requires coursework', async () => {
+    await db.setAuthUid(AUTH_ADMIN);
+    await db.exec('DELETE FROM public.exams');
+    await db.exec(`
+      INSERT INTO public.exams(id,"studentId","subjectId",subject,"examType","assessmentLabel","termId",month,status,"entryState",date,"createdAt","teacherId",total,score) VALUES
+        ('quiz-plain-1','s-1','english','English','Quiz',NULL,'term-1','October','approved','scored','2026-10-04','2026-10-04T10:00:00Z','teacher-1',20,16),
+        ('quiz-mt-1','s-1','english','English','Quiz','MT','term-1','October','pending','scored','2026-10-05','2026-10-05T10:00:00Z','teacher-1',20,15);
+    `);
+    const row = (await monitor(db, 'monthly', 'Grade 5-A'))[0];
+    expect(row).toMatchObject({
+      expected_students: 3,
+      quiz_entered: 1,
+      homework_entered: 0,
+      classwork_entered: 0,
+      entered_students: 0,
+      completion_status: 'in_progress',
+    });
+    // Quiz alone is half of the blended rule: (0 + 1/3) / 2 = 16.67%.
+    expect(Number(row.percentage)).toBeCloseTo(16.67, 2);
   });
 
   it('denies anonymous calls and does not make an unassigned teacher expected', async () => {

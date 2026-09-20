@@ -449,17 +449,20 @@ function demoMarksMonitorRows(params: any): any[] {
   const selectedClass = String(params?.p_class_name ?? '').trim();
   const selectedSubject = String(params?.p_subject_id ?? '').trim();
 
+  // Mirrors 20260919b_marks_monitor_quiz_component.sql and
+  // 20260919c_marks_monitor_homework_ca_tile.sql: every Quiz row is the
+  // monthly Quiz component (including bulk-uploaded MT), Midterm still sees
+  // Midterm rows plus Quiz/MT rows, and the Homework (CA) count folds legacy
+  // CA records in (homework_ca_entered below).
   const inScope = (exam: any) => {
-    if (scope === 'monthly') return ['CA', 'Homework', 'Classwork', 'Quiz', 'Attendance'].includes(exam.examType)
-      && String(exam.assessmentLabel ?? '').trim().toUpperCase() !== 'MT';
+    if (scope === 'monthly') return ['CA', 'Homework', 'Classwork', 'Quiz', 'Attendance'].includes(exam.examType);
     if (scope === 'midterm') return exam.examType === 'Midterm'
       || (exam.examType === 'Quiz' && String(exam.assessmentLabel ?? '').trim().toUpperCase() === 'MT');
     if (scope === 'final') return exam.examType === 'Final';
     if (scope === 'ca') return exam.examType === 'CA';
     if (scope === 'homework') return exam.examType === 'Homework';
     if (scope === 'classwork') return exam.examType === 'Classwork';
-    if (scope === 'quiz') return exam.examType === 'Quiz'
-      && String(exam.assessmentLabel ?? '').trim().toUpperCase() !== 'MT';
+    if (scope === 'quiz') return exam.examType === 'Quiz';
     if (scope === 'attendance') return exam.examType === 'Attendance';
     if (scope === 'discipline') return exam.examType === 'Discipline';
     return false;
@@ -501,6 +504,12 @@ function demoMarksMonitorRows(params: any): any[] {
       const count = (key: 'ca' | 'homework' | 'classwork' | 'quiz' | 'attendance') => expectedStudents.filter((student: any) => flags.get(student.id)?.[key]).length;
       const caEntered = count('ca');
       const homeworkEntered = count('homework');
+      // Mirrors 20260919c: Homework (CA) component coverage — students with a
+      // Homework record or a legacy CA record, once per student.
+      const homeworkCaEntered = expectedStudents.filter((student: any) => {
+        const flag = flags.get(student.id);
+        return !!flag && (flag.homework || flag.ca);
+      }).length;
       const classworkEntered = count('classwork');
       const quizEntered = count('quiz');
       const attendanceEntered = count('attendance');
@@ -549,6 +558,7 @@ function demoMarksMonitorRows(params: any): any[] {
         last_updated: lastUpdated,
         ca_entered: caEntered,
         homework_entered: homeworkEntered,
+        homework_ca_entered: homeworkCaEntered,
         classwork_entered: classworkEntered,
         quiz_entered: quizEntered,
         attendance_entered: attendanceEntered,

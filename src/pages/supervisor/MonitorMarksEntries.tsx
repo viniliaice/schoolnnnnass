@@ -186,7 +186,7 @@ function EntryDetails({ row, onClose }: { row: MarksEntryRow; onClose: () => voi
             <CompletionBar row={row} />
             {monthly && (
               <p className="mt-3 text-xs leading-5 text-slate-500">
-                Monthly completion follows the existing rule: coursework is CA for every student or Homework plus Classwork for every student, and Quiz for every student. The percentage is the same blended component coverage used by the existing teacher monitor.
+                Monthly completion follows the existing rule: coursework is CA for every student or Homework plus Classwork for every student, and Quiz for every student. Homework (CA) counts Homework records together with legacy CA records; Quiz counts every quiz record, including bulk-uploaded monthly tests labelled MT. The percentage is the same blended component coverage used by the existing teacher monitor.
               </p>
             )}
           </div>
@@ -199,9 +199,8 @@ function EntryDetails({ row, onClose }: { row: MarksEntryRow; onClose: () => voi
           </div>
 
           {monthly && (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-              <DetailMetric label="CA" value={`${row.caEntered}/${row.expectedStudents}`} />
-              <DetailMetric label="Homework" value={`${row.homeworkEntered}/${row.expectedStudents}`} />
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4" data-testid="monthly-components">
+              <DetailMetric label="Homework (CA)" value={`${row.homeworkEntered}/${row.expectedStudents}`} />
               <DetailMetric label="Classwork" value={`${row.classworkEntered}/${row.expectedStudents}`} />
               <DetailMetric label="Quiz" value={`${row.quizEntered}/${row.expectedStudents}`} />
               <DetailMetric label="Attendance" value={`${row.attendanceEntered}/${row.expectedStudents}`} />
@@ -390,7 +389,7 @@ export function MonitorMarksEntries() {
           </div>
         </div>
         {examScope === 'monthly' && (
-          <p className="mt-3 text-xs leading-5 text-slate-500">Monthly uses the existing coursework rule: CA, or Homework plus Classwork, together with Quiz. The MT assessment label is tracked under Midterm so it is not counted twice.</p>
+          <p className="mt-3 text-xs leading-5 text-slate-500">Monthly uses the existing coursework rule: CA, or Homework plus Classwork, together with Quiz. Homework (CA) counts Homework and legacy CA records; every quiz record counts toward Quiz, including bulk-uploaded monthly tests labelled MT, matching the monthly report.</p>
         )}
       </section>
 

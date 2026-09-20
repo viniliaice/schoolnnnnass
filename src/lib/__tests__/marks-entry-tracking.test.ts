@@ -7,6 +7,7 @@ import {
   sortMarksEntryRows,
   summarizeMarksEntryRows,
   type MarksEntryRow,
+  type RawMarksEntryRow,
 } from '../marksEntryTracking';
 
 function row(overrides: Partial<MarksEntryRow> = {}): MarksEntryRow {
@@ -27,7 +28,6 @@ function row(overrides: Partial<MarksEntryRow> = {}): MarksEntryRow {
     percentage: 0,
     status: 'not_started',
     lastUpdated: null,
-    caEntered: 0,
     homeworkEntered: 0,
     classworkEntered: 0,
     quizEntered: 0,
@@ -110,6 +110,109 @@ describe('marks-entry-tracking — derived row semantics', () => {
     // also protects summary cards if a legacy join ever repeats an assignment.
     expect(rows).toHaveLength(2);
     expect(new Set(rows.map((entry) => entry.assignmentId)).size).toBe(2);
+  });
+});
+
+describe('marks-entry-tracking — monthly components (Homework is the CA component)', () => {
+  // The exact snake_case shape monitor_marks_entries returns for
+  // ENGLISH · Kayse Maxamad · Grade 2-C · August after 20260919b/20260919c.
+  const rpcRow: RawMarksEntryRow = {
+    assignment_id: 'cs-2c-english',
+    teacher_id: 'teacher-1',
+    teacher_name: 'Kayse Maxamad',
+    class_name: 'Grade 2-C',
+    subject_id: 'english',
+    subject_name: 'ENGLISH',
+    academic_year_id: 'ay-1',
+    term_id: 'term-1',
+    exam_scope: 'monthly',
+    month: 'August',
+    expected_students: 42,
+    entered_students: 34,
+    missing_students: [{ id: 'g2c-35', name: 'Student 35' }],
+    percentage: '80.95',
+    completion_status: 'in_progress',
+    last_updated: '2026-08-20T10:00:00+00:00',
+    ca_entered: 0,
+    homework_entered: 34,
+    homework_ca_entered: 34,
+    classwork_entered: 34,
+    quiz_entered: 34,
+    attendance_entered: 34,
+    coursework_complete: false,
+    quiz_complete: false,
+    monthly_complete_students: 34,
+  };
+
+  it('carries the entered Quiz count through to the page row', () => {
+    const normalized = normalizeMarksEntryRow(rpcRow);
+    expect(normalized).toMatchObject({
+      expectedStudents: 42,
+      enteredStudents: 34,
+      homeworkEntered: 34,
+      classworkEntered: 34,
+      quizEntered: 34,
+      attendanceEntered: 34,
+      percentage: 80.95,
+      status: 'in_progress',
+    });
+    expect(normalized.quizEntered).not.toBe(0);
+  });
+
+  it('does not expose a separate CA count even when the RPC returns one', () => {
+    const normalized = normalizeMarksEntryRow({ ...rpcRow, ca_entered: 42 });
+    expect(normalized).not.toHaveProperty('caEntered');
+    expect(normalized).not.toHaveProperty('ca_entered');
+    // ca_entered alone never feeds the tile: only the RPC's per-student union
+    // column (homework_ca_entered) may fold legacy CA records in.
+    expect(normalized.homeworkEntered).toBe(34);
+  });
+
+  it('maps the Homework (CA) union count (Homework or legacy CA, once per student)', () => {
+    const normalized = normalizeMarksEntryRow({
+      ...rpcRow,
+      ca_entered: 12,
+      homework_entered: 34,
+      homework_ca_entered: 40,
+    });
+    expect(normalized.homeworkEntered).toBe(40);
+    expect(normalized).not.toHaveProperty('caEntered');
+  });
+
+  it('falls back to the plain homework count when the RPC predates 20260919c', () => {
+    const legacyRow: RawMarksEntryRow = { ...rpcRow };
+    delete legacyRow.homework_ca_entered;
+    const normalized = normalizeMarksEntryRow(legacyRow);
+    expect(normalized.homeworkEntered).toBe(34);
+  });
+
+  it('keeps the RPC completion flags and percentage as the source of monthly completeness', () => {
+    const complete = normalizeMarksEntryRow({
+      ...rpcRow,
+      entered_students: 42,
+      homework_entered: 42,
+      classwork_entered: 42,
+      quiz_entered: 42,
+      attendance_entered: 42,
+      percentage: 100,
+      coursework_complete: true,
+      quiz_complete: true,
+      completion_status: 'complete',
+      missing_students: [],
+    });
+    expect(complete.status).toBe('complete');
+    expect(complete.percentage).toBe(100);
+
+    const quizMissing = normalizeMarksEntryRow({
+      ...rpcRow,
+      quiz_entered: 0,
+      entered_students: 0,
+      percentage: '40.48',
+      completion_status: 'in_progress',
+    });
+    expect(quizMissing.status).toBe('in_progress');
+    expect(quizMissing.quizEntered).toBe(0);
+    expect(quizMissing.percentage).toBe(40.48);
   });
 });
 

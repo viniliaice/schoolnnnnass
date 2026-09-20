@@ -44,7 +44,6 @@ function monitorRow(overrides: Partial<MarksEntryRow> = {}): MarksEntryRow {
     percentage: 66.67,
     status: 'in_progress',
     lastUpdated: '2026-09-18T12:00:00Z',
-    caEntered: 0,
     homeworkEntered: 0,
     classworkEntered: 0,
     quizEntered: 0,
@@ -146,6 +145,62 @@ describe('MonitorMarksEntries', () => {
     expect((host.querySelector('#marks-month') as HTMLSelectElement).disabled).toBe(true);
     const latestQuery = useMarksEntryTracking.mock.calls.at(-1)?.[0] as { examScope: string; month: string | null };
     expect(latestQuery).toMatchObject({ examScope: 'final', month: null });
+  });
+
+  it('shows monthly Entry Details as Homework (CA), Classwork, Quiz, Attendance with the entered quiz count', async () => {
+    // ENGLISH — Kayse Maxamad · Grade 2-C · August, after the RPC fix.
+    const monthlyRow = monitorRow({
+      assignmentId: 'cs-2c-english',
+      teacherName: 'Kayse Maxamad',
+      className: 'Grade 2-C',
+      subjectName: 'ENGLISH',
+      examScope: 'monthly',
+      month: 'August',
+      expectedStudents: 42,
+      enteredStudents: 34,
+      monthlyCompleteStudents: 34,
+      missingStudents: Array.from({ length: 8 }, (_, index) => ({ id: `g2c-${35 + index}`, name: `Student ${35 + index}` })),
+      percentage: 80.95,
+      status: 'in_progress',
+      homeworkEntered: 34,
+      classworkEntered: 34,
+      quizEntered: 34,
+      attendanceEntered: 34,
+    });
+    useMarksEntryTracking.mockReturnValue({ data: [monthlyRow], isLoading: false, error: null });
+    const { host } = await mount();
+
+    const viewButton = [...host.querySelectorAll('button')].find((button) => button.textContent?.includes('View details'));
+    expect(viewButton).toBeDefined();
+    await act(async () => { viewButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
+
+    const dialog = host.querySelector('[role="dialog"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.textContent).toContain('ENGLISH');
+    expect(dialog?.textContent).toContain('Kayse Maxamad · Grade 2-C');
+    expect(dialog?.textContent).toContain('Monthly coursework + quiz · August');
+
+    const components = dialog?.querySelector('[data-testid="monthly-components"]');
+    expect(components).not.toBeNull();
+    const tiles = [...(components?.children ?? [])].map((tile) => ({
+      label: tile.querySelector('p')?.textContent ?? '',
+      value: tile.querySelectorAll('p')[1]?.textContent ?? '',
+    }));
+    // Exactly four components: Homework is the CA component, no separate CA tile.
+    expect(tiles).toEqual([
+      { label: 'Homework (CA)', value: '34/42' },
+      { label: 'Classwork', value: '34/42' },
+      { label: 'Quiz', value: '34/42' },
+      { label: 'Attendance', value: '34/42' },
+    ]);
+    expect(tiles.map((tile) => tile.label)).not.toContain('CA');
+    expect(tiles.map((tile) => tile.label)).not.toContain('Homework');
+    expect(dialog?.textContent).not.toContain('0/42');
+
+    // Overall completion still follows the existing blended monitor rule.
+    expect(dialog?.textContent).toContain('80.95%');
+    expect(dialog?.textContent).toContain('34/42 students');
+    expect(dialog?.textContent).toContain('8 not complete');
   });
 
   it('renders an explicit empty state when the secured query returns no assignments', async () => {
