@@ -36,6 +36,10 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   // apply_student_class_import RPC (which re-checks the role in SQL).
   '/admin/class-import': ['admin'],
 
+  // Duplicate student merge review. Admin + supervisor may view dry-run,
+  // but only admin may execute actual merge (enforced in SQL).
+  '/admin/duplicate-students': ['admin', 'supervisor'],
+
   // Lesson Plan Review. Admin reviews plans exactly like a supervisor: the
   // database already grants both roles identical rights (`admin_all_plans` RLS
   // plus the `('supervisor','admin')` checks inside decide_lesson_plan_review,
