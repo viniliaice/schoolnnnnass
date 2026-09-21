@@ -799,7 +799,14 @@ export function DuplicateStudents() {
                 {/* Exam conflicts */}
                 {conflicts && conflicts.exams.length>0 && (
                   <div className="space-y-3">
-                    <h4 className="font-bold">{conflicts.exams.length} EXAM CONFLICTS REQUIRE RESOLUTION <span className="ml-2 font-normal text-sm">{examResMap.size}/{conflicts.exams.length} resolved</span></h4>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <h4 className="font-bold">{conflicts.exams.length} EXAM CONFLICTS REQUIRE RESOLUTION <span className="ml-2 font-normal text-sm">{examResMap.size}/{conflicts.exams.length} resolved</span></h4>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button type="button" onClick={()=> { const m=new Map<number,'canonical'|'duplicate'>(); conflicts.exams.forEach((_,i)=>m.set(i,'canonical')); setExamResMap(m); }} className="rounded-full border border-emerald-300 bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-800 hover:bg-emerald-100">{examResMap.size===conflicts.exams.length && Array.from(examResMap.values()).every(v=>v==='canonical') ? '✓ ' : ''}Keep all {conflicts.exams.length} from Record A</button>
+                        <button type="button" onClick={()=> { const m=new Map<number,'canonical'|'duplicate'>(); conflicts.exams.forEach((_,i)=>m.set(i,'duplicate')); setExamResMap(m); }} className="rounded-full border border-indigo-300 bg-indigo-50 px-3 py-1.5 text-xs font-bold text-indigo-800 hover:bg-indigo-100">{examResMap.size===conflicts.exams.length && Array.from(examResMap.values()).every(v=>v==='duplicate') ? '✓ ' : ''}Keep all {conflicts.exams.length} from Record B</button>
+                        {examResMap.size>0 && <button type="button" onClick={()=> setExamResMap(new Map())} className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-50">Clear ({examResMap.size})</button>}
+                      </div>
+                    </div>
                     <button type="button" onClick={()=> setResolveExpanded(!resolveExpanded)} className="text-sm font-bold text-indigo-600">{resolveExpanded ? 'Hide' : 'Review Exam Conflicts'}</button>
                     {resolveExpanded && (
                       <div className="space-y-3 max-h-[600px] overflow-auto border rounded-xl p-3 bg-white">
