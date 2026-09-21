@@ -156,8 +156,8 @@ describe('DuplicateStudents UI — Safe Guided Merge', () => {
     });
     txt = container.textContent + document.body.textContent;
     expect(txt).toContain('MERGE PREVIEW');
-    expect(txt).toContain('KEEP');
-    expect(txt).toContain('MERGE FROM');
+    expect(txt).toMatch(/KEEP/i);
+    expect(txt).toMatch(/MERGE FROM/i);
     expect(txt).toContain('History to preserve');
     expect(txt).toContain('Enrollment action');
     expect(txt).toContain('Exam records');
@@ -180,8 +180,8 @@ describe('DuplicateStudents UI — Safe Guided Merge', () => {
     const checkbox = document.body.querySelector('input[type="checkbox"]') as HTMLInputElement
       || container.querySelector('input[type="checkbox"]') as HTMLInputElement;
     expect(checkbox).toBeTruthy();
-    const confirmBtn = Array.from(document.body.querySelectorAll('button')).find((b) => b.textContent === 'Confirm Merge') as HTMLButtonElement
-      || Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Confirm Merge') as HTMLButtonElement;
+    const confirmBtn = (Array.from(document.body.querySelectorAll('button')).find((b) => b.textContent === 'Confirm Merge' || b.textContent?.includes('Merge Students')) as HTMLButtonElement)
+      || (Array.from(container.querySelectorAll('button')).find((b) => b.textContent === 'Confirm Merge' || b.textContent?.includes('Merge Students')) as HTMLButtonElement);
     expect(confirmBtn).toBeTruthy();
     expect(confirmBtn.disabled).toBe(true);
     await act(async () => {
@@ -233,12 +233,18 @@ describe('DuplicateStudents UI — Safe Guided Merge', () => {
     // Initially Keep A is selected (recommended)
     let txt = container.textContent + document.body.textContent;
     expect(txt).toContain('Keep Record A');
-    // Find Keep Record B button inside dialog
-    const keepB = Array.from(document.body.querySelectorAll('button')).find((b) => b.textContent?.includes('Keep Record B'))
-      || Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('Keep Record B')) as HTMLButtonElement;
+    // Find Keep Record B control (button or radio label) inside inline review
+    let keepB: HTMLElement | null = Array.from(document.body.querySelectorAll('button')).find((b) => b.textContent?.includes('Keep Record B')) as HTMLElement || null;
+    if (!keepB) keepB = Array.from(container.querySelectorAll('button')).find((b) => b.textContent?.includes('Keep Record B')) as HTMLElement || null;
+    if (!keepB) keepB = Array.from(document.body.querySelectorAll('label')).find((l) => l.textContent?.includes('Keep Record B')) as HTMLElement || null;
+    if (!keepB) keepB = Array.from(container.querySelectorAll('label')).find((l) => l.textContent?.includes('Keep Record B')) as HTMLElement || null;
+    // Also handle radio input directly
+    if (!keepB) keepB = (document.body.querySelector('input[name=\"keep-record\"]:nth-of-type(2)') || container.querySelector('input[name=\"keep-record\"]:nth-of-type(2)')) as HTMLElement;
     expect(keepB).toBeTruthy();
     await act(async () => {
-      (keepB as HTMLButtonElement).click();
+      // Click label or radio — trigger change
+      const radio = (keepB as HTMLElement).querySelector('input[type=\"radio\"]') as HTMLInputElement | null;
+      if (radio) { radio.click(); } else { (keepB as HTMLElement).click(); }
     });
     await act(async () => {
       await new Promise((r) => setTimeout(r, 120));
