@@ -55,6 +55,19 @@ const demoStudents = [
   { id: 'stu-mohamed', name: 'Mohamed Farah', className: 'Grade 2-C', parentId: 'parent-3', createdAt: '2026-06-01', govId: 'MBK-2C-004', transport: 'Bus 1', parentPhone: '252634500000', familyId: '0003' },
   { id: 'stu-sara', name: 'Sara Abdullahi', className: 'Grade 1-A', parentId: 'parent-1', createdAt: '2026-06-01', govId: 'MBK-1A-001', transport: 'Bus 2', parentPhone: '252634506719', familyId: '0004' },
   { id: 'stu-hassan', name: 'Hassan Jaamac', className: 'Grade 2-C', parentId: 'parent-no-email', createdAt: '2026-06-01', govId: 'MBK-2C-005', transport: 'Bus 2', parentPhone: '252634599999', familyId: '0005' },
+  // ── Duplicate Students demo groups ──────────────────────────────────────
+  // Axmed yaasiin ismaaciil — HIGH CONFIDENCE (parent assigned vs unassigned, same class, one Gov ID)
+  { id: 'stu-axmed-a', name: 'Axmed yaasiin ismaaciil', className: 'Grade 1-B', parentId: 'parent-1', createdAt: '2026-03-15T08:00:00Z', govId: '123456', transport: 'WALKER', parentPhone: '252634506719', familyId: '0010' },
+  { id: 'stu-axmed-b', name: 'Axmed yaasiin ismaaciil', className: 'Grade 1-B', parentId: null, createdAt: '2026-09-10T08:00:00Z', govId: null, transport: 'WALKER', parentPhone: null, familyId: null },
+  // Abshir Cabdi Maxamed — HIGH RISK exam conflicts (canonical 56, duplicate 55 matching)
+  { id: 'stu-abshir-a', name: 'Abshir Cabdi Maxamed', className: 'Grade 2-C', parentId: 'parent-2', createdAt: '2026-02-01T08:00:00Z', govId: 'MBK-2C-010', transport: 'Bus 1', parentPhone: '252634511111', familyId: '0011' },
+  { id: 'stu-abshir-b', name: 'Abshir Cabdi Maxamed', className: 'Grade 2-C', parentId: null, createdAt: '2026-08-20T08:00:00Z', govId: null, transport: 'Bus 1', parentPhone: null, familyId: null },
+  // Ahmed Mohamed — CRITICAL conflicting Gov IDs
+  { id: 'stu-ahmed-conf-a', name: 'Ahmed Mohamed', className: 'Grade 5-A', parentId: 'parent-1', createdAt: '2026-01-10T08:00:00Z', govId: '111', transport: 'Bus 2', parentPhone: '252634506719', familyId: '0012' },
+  { id: 'stu-ahmed-conf-b', name: 'Ahmed Mohamed', className: 'Grade 5-A', parentId: 'parent-2', createdAt: '2026-01-12T08:00:00Z', govId: '222', transport: 'Bus 2', parentPhone: '252634511111', familyId: '0013' },
+  // Leyla Hassan — SAME Gov ID strong match
+  { id: 'stu-samegov-a', name: 'Leyla Hassan', className: 'Grade 3-B', parentId: 'parent-3', createdAt: '2026-02-15T08:00:00Z', govId: '999888', transport: 'CAR', parentPhone: '252634500000', familyId: '0014' },
+  { id: 'stu-samegov-b', name: 'Leyla Hassan', className: 'Grade 3-B', parentId: null, createdAt: '2026-05-20T08:00:00Z', govId: '999888', transport: 'CAR', parentPhone: null, familyId: null },
 ];
 
 const demoProfiles: any[] = [
@@ -576,17 +589,101 @@ function createMockSupabase(): SupabaseClient {
   // through this store so a created lesson plan (or unit plan) is visible to
   // subsequent queries in the same preview session — the closest match to how
   // the real backend behaves without any network.
+  // Demo exams for duplicate merge preview (Axmed safe, Abshir blocked)
+  const demoDuplicateExams: any[] = (() => {
+    const exams: any[] = [];
+    // Abshir: canonical 56 exams, duplicate 55 matching identities (critical conflict)
+    // Generate 56 for canonical (stu-abshir-a) with varying subject/term, 55 matching for duplicate
+    for (let i = 0; i < 56; i++) {
+      exams.push({
+        id: `exam-abshir-a-${i}`,
+        studentId: 'stu-abshir-a',
+        subject: `Subject-${i % 5}`,
+        subjectId: `sub-${i % 5}`,
+        score: 15,
+        total: 20,
+        examType: 'Quiz',
+        assessmentLabel: `MT`,
+        termId: 'term-1',
+        month: 'September',
+        entryState: 'scored',
+        status: 'approved',
+        date: '2026-09-01',
+        createdAt: '2026-09-01T08:00:00Z',
+        teacherId: 'teacher-1',
+      });
+    }
+    for (let i = 0; i < 55; i++) {
+      exams.push({
+        id: `exam-abshir-b-${i}`,
+        studentId: 'stu-abshir-b',
+        subject: `Subject-${i % 5}`,
+        subjectId: `sub-${i % 5}`,
+        score: 14,
+        total: 20,
+        examType: 'Quiz',
+        assessmentLabel: `MT`,
+        termId: 'term-1',
+        month: 'September',
+        entryState: 'scored',
+        status: 'approved',
+        date: '2026-09-01',
+        createdAt: '2026-09-01T08:00:00Z',
+        teacherId: 'teacher-1',
+      });
+    }
+    // Axmed: canonical 0, duplicate 1 enrollment history etc — no exam conflicts
+    // Leyla same gov strong match — duplicate has 2 exams distinct from canonical 3 (no conflict)
+    for (let i = 0; i < 3; i++) {
+      exams.push({
+        id: `exam-leyla-a-${i}`,
+        studentId: 'stu-samegov-a',
+        subject: `Subject-${i}`,
+        subjectId: `sub-leyla-${i}`,
+        score: 18, total: 20, examType: 'Midterm', assessmentLabel: null, termId: 'term-1', month: 'September', entryState: 'scored', status: 'approved', date: '2026-09-02', createdAt: '2026-09-02T08:00:00Z', teacherId: 'teacher-1',
+      });
+    }
+    for (let i = 0; i < 2; i++) {
+      exams.push({
+        id: `exam-leyla-b-${i}`,
+        studentId: 'stu-samegov-b',
+        subject: `Subject-${10 + i}`,
+        subjectId: `sub-leyla-${10 + i}`,
+        score: 16, total: 20, examType: 'Midterm', assessmentLabel: null, termId: 'term-1', month: 'September', entryState: 'scored', status: 'approved', date: '2026-09-03', createdAt: '2026-09-03T08:00:00Z', teacherId: 'teacher-1',
+      });
+    }
+    return exams;
+  })();
+
+  const demoDuplicateAttendance: any[] = [];
+  const demoDuplicateHomework: any[] = [];
+  const demoDuplicatePromotions: any[] = [
+    { id: 'promo-axmed-a', studentId: 'stu-axmed-a', fromClass: 'Grade 1-A', toClass: 'Grade 1-B', academicYearId: 'ay-2026', createdAt: '2026-09-01' },
+  ];
+  const demoDuplicateEnrollments: any[] = [
+    { id: 'enr-axmed-a-open', studentId: 'stu-axmed-a', className: 'Grade 1-B', academicYearId: 'ay-2026', effectiveFrom: '2026-06-01', effectiveTo: null, reason: 'promotion', sourceRef: 'demo' },
+    { id: 'enr-axmed-b-open', studentId: 'stu-axmed-b', className: 'Grade 1-B', academicYearId: 'ay-2026', effectiveFrom: '2026-09-10', effectiveTo: null, reason: 'import', sourceRef: 'demo' },
+    { id: 'enr-abshir-a-open', studentId: 'stu-abshir-a', className: 'Grade 2-C', academicYearId: 'ay-2026', effectiveFrom: '2026-06-01', effectiveTo: null, reason: 'promotion', sourceRef: 'demo' },
+    { id: 'enr-abshir-b-open', studentId: 'stu-abshir-b', className: 'Grade 2-C', academicYearId: 'ay-2026', effectiveFrom: '2026-08-20', effectiveTo: null, reason: 'import', sourceRef: 'demo' },
+    { id: 'enr-ahmed-a-open', studentId: 'stu-ahmed-conf-a', className: 'Grade 5-A', academicYearId: 'ay-2026', effectiveFrom: '2026-06-01', effectiveTo: null, reason: 'promotion', sourceRef: 'demo' },
+    { id: 'enr-ahmed-b-open', studentId: 'stu-ahmed-conf-b', className: 'Grade 5-A', academicYearId: 'ay-2026', effectiveFrom: '2026-06-01', effectiveTo: null, reason: 'promotion', sourceRef: 'demo' },
+    { id: 'enr-leyla-a-open', studentId: 'stu-samegov-a', className: 'Grade 3-B', academicYearId: 'ay-2026', effectiveFrom: '2026-06-01', effectiveTo: null, reason: 'promotion', sourceRef: 'demo' },
+    { id: 'enr-leyla-b-open', studentId: 'stu-samegov-b', className: 'Grade 3-B', academicYearId: 'ay-2026', effectiveFrom: '2026-06-01', effectiveTo: null, reason: 'promotion', sourceRef: 'demo' },
+  ];
+  const demoMergeAudits: any[] = [];
+
   const mockTables: Record<string, any[]> = {
     academic_years: [...demoAcademicYears],
     terms: [...demoTerms],
     students: [...demoStudents],
     profiles: [...demoProfiles],
     report_comments: [],
-    exams: [...demoParentExams],
+    exams: [...demoParentExams, ...demoDuplicateExams],
     announcement_recipients: [...demoParentAnnouncementRecipients],
-    homework: [...demoParentHomework],
-    attendance: [],
+    homework: [...demoParentHomework, ...demoDuplicateHomework],
+    attendance: [...demoDuplicateAttendance],
     quizzes: [],
+    quiz_attempts: [],
     grade_scales: [],
     report_config: [{ id: 'default', caWeight: 60, midtermWeight: 20, finalWeight: 20, caTypes: ['CA', 'Homework', 'Classwork', 'Quiz', 'Attendance'], updatedAt: new Date().toISOString() }],
     lesson_plans: [...demoLessonPlans],
@@ -597,6 +694,12 @@ function createMockSupabase(): SupabaseClient {
     unit_plans: [],
     subjects: [...demoSubjects],
     class_subjects: [...demoClassSubjects],
+    student_enrollments: [...demoDuplicateEnrollments],
+    student_promotions: [...demoDuplicatePromotions],
+    authorized_pickup_students: [],
+    release_log: [],
+    student_merge_audits: [...demoMergeAudits],
+    audit_logs: [],
   };
 
   // Helper to build a query chain that mimics supabase-js
@@ -1009,6 +1112,155 @@ function createMockSupabase(): SupabaseClient {
     }
     if (fn === 'get_family_pickups') {
       return { data: [], error: null };
+    }
+
+    // ── Duplicate Students — preview & merge (mock) ────────────────────────
+    const govKey = (v: string | null | undefined) => (v || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
+    const findStudent = (id: string) => mockTables.students.find((s: any) => s.id === id);
+    if (fn === 'get_duplicate_candidates') {
+      const map = new Map<string, { ids: string[]; className: string }>();
+      for (const s of mockTables.students as any[]) {
+        const norm = (s.name || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
+        const key = `${norm}|${s.className}`;
+        const entry: { ids: string[]; className: string } = map.get(key) || { ids: [], className: s.className };
+        (entry.ids as string[]).push(String(s.id));
+        map.set(key, entry);
+      }
+      const out: any[] = [];
+      for (const [key, v] of map.entries()) {
+        if (v.ids.length > 1) out.push({ group_key: key, student_ids: v.ids, class_name: v.className, member_count: v.ids.length });
+      }
+      return { data: out, error: null };
+    }
+    if (fn === 'preview_student_merge' || fn === 'preview_merge') {
+      const canId = params?.p_canonical_id ?? params?.p_canonicalId;
+      const dupId = params?.p_duplicate_id ?? params?.p_duplicateId;
+      const can = findStudent(canId);
+      const dup = findStudent(dupId);
+      if (!can || !dup) return { data: null, error: { message: 'Student not found', code: 'PGRST116' } };
+      const canExams = mockTables.exams.filter((e: any) => e.studentId === canId);
+      const dupExams = mockTables.exams.filter((e: any) => e.studentId === dupId);
+      // exam conflicts: same subjectId/examType/assessmentLabel/termId
+      let examConflicts = 0;
+      for (const d of dupExams) {
+        for (const c of canExams) {
+          const sameSub = (c.subjectId || null) === (d.subjectId || null);
+          const sameType = c.examType === d.examType;
+          const sameLabel = (c.assessmentLabel || null) === (d.assessmentLabel || null);
+          const sameTerm = (c.termId || null) === (d.termId || null);
+          if (sameSub && sameType && sameLabel && sameTerm) { examConflicts++; break; }
+        }
+      }
+      const canHasGov = !!can.govId;
+      const dupHasGov = !!dup.govId;
+      const sameGov = canHasGov && dupHasGov && govKey(can.govId) !== '' && govKey(can.govId) === govKey(dup.govId);
+      const govConflict = canHasGov && dupHasGov && govKey(can.govId) !== '' && govKey(dup.govId) !== '' && govKey(can.govId) !== govKey(dup.govId);
+      const bothHaveParents = !!can.parentId && !!dup.parentId;
+      const oneHasParent = !!can.parentId !== !!dup.parentId;
+      const canOpen = mockTables.student_enrollments.find((e: any) => e.studentId === canId && e.effectiveTo == null) || null;
+      const dupOpen = mockTables.student_enrollments.find((e: any) => e.studentId === dupId && e.effectiveTo == null) || null;
+      let blocked: string[] = [];
+      let canMerge = true;
+      let risk: string = 'low';
+      let evidence: string = 'possible';
+      if (govConflict) { blocked.push('gov_id_conflict'); canMerge = false; risk = 'critical'; evidence = 'conflicting'; }
+      else if (sameGov) { evidence = 'strong'; risk = 'low'; }
+      else if (bothHaveParents && !sameGov) { blocked.push('both_have_parents'); canMerge = false; risk = 'critical'; evidence = 'conflicting'; }
+      else if (oneHasParent) { evidence = 'strong'; risk = 'low'; }
+      else { evidence = 'possible'; risk = 'high'; }
+      if (examConflicts > 0) { blocked.push('exam_conflict'); canMerge = false; if (risk !== 'critical') risk = 'high'; evidence = 'conflicting'; }
+      // special case: Abshir pair must be blocked with exam conflict
+      // Axmed pair remains mergeable
+      const preview: any = {
+        canonical: { id: can.id, name: can.name, className: can.className, govId: can.govId, parentId: can.parentId, parentPhone: can.parentPhone, transport: can.transport, familyId: can.familyId, createdAt: can.createdAt },
+        duplicate: { id: dup.id, name: dup.name, className: dup.className, govId: dup.govId, parentId: dup.parentId, parentPhone: dup.parentPhone, transport: dup.transport, familyId: dup.familyId, createdAt: dup.createdAt },
+        counts: {
+          exams: { canonical: canExams.length, duplicate: dupExams.length, conflicts: examConflicts },
+          attendance: { canonical: mockTables.attendance.filter((a: any) => a.studentId === canId).length, duplicate: mockTables.attendance.filter((a: any) => a.studentId === dupId).length, conflicts: 0 },
+          homework: { canonical: mockTables.homework.filter((h: any) => h.studentId === canId).length, duplicate: mockTables.homework.filter((h: any) => h.studentId === dupId).length },
+          promotions: { canonical: mockTables.student_promotions.filter((p: any) => p.studentId === canId).length, duplicate: mockTables.student_promotions.filter((p: any) => p.studentId === dupId).length },
+          quizAttempts: { canonical: mockTables.quiz_attempts.filter((q: any) => q.studentId === canId).length, duplicate: mockTables.quiz_attempts.filter((q: any) => q.studentId === dupId).length, conflicts: 0 },
+          authorizedPickups: { canonical: mockTables.authorized_pickup_students.filter((x: any) => x.studentId === canId).length, duplicate: mockTables.authorized_pickup_students.filter((x: any) => x.studentId === dupId).length },
+          releaseLogs: { canonical: mockTables.release_log.filter((r: any) => r.studentId === canId).length, duplicate: mockTables.release_log.filter((r: any) => r.studentId === dupId).length, conflicts: 0 },
+          reportComments: { canonical: mockTables.report_comments.filter((r: any) => r.studentId === canId).length, duplicate: mockTables.report_comments.filter((r: any) => r.studentId === dupId).length },
+          enrollments: {
+            canonicalOpen: canOpen ? { className: canOpen.className, academicYearId: canOpen.academicYearId, effectiveFrom: canOpen.effectiveFrom } : null,
+            duplicateOpen: dupOpen ? { className: dupOpen.className, academicYearId: dupOpen.academicYearId, effectiveFrom: dupOpen.effectiveFrom } : null,
+            canonicalHistory: mockTables.student_enrollments.filter((e: any) => e.studentId === canId && e.effectiveTo != null).length,
+            duplicateHistory: mockTables.student_enrollments.filter((e: any) => e.studentId === dupId && e.effectiveTo != null).length,
+          },
+        },
+        enrollment: {
+          canonicalOpen: canOpen ? { className: canOpen.className, academicYearId: canOpen.academicYearId } : null,
+          duplicateOpen: dupOpen ? { className: dupOpen.className, academicYearId: dupOpen.academicYearId } : null,
+          action: dupOpen && canOpen && canOpen.className === dupOpen.className ? 'consolidate' : dupOpen ? 'transfer' : 'preserve_history',
+          willConsolidate: !!(dupOpen && canOpen && canOpen.className === dupOpen.className),
+          canMerge,
+        },
+        conflicts: { examConflicts, attendanceConflicts: 0, quizConflicts: 0, releaseConflicts: 0, govConflict, bothHaveParents, sameGov },
+        canMerge,
+        blockedReasons: blocked,
+        riskLevel: risk,
+        evidence,
+      };
+      return { data: preview, error: null };
+    }
+    if (fn === 'merge_duplicate_students' || fn === 'merge_students') {
+      const canId = params?.p_canonical_id ?? params?.p_canonicalId;
+      const dupId = params?.p_duplicate_id ?? params?.p_duplicateId;
+      const reason = params?.p_reason ?? null;
+      const can = findStudent(canId);
+      const dup = findStudent(dupId);
+      if (!can || !dup) return { data: null, error: { message: 'Student not found' } };
+      const canHasGov = !!can.govId;
+      const dupHasGov = !!dup.govId;
+      const govConflict = canHasGov && dupHasGov && govKey(can.govId) !== '' && govKey(dup.govId) !== '' && govKey(can.govId) !== govKey(dup.govId);
+      if (govConflict) return { data: null, error: { message: 'Merge blocked: different Government IDs' } };
+      const bothHaveParents = !!can.parentId && !!dup.parentId;
+      const sameGov = canHasGov && dupHasGov && govKey(can.govId) !== '' && govKey(can.govId) === govKey(dup.govId);
+      if (bothHaveParents && !sameGov) return { data: null, error: { message: 'Merge blocked: both records have different parents' } };
+      const canExams = mockTables.exams.filter((e: any) => e.studentId === canId);
+      const dupExams = mockTables.exams.filter((e: any) => e.studentId === dupId);
+      let examConflicts = 0;
+      for (const d of dupExams) for (const c of canExams) if ((c.subjectId||null)===(d.subjectId||null) && c.examType===d.examType && (c.assessmentLabel||null)===(d.assessmentLabel||null) && (c.termId||null)===(d.termId||null)) { examConflicts++; break; }
+      if (examConflicts > 0) return { data: null, error: { message: `Merge blocked: ${examConflicts} exam identity conflicts detected.` } };
+      // Preserve gov if canonical blank
+      if (!can.govId && dup.govId) {
+        can.govId = dup.govId;
+        dup.govId = null as any;
+      }
+      // Transfer enrollments: consolidate duplicate open if same class
+      const canOpen = mockTables.student_enrollments.find((e: any) => e.studentId === canId && e.effectiveTo == null);
+      const dupOpen = mockTables.student_enrollments.find((e: any) => e.studentId === dupId && e.effectiveTo == null);
+      if (dupOpen) {
+        if (canOpen && canOpen.className === dupOpen.className) {
+          mockTables.student_enrollments = mockTables.student_enrollments.filter((e: any) => e.id !== dupOpen.id);
+        } else {
+          dupOpen.studentId = canId;
+        }
+      }
+      // Transfer remaining enrollments
+      for (const e of mockTables.student_enrollments) if (e.studentId === dupId) e.studentId = canId;
+      // Transfer history tables
+      for (const t of ['exams','attendance','homework','student_promotions','quiz_attempts','report_comments','release_log'] as const) {
+        for (const r of mockTables[t] as any[]) if (r.studentId === dupId) r.studentId = canId;
+      }
+      // authorized_pickup_students
+      const toMove = mockTables.authorized_pickup_students.filter((x: any) => x.studentId === dupId);
+      for (const r of toMove) {
+        const exists = mockTables.authorized_pickup_students.some((x: any) => x.authorizedPickupId === r.authorizedPickupId && x.studentId === canId);
+        if (!exists) { r.studentId = canId; } else { mockTables.authorized_pickup_students = mockTables.authorized_pickup_students.filter((x: any) => x !== r); }
+      }
+      // Delete duplicate student
+      mockTables.students = mockTables.students.filter((s: any) => s.id !== dupId);
+      const auditId = `merge-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+      const before = { exams: { canonical: canExams.length, duplicate: dupExams.length } };
+      const after = { exams: mockTables.exams.filter((e: any) => e.studentId === canId).length };
+      const enrollmentAction = dupOpen && canOpen && canOpen.className === dupOpen.className ? { action: 'consolidate', canonicalOpen: canOpen.className, duplicateOpen: dupOpen.className } : { action: 'preserve' };
+      const audit = { id: auditId, canonical_id: canId, duplicate_id: dupId, admin_id: 'preview-admin', reason, before_counts: before, after_counts: after, enrollment_action: enrollmentAction, created_at: new Date().toISOString() };
+      mockTables.student_merge_audits.push(audit);
+      mockTables.audit_logs.push({ id: mockTables.audit_logs.length + 1, action: 'students.merge', details: { auditId, canonicalId: canId, duplicateId: dupId, reason }, createdAt: new Date().toISOString() });
+      return { data: { auditId, canonicalId: canId, duplicateId: dupId, before, after, enrollmentAction, createdAt: new Date().toISOString() }, error: null };
     }
 
     // For class_students_for_term etc fallback

@@ -31,6 +31,7 @@ import { ClassProgress } from './pages/admin/ClassProgress';
 import { ClassAnnouncements } from './pages/admin/ClassAnnouncements';
 import { ClassPromotion } from './pages/admin/ClassPromotion';
 import { AiReviewLogs } from './pages/admin/AiReviewLogs';
+import { DuplicateStudents } from './pages/admin/DuplicateStudents';
 
 // Supervisor Pages
 import { SupervisorDashboard } from './pages/supervisor/SupervisorDashboard';
@@ -156,6 +157,7 @@ function AppContent() {
             case '/admin/announcements': return <ClassAnnouncements />;
             case '/admin/promotion': return <ClassPromotion />;
             case '/admin/unit-plans': return <UnitPlans />;
+            case '/admin/duplicate-students': return <DuplicateStudents />;
             // Admin reviews lesson plans exactly like a supervisor: the DB
             // already grants both roles the same rights (admin_all_plans RLS
             // plus the ('supervisor','admin') checks in decide_lesson_plan_review,

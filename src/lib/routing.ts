@@ -31,6 +31,10 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   // the admin-gated admin_correct_grade RPC (which re-checks the role in SQL).
   '/admin/grade-corrections': ['admin'],
 
+  // Duplicate Students — safe guided merge. Admin only; the merge RPC
+  // re-checks the role server-side and the tables have no direct write RLS.
+  '/admin/duplicate-students': ['admin'],
+
   // Student class update / new-student import. Admin only — it writes
   // students."className" and creates student rows through the admin-gated
   // apply_student_class_import RPC (which re-checks the role in SQL).
