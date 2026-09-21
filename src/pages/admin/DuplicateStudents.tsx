@@ -258,6 +258,10 @@ export function DuplicateStudents() {
     getMergeConflicts(canonicalId, duplicateId)
       .then((c) => {
         setConflicts(c);
+        // Auto-expand exam conflicts so the 55-conflict example is visible without extra click (fixes “Hide Conflicts” showing empty)
+        if (c.exams.length > 0 || c.attendance.length > 0 || c.quizAttempts.length > 0 || c.releaseLogs.length > 0 || c.reportComments.length > 0) {
+          setResolveExpanded(true);
+        }
         // Init profile defaults: recommend canonical where possible, but require explicit confirmation later
         // For Axmed (parent vs unassigned) recommend canonical; for gov conflict recommend canonical if it has value
         const can = keepSelection === 'A' ? selectedPair.studentA : selectedPair.studentB;

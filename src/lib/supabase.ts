@@ -593,17 +593,17 @@ function createMockSupabase(): SupabaseClient {
   const demoDuplicateExams: any[] = (() => {
     const exams: any[] = [];
     // Abshir: canonical 56 exams, duplicate 55 matching identities (critical conflict)
-    // Generate 56 for canonical (stu-abshir-a) with varying subject/term, 55 matching for duplicate
+    // Distinct per-exam keys ensure 55 distinct conflicts (not cross-product 605)
     for (let i = 0; i < 56; i++) {
       exams.push({
         id: `exam-abshir-a-${i}`,
         studentId: 'stu-abshir-a',
-        subject: `Subject-${i % 5}`,
-        subjectId: `sub-${i % 5}`,
+        subject: `Subject-${i}`,
+        subjectId: `sub-${i}`,
         score: 15,
         total: 20,
         examType: 'Quiz',
-        assessmentLabel: `MT`,
+        assessmentLabel: `MT-${i}`,
         termId: 'term-1',
         month: 'September',
         entryState: 'scored',
@@ -617,12 +617,12 @@ function createMockSupabase(): SupabaseClient {
       exams.push({
         id: `exam-abshir-b-${i}`,
         studentId: 'stu-abshir-b',
-        subject: `Subject-${i % 5}`,
-        subjectId: `sub-${i % 5}`,
+        subject: `Subject-${i}`,
+        subjectId: `sub-${i}`,
         score: 14,
         total: 20,
         examType: 'Quiz',
-        assessmentLabel: `MT`,
+        assessmentLabel: `MT-${i}`,
         termId: 'term-1',
         month: 'September',
         entryState: 'scored',
