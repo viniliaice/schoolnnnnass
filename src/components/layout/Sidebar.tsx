@@ -68,6 +68,8 @@ const FILTER_MIN_ITEMS = 10;
 
 /** Breakpoint at which the drawer turns back into the static column. */
 const DESKTOP_QUERY = '(min-width: 1024px)';
+/** Same, for the parent shell — tablets get the column there. */
+const TABLET_QUERY = '(min-width: 768px)';
 
 /** Everything that can take focus inside the drawer, for the Tab trap. */
 const FOCUSABLE =
@@ -76,11 +78,38 @@ const FOCUSABLE =
 interface SidebarProps {
   currentPath: string;
   onNavigate: (path: string) => void;
+  /**
+   * Breakpoint at which the static column replaces the phone chrome: `lg`
+   * (1024px) for the staff DashboardLayout, `md` (768px) for ParentAppShell so
+   * tablets get the sidebar too.
+   */
+  breakpoint?: 'md' | 'lg';
+  /**
+   * When false the hamburger, backdrop and slide-over drawer are not rendered —
+   * ParentAppShell provides its own phone chrome (header + bottom navigation)
+   * and wants only the desktop column from this component.
+   */
+  mobileToggle?: boolean;
 }
 
-export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
+export function Sidebar({
+  currentPath,
+  onNavigate,
+  breakpoint = 'lg',
+  mobileToggle = true,
+}: SidebarProps) {
   const { session, logout } = useRole();
   const { t, direction } = useI18n();
+
+  // Tailwind only sees whole class names in the source, so every
+  // breakpoint-dependent utility is written out for both variants instead of
+  // being assembled from a `${breakpoint}:` prefix (which would generate no CSS).
+  const isTablet = breakpoint === 'md';
+  const hideOnPhone = isTablet ? 'md:hidden' : 'lg:hidden';
+  const columnOnDesktop = isTablet ? 'md:flex' : 'lg:flex';
+  const touchRow = isTablet ? 'max-md:min-h-11' : 'max-lg:min-h-11';
+  const touchSquare = isTablet ? 'max-md:h-11 max-md:w-11' : 'max-lg:h-11 max-lg:w-11';
+  const hideBadgeOnPhone = isTablet ? 'max-md:hidden' : 'max-lg:hidden';
 
   // Every hook runs before the `!session` bail-out below so the hook order
   // stays stable while the session resolves.
@@ -174,18 +203,19 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
     };
   }, [mobileOpen]);
 
-  // Growing the window past `lg` while the drawer is open would leave the page
-  // with no visible menu at all (the drawer is `lg:hidden`, and it IS the
-  // column), so the drawer closes and the static layout takes over.
+  // Growing the window past the breakpoint while the drawer is open would leave
+  // the page with no visible menu at all (the drawer is hidden there, and it IS
+  // the column), so the drawer closes and the static layout takes over.
   useEffect(() => {
+    if (!mobileToggle) return;
     if (typeof window.matchMedia !== 'function') return;
-    const desktop = window.matchMedia(DESKTOP_QUERY);
+    const desktop = window.matchMedia(isTablet ? TABLET_QUERY : DESKTOP_QUERY);
     const onChange = (event: MediaQueryListEvent) => {
       if (event.matches) setMobileOpen(false);
     };
     desktop.addEventListener('change', onChange);
     return () => desktop.removeEventListener('change', onChange);
-  }, []);
+  }, [mobileToggle, isTablet]);
 
   // Move focus into the dialog when it opens and hand it back to the hamburger
   // when it closes, so keyboard users are never left on a hidden control.
@@ -261,7 +291,8 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
         aria-current={isCurrent ? 'page' : isParentOfCurrent ? 'true' : undefined}
         title={label(item.label)}
         className={cn(
-          'flex w-full max-lg:min-h-11 items-center gap-2.5 px-3 text-left font-medium transition-all duration-200',
+          'flex w-full items-center gap-2.5 px-3 text-left font-medium transition-all duration-200',
+          touchRow,
           nested ? 'rounded-lg py-2 text-[13px]' : 'rounded-xl py-2.5 text-sm',
           isCurrent || isParentOfCurrent
             ? 'bg-white/20 text-white shadow-lg shadow-black/10 backdrop-blur-sm'
@@ -296,7 +327,8 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
             aria-controls={panelId}
             title={label(section.label)}
             className={cn(
-              'flex w-full max-lg:min-h-11 items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-all duration-200',
+              'flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-sm font-semibold transition-all duration-200',
+              touchRow,
               containsActive ? 'bg-white/10 text-white' : 'text-white/70 hover:bg-white/10 hover:text-white',
             )}
           >
@@ -308,7 +340,7 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
               <span className="theme-nav-dot h-1.5 w-1.5 shrink-0 rounded-full" aria-hidden="true" />
             ) : (
               !isOpen && (
-                <span className="max-lg:hidden shrink-0 text-xs font-medium text-white/50" aria-hidden="true">
+                <span className={cn(hideBadgeOnPhone, 'shrink-0 text-xs font-medium text-white/50')} aria-hidden="true">
                   {section.items.length}
                 </span>
               )
@@ -343,22 +375,27 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
           `start-4` (not `left-4`) keeps the trigger on the same side as the
           drawer it opens: the drawer is anchored to `start-0` and flips with
           the document direction. Identical to `left-4` in LTR. */}
-      <button
-        ref={toggleRef}
-        type="button"
-        onClick={() => setMobileOpen(true)}
-        aria-label={t('nav.openMenu', 'Open menu')}
-        aria-expanded={mobileOpen}
-        aria-controls="app-sidebar"
-        className="lg:hidden fixed top-4 start-4 z-40 p-2.5 bg-white rounded-xl shadow-lg border border-slate-200 text-slate-600 hover:text-slate-900"
-      >
-        <Menu className="w-5 h-5" />
-      </button>
+      {mobileToggle && (
+        <button
+          ref={toggleRef}
+          type="button"
+          onClick={() => setMobileOpen(true)}
+          aria-label={t('nav.openMenu', 'Open menu')}
+          aria-expanded={mobileOpen}
+          aria-controls="app-sidebar"
+          className={cn(
+            hideOnPhone,
+            'fixed top-4 start-4 z-40 p-2.5 bg-white rounded-xl shadow-lg border border-slate-200 text-slate-600 hover:text-slate-900',
+          )}
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+      )}
 
-      {mobileOpen && (
+      {mobileToggle && mobileOpen && (
         <div
           id="nav-backdrop"
-          className="lg:hidden fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px]"
+          className={cn(hideOnPhone, 'fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px]')}
           onClick={() => setMobileOpen(false)}
           aria-hidden="true"
         />
@@ -375,19 +412,23 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
           roleColors[session.role] ?? roleColors.admin,
           mobileOpen
             ? cn(
-                'fixed inset-y-0 start-0 z-50 flex w-[86%] max-w-xs shadow-2xl lg:hidden',
+                'fixed inset-y-0 start-0 z-50 flex w-[86%] max-w-xs shadow-2xl',
+                hideOnPhone,
                 isRtl ? 'animate-[slideLeft_0.2s_ease-out]' : 'animate-[slideRight_0.2s_ease-out]',
               )
-            : 'sticky top-0 hidden h-screen w-72 shrink-0 lg:flex',
+            : cn('sticky top-0 hidden h-screen w-72 shrink-0', columnOnDesktop),
         )}
       >
-        {mobileOpen && (
+        {mobileToggle && mobileOpen && (
           <button
             ref={closeRef}
             type="button"
             onClick={() => setMobileOpen(false)}
             aria-label={t('nav.closeMenu', 'Close menu')}
-            className="lg:hidden absolute end-2.5 top-2.5 z-10 flex h-11 w-11 items-center justify-center rounded-xl bg-white/20 text-white transition hover:bg-white/10"
+            className={cn(
+              hideOnPhone,
+              'absolute end-2.5 top-2.5 z-10 flex h-11 w-11 items-center justify-center rounded-xl bg-white/20 text-white transition hover:bg-white/10',
+            )}
           >
             <X className="h-4 w-4" />
           </button>
@@ -419,11 +460,17 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
                 <p className="text-sm font-semibold text-white truncate">{session.userName}</p>
                 <p className="text-xs text-white/60">{t('session.active')}</p>
               </div>
+              {/* Icon-only control: the tooltip is what sighted users get, and
+                  it is the hook the parent mobile-flow test signs out with. */}
               <button
                 type="button"
                 onClick={logout}
                 aria-label={t('session.signOut')}
-                className="shrink-0 w-9 h-9 max-lg:h-11 max-lg:w-11 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/10 transition-all"
+                title={t('session.signOut')}
+                className={cn(
+                  'shrink-0 w-9 h-9 rounded-lg flex items-center justify-center text-white/50 hover:text-white hover:bg-white/10 transition-all',
+                  touchSquare,
+                )}
               >
                 <LogOut className="w-4 h-4" />
               </button>
@@ -450,7 +497,10 @@ export function Sidebar({ currentPath, onNavigate }: SidebarProps) {
                 onChange={event => setQuery(event.target.value)}
                 placeholder={t('nav.filterPlaceholder', 'Filter menu…')}
                 aria-label={t('nav.filter', 'Filter menu')}
-                className="theme-nav-filter w-full max-lg:min-h-11 rounded-xl border border-white/20 bg-white/10 py-2 pe-3 ps-9 text-xs text-white focus:border-white/40 focus:outline-none"
+                className={cn(
+                  'theme-nav-filter w-full rounded-xl border border-white/20 bg-white/10 py-2 pe-3 ps-9 text-xs text-white focus:border-white/40 focus:outline-none',
+                  touchRow,
+                )}
               />
             </div>
           </div>

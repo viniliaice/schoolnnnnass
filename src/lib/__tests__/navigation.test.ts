@@ -117,18 +117,50 @@ function labelsFor(role: Role): string[] {
   ];
 }
 
+/**
+ * Pages that reached `main` AFTER the redesign, so they are legitimately absent
+ * from the snapshot above. Each was placed in the group matching what the page
+ * does rather than appended to the end of a menu:
+ *   /admin/duplicate-students  (PR #62) merge duplicate student records → Students
+ *   /admin/monitor-marks       (PR #62) marks-entry completion → Grades & Exams
+ *   /supervisor/monitor-marks  (PR #62) same page, supervisor scope → Grades & Exams
+ * Keeping them in a separate list means the parity guard still fails if a
+ * pre-redesign page disappears, instead of being quietly re-snapshotted.
+ */
+const POST_REDESIGN_ADDITIONS: Record<Role, string[]> = {
+  admin: ['/admin/duplicate-students', '/admin/monitor-marks'],
+  teacher: [],
+  parent: [],
+  supervisor: ['/supervisor/monitor-marks'],
+  office: [],
+};
+
 describe('sidebar parity — grouping hid rows, it did not remove pages', () => {
   for (const role of NAV_ROLES) {
-    it(`${role} keeps exactly the links it had before the redesign`, () => {
-      expect([...navPathsForRole(role)].sort()).toEqual([...PRE_REDESIGN_NAV[role]].sort());
-      expect(navItemCount(role)).toBe(PRE_REDESIGN_NAV[role].length);
+    it(`${role} keeps every pre-redesign link, plus the pages main added later`, () => {
+      const expected = [...PRE_REDESIGN_NAV[role], ...POST_REDESIGN_ADDITIONS[role]];
+      expect([...navPathsForRole(role)].sort()).toEqual([...expected].sort());
+      expect(navItemCount(role)).toBe(expected.length);
     });
   }
 
-  it('collapses the 27-link admin menu into 11 top-level rows', () => {
+  it('collapses the 29-link admin menu into 11 top-level rows', () => {
     const nav = navForRole('admin');
-    expect(navItemCount('admin')).toBe(27);
+    expect(navItemCount('admin')).toBe(29);
     expect(nav.pinned.length + nav.sections.length).toBe(11);
+  });
+
+  it('files the pages main added inside a group instead of pinning them', () => {
+    const admin = navForRole('admin');
+    const students = admin.sections.find(section => section.id === 'students')!;
+    const grades = admin.sections.find(section => section.id === 'grades')!;
+    expect(students.items.map(item => item.path)).toContain('/admin/duplicate-students');
+    expect(grades.items.map(item => item.path)).toContain('/admin/monitor-marks');
+    const supervisorGrades = navForRole('supervisor').sections.find(section => section.id === 'grades')!;
+    expect(supervisorGrades.items.map(item => item.path)).toContain('/supervisor/monitor-marks');
+    // The two monitoring pages are marks data, so they live in the same-named
+    // group for both roles rather than under "Users & Staff" for one of them.
+    expect(admin.pinned.map(item => item.path)).not.toContain('/admin/monitor-marks');
   });
 
   it('keeps the collapsed menu short for every role', () => {
@@ -224,20 +256,32 @@ describe('menu shape', () => {
   // otherwise the same page is listed twice under two names.
   it('never gives a role two rows that render the same page component', () => {
     for (const role of NAV_ROLES) {
-      const componentByPath = new Map<string, string>();
-      for (const match of routeBlockFor(role).matchAll(/case '([^']+)':\s*return\s*<([A-Za-z0-9_]+)/g)) {
-        componentByPath.set(match[1], match[2]);
+      // Identity includes the props: main folded the parent report pages into
+      // one <ExamResults initialTab=… />, so the same component with different
+      // props is a different destination, while the same component with the
+      // same props under two paths is a duplicated menu entry.
+      const identityByPath = new Map<string, string>();
+      for (const match of routeBlockFor(role).matchAll(/case '([^']+)':\s*return\s*<([A-Za-z0-9_]+)((?:[^>]|\n)*?)>/g)) {
+        const props = match[3].replace(/\s+/g, ' ').trim();
+        identityByPath.set(match[1], props ? `${match[2]} ${props}` : match[2]);
       }
       const seen = new Map<string, string>();
       for (const path of navPathsForRole(role)) {
-        const component = componentByPath.get(path);
-        if (!component) continue; // rendered by the switch's `default:` branch
-        const previous = seen.get(component);
-        expect(previous, `${role}: ${path} and ${previous} both render ${component}`).toBeUndefined();
-        seen.set(component, path);
+        const identity = identityByPath.get(path);
+        if (!identity) continue; // rendered by the switch's `default:` branch
+        const previous = seen.get(identity);
+        expect(previous, `${role}: ${path} and ${previous} both render ${identity}`).toBeUndefined();
+        seen.set(identity, path);
       }
       expect(seen.size, `${role}: no menu row resolved to a component`).toBeGreaterThan(3);
     }
+  });
+
+  it('keeps the unified Exam Results tabs as four distinct parent destinations', () => {
+    const tabs = [...routeBlockFor('parent').matchAll(/case '(\/parent\/[^']+)':\s*return\s*<ExamResults([^>]*)>/g)]
+      .map(match => match[2].replace(/\s+/g, ' ').trim());
+    expect(tabs.length, 'expected /parent/results plus the three report tabs').toBe(4);
+    expect(new Set(tabs).size, 'each tab must render differently').toBe(4);
   });
 
   it('reuses the same section ids across roles so saved state is portable', () => {
@@ -349,22 +393,56 @@ describe('hard-coded shortcuts elsewhere in the app stay reachable', () => {
 
   const targets = hardcodedTargets();
 
+  // Parents are the one role whose primary navigation is not the staff sidebar:
+  // main gives phones a bottom nav (PARENT_BOTTOM_NAV in ParentAppShell) whose
+  // "More" tab is a hub for the secondary pages, and keeps the sidebar for
+  // tablets/desktops only. So a parent page counts as reachable when the
+  // sidebar OR those two surfaces link to it.
+  function parentSurfacePaths(): string[] {
+    return [
+      'src/components/layout/ParentAppShell.tsx',
+      'src/pages/parent/MorePage.tsx',
+    ].flatMap(file => {
+      const source = readFileSync(resolve(repoRoot, file), 'utf8');
+      return [...source.matchAll(/'(\/[a-z0-9\-/]+)'/g)]
+        .map(match => match[1])
+        .filter(path => ROUTE_PREFIX.test(path));
+    });
+  }
+
   it('found the hard-coded jump links to check', () => {
     expect(targets.length).toBeGreaterThan(5);
     expect(targets.map(target => target.path)).toContain('/gate');
     expect(targets.map(target => target.path)).toContain('/admin/family-ids/setup');
   });
 
+  it('reads the parent bottom nav and its More hub as real navigation surfaces', () => {
+    const surfaces = parentSurfacePaths();
+    expect(surfaces.length, 'expected the parent nav surfaces to be parsed').toBeGreaterThan(3);
+    expect(surfaces).toContain('/parent/more');
+    expect(surfaces).toContain('/parent/weekly-learning');
+    // The escape hatch is parent-only: it must not swallow staff routes.
+    expect(surfaces.some(path => path.startsWith('/admin')), 'parent surfaces leaked an admin path').toBe(false);
+  });
+
   it('each one is rendered by some role and reachable from that sidebar', () => {
     const everyMenuPath = NAV_ROLES.flatMap(role => navPathsForRole(role));
+    const parentSurfaces = parentSurfacePaths();
+    const covers = (list: string[], path: string) =>
+      list.some(entry => path === entry || path.startsWith(`${entry}/`));
+
     for (const target of targets) {
       const renderedBy = NAV_ROLES.filter(role => rendersPath(role, target.path));
       expect(renderedBy.length, `${target.file} links to ${target.path}, which no role renders`).toBeGreaterThan(0);
 
-      const reachable = everyMenuPath.some(
-        menuPath => target.path === menuPath || target.path.startsWith(`${menuPath}/`),
-      );
-      expect(reachable, `${target.file} links to ${target.path}, which no sidebar row reaches`).toBe(true);
+      const reachable =
+        covers(everyMenuPath, target.path) ||
+        (renderedBy.includes('parent') && covers(parentSurfaces, target.path));
+      expect(
+        reachable,
+        `${target.file} links to ${target.path}, which no sidebar row reaches ` +
+          `(and no parent bottom-nav/More surface either)`,
+      ).toBe(true);
     }
   });
 });

@@ -34,6 +34,7 @@ import {
   ArrowLeftRight,
   ArrowUpDown,
   Award,
+  BarChart3,
   BellRing,
   BookOpen,
   BookOpenCheck,
@@ -47,6 +48,7 @@ import {
   FileBarChart,
   FileSpreadsheet,
   FileText,
+  GitMerge,
   GraduationCap,
   HelpCircle,
   Layers,
@@ -111,6 +113,10 @@ export const NAV: Record<Role, RoleNav> = {
         items: [
           { label: 'Class Updates / Import', icon: ArrowLeftRight, path: '/admin/class-import' },
           { label: 'Promote Classes', icon: ArrowUpDown, path: '/admin/promotion' },
+          // Merging duplicate student records is a student-record operation, so
+          // it sits with the import and promotion tools rather than under
+          // Administration.
+          { label: 'Duplicate Students', icon: GitMerge, path: '/admin/duplicate-students' },
         ],
       },
       {
@@ -137,6 +143,11 @@ export const NAV: Record<Role, RoleNav> = {
           { label: 'Exam Verification', icon: ClipboardCheck, path: '/admin/exams' },
           { label: 'Grade Corrections', icon: Pencil, path: '/admin/grade-corrections' },
           { label: 'Exam Reports', icon: FileBarChart, path: '/admin/exam-reports' },
+          // Tracks whether teachers have entered quiz / homework / CA marks.
+          // It is marks data (not staff management), and `grades` exists for
+          // both admin and supervisor, so the same page sits in the same-named
+          // group for both roles.
+          { label: 'Monitor Marks Entries', icon: BarChart3, path: '/admin/monitor-marks' },
         ],
       },
       {
@@ -300,6 +311,7 @@ export const NAV: Record<Role, RoleNav> = {
         items: [
           { label: 'Exam Verifications', icon: ClipboardCheck, path: '/supervisor/verifications' },
           { label: 'Exam Reports', icon: FileBarChart, path: '/supervisor/reports' },
+          { label: 'Monitor Marks Entries', icon: BarChart3, path: '/supervisor/monitor-marks' },
         ],
       },
       {

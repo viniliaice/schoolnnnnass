@@ -130,7 +130,15 @@ describe('Parent mobile app — full workflow on the real preview client', () =>
     expect(navItems(host)).toEqual(['Home', 'Children', 'Results', 'Messages', 'More']);
     // …and on desktop the previous staff sidebar is restored for parents,
     // including its classic links (Monthly/Midterm/Final deep-link into the
-    // unified Exam Results tabs) and the sign-out control.
+    // unified Exam Results tabs) and the sign-out control. Since the sidebar
+    // redesign those links live inside collapsible groups, so open the three
+    // parent groups before asserting the links are still offered — the paths
+    // and labels themselves are unchanged.
+    for (const group of ['Reports', 'Quizzes', 'Communications']) {
+      await act(async () => {
+        clickButtonByText(host, group);
+      });
+    }
     expect(text(host)).toContain('Monthly Reports');
     expect(text(host)).toContain('Midterm Reports');
     expect(text(host)).toContain('Final Reports');

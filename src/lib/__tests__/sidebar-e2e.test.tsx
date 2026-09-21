@@ -134,9 +134,22 @@ const PAGE_MARKERS: Record<string, string> = {
   '/parent/children': 'My Children',
   '/parent/results': 'Exam Results',
   '/parent/quizzes': 'Quizzes',
-  '/parent/monthly': 'Monthly Reports',
-  '/parent/midterm': 'Midterm Reports',
-  '/parent/final': 'Final Year Reports',
+  // main unified the three parent report pages into one <ExamResults> with an
+  // initialTab, so the heading is shared and the tab proves which page opened.
+  '/parent/monthly': 'Exam Results',
+  '/parent/midterm': 'Exam Results',
+  '/parent/final': 'Exam Results',
+  // Added to main after the redesign (PR #62).
+  '/admin/duplicate-students': 'Duplicate Students',
+  '/admin/monitor-marks': 'Monitor Marks Entries',
+  '/supervisor/monitor-marks': 'Monitor Marks Entries',
+};
+
+/** Report tab that must be selected for the unified Exam Results paths. */
+const PAGE_TABS: Record<string, string> = {
+  '/parent/monthly': 'results-tab-monthly',
+  '/parent/midterm': 'results-tab-midterm',
+  '/parent/final': 'results-tab-final',
 };
 
 let host: HTMLDivElement;
@@ -270,6 +283,13 @@ describe('every sidebar row opens its page', () => {
           const marker = PAGE_MARKERS[target.path];
           if (marker) {
             expect(text, `${role} → ${target.path} did not render "${marker}"`).toContain(marker);
+          }
+          const tab = PAGE_TABS[target.path];
+          if (tab) {
+            expect(
+              main()?.querySelector('[role="tab"][aria-selected="true"]')?.getAttribute('data-testid'),
+              `${role} → ${target.path} opened the wrong Exam Results tab`,
+            ).toBe(tab);
           }
         }
       },

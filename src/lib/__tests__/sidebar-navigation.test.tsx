@@ -44,7 +44,7 @@ vi.mock('../../context/RoleContext', () => ({
 
 import { I18nProvider } from '../i18n/AppLanguageContext';
 import { Sidebar } from '../../components/layout/Sidebar';
-import { NAV_STATE_KEY } from '../navigation';
+import { NAV_STATE_KEY, navForRole } from '../navigation';
 import type { Role } from '../../types';
 
 const navigate = vi.fn();
@@ -54,20 +54,24 @@ let root: Root;
 let role: Role;
 let currentPath: string;
 
+/** Extra props for the current mount — ParentAppShell passes both of these. */
+let extraProps: { mobileToggle?: boolean; breakpoint?: 'md' | 'lg' } = {};
+
 async function renderSidebar() {
   await act(async () => {
     root.render(
       <I18nProvider>
-        <Sidebar currentPath={currentPath} onNavigate={navigate} />
+        <Sidebar currentPath={currentPath} onNavigate={navigate} {...extraProps} />
       </I18nProvider>,
     );
   });
 }
 
 /** Fresh mount of the desktop sidebar for a role. */
-async function mount(as: Role, path = '/dashboard') {
+async function mount(as: Role, path = '/dashboard', props: typeof extraProps = {}) {
   role = as;
   currentPath = path;
+  extraProps = props;
   mocks.session.current = { role: as, userId: 'u-1', userName: 'Ayaan Nuur' };
   host = document.createElement('div');
   document.body.appendChild(host);
@@ -147,8 +151,10 @@ describe('collapsed by default', () => {
   it('labels every group as collapsed with its page count', async () => {
     await mount('admin');
     expect(isOpen('administration')).toBe(false);
-    expect(sectionToggle('grades')?.textContent).toContain('Grades & Exams');
-    expect(sectionToggle('grades')?.textContent).toContain('4');
+    // Derived from the config so the assertion survives a menu change.
+    const grades = navForRole('admin').sections.find(section => section.id === 'grades')!;
+    expect(sectionToggle('grades')?.textContent).toContain(grades.label);
+    expect(sectionToggle('grades')?.textContent).toContain(String(grades.items.length));
   });
 
   it('keeps short menus (office) free of the filter box', async () => {
@@ -622,9 +628,10 @@ describe('several groups at once', () => {
 
   it('shows the hidden-page count only while a group is closed', async () => {
     await mount('admin');
-    expect(sectionToggle('grades')?.textContent).toContain('4');
+    const count = String(navForRole('admin').sections.find(section => section.id === 'grades')!.items.length);
+    expect(sectionToggle('grades')?.textContent).toContain(count);
     await click(sectionToggle('grades'));
-    expect(sectionToggle('grades')?.textContent).not.toContain('4');
+    expect(sectionToggle('grades')?.textContent).not.toContain(count);
   });
 });
 
@@ -660,4 +667,48 @@ describe('i18n', () => {
     expect(document.documentElement.dir).toBe('rtl');
   });
 
+});
+
+// ParentAppShell mounts this component as a plain column: phones get the
+// bottom navigation instead, and tablets get the sidebar from `md` up rather
+// than `lg`, so the component has to honour both props.
+describe('embedded in the parent shell (mobileToggle=false, breakpoint="md")', () => {
+  const embedded = { mobileToggle: false, breakpoint: 'md' as const };
+
+  it('renders the column only — no hamburger, no backdrop, no drawer', async () => {
+    await mount('parent', '/dashboard', embedded);
+    expect(host.querySelector('button[aria-controls="app-sidebar"]'), 'hamburger must not render').toBeNull();
+    expect(host.querySelector('[id="nav-backdrop"]'), 'backdrop must not render').toBeNull();
+    const column = aside();
+    expect(column.getAttribute('role'), 'it is never a dialog').toBeNull();
+    expect(column.className).not.toContain('fixed');
+    expect(column.className).toContain('md:flex');
+    expect(column.className).not.toContain('lg:flex');
+    expect(column.querySelector('button[aria-label="Close menu"]')).toBeNull();
+  });
+
+  it('still renders the parent menu and highlights the current page', async () => {
+    await mount('parent', '/parent/results', embedded);
+    expect(activeRow()?.getAttribute('title')).toBe('Exam Results');
+    expect(isOpen('reports'), 'the group owning the page opens').toBe(true);
+    expect(navRowCount()).toBeGreaterThan(2);
+  });
+
+  it('moves the touch-target and badge breakpoints to md as well', async () => {
+    await mount('parent', '/dashboard', embedded);
+    for (const button of [...aside().querySelectorAll('nav button')]) {
+      expect(button.className, button.getAttribute('title') ?? '').toContain('max-md:min-h-11');
+      expect(button.className, button.getAttribute('title') ?? '').not.toContain('max-lg:');
+    }
+    expect(sectionToggle('reports')?.querySelector('span[aria-hidden="true"]')?.className).toContain('max-md:hidden');
+  });
+
+  it('expands and collapses a group exactly as it does for staff', async () => {
+    await mount('parent', '/dashboard', embedded);
+    expect(isOpen('reports')).toBe(false);
+    await click(sectionToggle('reports'));
+    expect(isOpen('reports')).toBe(true);
+    await click(row('Monthly Reports'));
+    expect(navigate).toHaveBeenCalledWith('/parent/monthly');
+  });
 });

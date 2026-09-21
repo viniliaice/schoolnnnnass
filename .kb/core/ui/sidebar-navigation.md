@@ -31,8 +31,17 @@ same per-role visibility** but organises them:
 * **Pinned rows** — the 2–3 pages a role uses constantly (always `Dashboard`
   first) render above the groups and never collapse.
 * **Collapsible groups** — everything else lives in a named section with one
-  icon. Admin goes from 27 rows to 11 (3 pinned + 8 group headers); teacher 14 →
-  6; parent 9 → 5; supervisor 16 → 8; office 7 → 4.
+  icon. Admin went from 27 flat rows to **11 top-level rows** (3 pinned + 8 group
+  headers) and now holds 29 pages; teacher 14 → 6; parent 9 → 5; supervisor
+  16 → 8 (17 pages); office 7 → 4.
+
+Pages that arrive later are filed into the group that matches what the page
+does, never pinned and never appended as a new top-level row: `main` added
+`/admin/duplicate-students` (→ Students, beside class import and promotion) and
+`/admin/monitor-marks` + `/supervisor/monitor-marks` (→ Grades & Exams for both
+roles, since it is marks data and `grades` exists for both). The parity test
+lists them in `POST_REDESIGN_ADDITIONS` so the pre-redesign snapshot stays a
+real guard instead of being re-baselined.
 
 No route changed, so `App.tsx`, `ROUTE_ACCESS` and every in-page `navigate()`
 call behave exactly as before.
@@ -44,9 +53,9 @@ Ids are shared across roles so the same word means the same thing everywhere
 
 | id | label | typical contents |
 |----|-------|------------------|
-| `students` | Students | class import, promotion |
+| `students` | Students | class import, promotion, duplicate-record merge |
 | `academic` | Academic | lesson plans, submission tracking, unit plans, class progress |
-| `grades` | Grades & Exams | bulk grades, exam verification, grade corrections, exam reports |
+| `grades` | Grades & Exams | bulk grades, exam verification, grade corrections, exam reports, marks-entry monitoring |
 | `classroom` | Classroom | attendance, homework, quiz creation + grading |
 | `users` | Users & Staff | manage users, monitor teacher |
 | `transport` | Transport | family IDs, drivers, student directory |
@@ -126,6 +135,25 @@ itself after a navigation. Parent and office menus are short enough to skip it.
   language switcher mirrored to `end-4` in `DashboardLayout`), group indentation
   uses logical properties (`ms-`/`ps-`/`border-s`), and the chevron rotates the
   other way.
+
+## Embedded in the parent shell
+
+`ParentAppShell` (the parent role's own layout) mounts this component as a plain
+column and supplies its own phone chrome, so `Sidebar` takes two optional props:
+
+* `mobileToggle={false}` — no hamburger, no backdrop, no slide-over drawer, and
+  therefore never `role="dialog"`. Phones get `PARENT_BOTTOM_NAV` plus its
+  `More` hub instead; the sidebar is the tablet/desktop surface.
+* `breakpoint="md"` — the column appears from 768px rather than 1024px. Every
+  breakpoint-dependent utility is written out for both variants
+  (`md:hidden`/`lg:hidden`, `max-md:min-h-11`/`max-lg:min-h-11`, …) because
+  Tailwind cannot see a class assembled from a `${bp}:` prefix at build time.
+
+Consequence for tests: a parent page's primary navigation is the bottom nav, not
+the sidebar, so `navigation.test.ts` accepts `PARENT_BOTTOM_NAV` and `MorePage`
+as reachability surfaces for parent-only paths (`/parent/weekly-learning`,
+`/parent/more`, `/parent/pickup-card`) while still requiring every staff
+shortcut to come from a sidebar row.
 
 ## Theming
 
