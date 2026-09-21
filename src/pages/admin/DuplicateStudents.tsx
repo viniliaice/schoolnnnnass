@@ -875,6 +875,19 @@ export function DuplicateStudents() {
         </div>
       )}
 
+      <div className="bg-white border border-slate-200 rounded-2xl p-4">
+        <h4 className="font-bold text-slate-900 flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-indigo-600" /> Root-cause prevention — stop duplicates at the source</h4>
+        <p className="text-xs text-slate-600 mt-1">Merges preserve history, but the ideal is to prevent duplicates from being created. The strongest prevention signals are the same ones the merge engine trusts.</p>
+        <ul className="list-disc pl-5 mt-2 space-y-1 text-xs text-slate-600">
+          <li><span className="font-semibold">Verify Government ID at import</span> — treat Gov ID as a stable unique key (loose match: case/formatting-insensitive). Reject a new row when its Gov ID already exists with a different Student ID.</li>
+          <li><span className="font-semibold">Require parent assignment</span> — a parent-assigned record is the canonical identity; an unassigned row with the same name+class should be flagged before creation (high-confidence duplicate).</li>
+          <li><span className="font-semibold">Use the stable Student ID</span> — never generate a new Student ID when a Gov ID or verified parent phone already exists for that normalized name + class.</li>
+          <li><span className="font-semibold">Normalize names</span> — trim, lowercase, collapse whitespace before checking for existence; “Axmed yaasiin ismaaciil” and “AXMED  YAASIIN ISMAACIIL” are the same candidate.</li>
+          <li><span className="font-semibold">Class-import guardrail</span> — the Class Import flow should run the same <span className="font-mono">get_duplicate_candidates</span> check and surface “Possible duplicate” warnings before adding rows.</li>
+        </ul>
+        <p className="text-xs text-slate-500 mt-2">連携: Class Import → Duplicate Students → Merge Audit. Every merge creates an audit record so the import process can be reviewed and corrected.</p>
+      </div>
+
       <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 text-xs text-slate-600">
         <p className="font-bold flex items-center gap-1"><ShieldCheck className="w-4 h-4" /> Safety guarantees</p>
         <ul className="list-disc pl-5 mt-1 space-y-1">
