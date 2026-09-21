@@ -945,9 +945,23 @@ export function DuplicateStudents() {
                   <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 space-y-4">
                     <h4 className="font-bold text-amber-900">Final Confirmation</h4>
                     <p className="text-sm text-amber-800">This will permanently consolidate two student records. Historical records and exam IDs will be preserved; the duplicate row will be removed inside the transaction. This cannot be safely undone without a recovery process.</p>
-                    <div className="rounded-lg border bg-white p-3 text-xs">
-                      <div className="font-bold mb-1">Admin confirmation status (from section above):</div>
-                      <div>MASTER CHECKLIST Admin confirmation? <span className={checklist?.adminOk ? 'text-emerald-700 font-bold' : 'text-amber-700 font-bold'}>{checklist?.adminOk ? 'YES' : 'NO'}</span> — if NO, scroll up to <button type="button" onClick={()=> document.getElementById('admin-confirmation-section')?.scrollIntoView({behavior:'smooth'})} className="underline font-bold">Admin confirmation ↓</button></div>
+                    {isResolvable && (
+                      <div className="rounded-lg border bg-white p-3 text-xs">
+                        <div className="font-bold mb-1">Admin confirmation status (from section above):</div>
+                        <div>MASTER CHECKLIST Admin confirmation? <span className={checklist?.adminOk ? 'text-emerald-700 font-bold' : 'text-amber-700 font-bold'}>{checklist?.adminOk ? 'YES' : 'NO'}</span> — if NO, scroll up to <button type="button" onClick={()=> document.getElementById('admin-confirmation-section')?.scrollIntoView({behavior:'smooth'})} className="underline font-bold">Admin confirmation ↓</button></div>
+                      </div>
+                    )}
+                    {/* Checkboxes — visible here for simple merges; for isResolvable they are also in #admin-confirmation-section above, but we keep them here as fallback so Amiir-type can merge */}
+                    <div className="space-y-2 text-sm">
+                      <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={reviewChecked} onChange={e => setReviewChecked(e.target.checked)} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have reviewed this merge and the student I am keeping.</label>
+                      {isResolvable && (
+                        <>
+                          <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={finalConfirm.reviewedFinal} onChange={e => setFinalConfirm({...finalConfirm, reviewedFinal: e.target.checked})} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have reviewed the final student information.</label>
+                          <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={finalConfirm.reviewedConflicts} onChange={e => setFinalConfirm({...finalConfirm, reviewedConflicts: e.target.checked})} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have reviewed all conflicts.</label>
+                          <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={finalConfirm.verifiedParentGov} onChange={e => setFinalConfirm({...finalConfirm, verifiedParentGov: e.target.checked})} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have verified the selected parent/Gov ID.</label>
+                          <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={finalConfirm.understandRemove} onChange={e => setFinalConfirm({...finalConfirm, understandRemove: e.target.checked})} className="mt-0.5 h-4 w-4 accent-indigo-600" />I understand the duplicate record will be removed after verification.</label>
+                        </>
+                      )}
                     </div>
                     <label className="block text-sm font-semibold">Merge reason {isResolvable ? '(required)' : '(optional)'}<textarea value={mergeReason} onChange={e => setMergeReason(e.target.value)} rows={3} placeholder="Example: Duplicate created during September class import; verified using Gov ID and parent account. Exam records reviewed and correct records selected." className="mt-1 w-full rounded-xl border bg-white p-3 text-sm" /></label>
                     {(preview.riskLevel === 'high' || preview.riskLevel === 'critical' || isResolvable) && <label className="block text-sm font-bold text-rose-800">High-risk — type MERGE<input value={mergeInput} onChange={e => setMergeInput(e.target.value)} placeholder="MERGE" className="mt-1 w-full rounded-xl border border-rose-300 bg-white p-3 font-mono uppercase text-sm" /></label>}
