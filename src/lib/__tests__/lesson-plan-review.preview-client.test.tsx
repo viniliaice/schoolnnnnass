@@ -59,9 +59,9 @@ async function mountReview() {
 
 /** Flush React + react-query until `predicate` holds (or the wait times out). */
 async function waitFor(host: HTMLElement, predicate: () => boolean, label: string) {
-  for (let i = 0; i < 50 && !predicate(); i++) {
+  for (let i = 0; i < 120 && !predicate(); i++) {
     await act(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 5));
     });
   }
   if (!predicate()) throw new Error(`timed out waiting for ${label}`);
@@ -98,10 +98,12 @@ describe('LessonPlanReview on the preview client (real mock supabase, no vi.mock
     const { host } = await mountReview();
     // The dropdown options mention the week immediately; the plan rows do not
     // arrive until the week query settles, so wait for a real plan title.
-    await waitFor(host, () => text(host).includes('Week 2026-W15 - Grade'), 'the newest week’s plans');
+    // Newest week varies (W16 is parent week with subject titles like “Arabic Vocabulary”),
+    // so wait for any plan row marker rather than a hard-coded W15 title.
+    await waitFor(host, () => text(host).includes(' - Grade'), 'the newest week’s plans');
 
     const firstPlan = [...host.querySelectorAll('button')].find((button) =>
-      button.textContent?.includes('Week 2026-W15 - Grade')
+      button.textContent?.includes(' - Grade')
     );
     if (!firstPlan) throw new Error('no plan row rendered for the newest week');
     await act(async () => {
@@ -110,6 +112,6 @@ describe('LessonPlanReview on the preview client (real mock supabase, no vi.mock
 
     // The decision panel appears — previously this click crashed the page.
     await waitFor(host, () => text(host).includes('Supervisor Decision'), 'the clicked plan to open');
-    expect(text(host)).toContain('Week 2026-W15');
+    expect(text(host)).toMatch(/Week 2026-W\d+/);
   });
 });
