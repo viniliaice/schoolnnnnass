@@ -1573,9 +1573,9 @@ function createMockSupabase(): SupabaseClient {
         if (finalEnrRes && typeof finalEnrRes==='object' && !Array.isArray(finalEnrRes)) {
           enrollAction = finalEnrRes.action ?? finalEnrRes.keep ?? 'consolidate';
           enrollKeep = finalEnrRes.keep ?? 'canonical';
-          // Normalize
-          if (enrollAction==='keep_canonical') enrollAction='consolidate';
-          if (enrollAction==='keep_duplicate') enrollAction='transfer';
+          // Normalize aliases (preserve canonical/duplicate semantics)
+          if (enrollAction==='keep_canonical') { enrollAction='preserve_history'; enrollKeep='canonical'; }
+          else if (enrollAction==='keep_duplicate') { enrollAction='transfer'; enrollKeep='duplicate'; }
         } else {
           if (canOpen && dupOpen && canOpen.className===dupOpen.className && (canOpen.academicYearId||null)===(dupOpen.academicYearId||null)) enrollAction='consolidate';
           else if (dupOpen && !canOpen) enrollAction='transfer';
@@ -1651,24 +1651,46 @@ function createMockSupabase(): SupabaseClient {
           if (!['canonical','duplicate','A','B'].includes(keep)) throw new Error(`Invalid attendance keep ${keep}`);
           if (canI && !mockTables.attendance.some((a:any)=>a.id===canI && a.studentId===canId)) throw new Error(`Attendance ${canI} not canonical`);
           if (dupI && !mockTables.attendance.some((a:any)=>a.id===dupI && a.studentId===dupId)) throw new Error(`Attendance ${dupI} not duplicate`);
+          if (canI && dupI) {
+            const c = mockTables.attendance.find((a:any)=>a.id===canI);
+            const d = mockTables.attendance.find((a:any)=>a.id===dupI);
+            if (!c || !d || c.date !== d.date) throw new Error(`Attendance ${canI} and ${dupI} do not share identical date`);
+          }
         }
         for (let i=0;i<quizResArr.length;i++) {
           const r=quizResArr[i]; const keep=r.keep; const canI=r.canonical_id??r.canonicalId; const dupI=r.duplicate_id??r.duplicateId;
           if (!['canonical','duplicate','A','B'].includes(keep)) throw new Error(`Invalid quiz keep ${keep}`);
           if (canI && !mockTables.quiz_attempts.some((q:any)=>q.id===canI && q.studentId===canId)) throw new Error(`Quiz ${canI} not canonical`);
           if (dupI && !mockTables.quiz_attempts.some((q:any)=>q.id===dupI && q.studentId===dupId)) throw new Error(`Quiz ${dupI} not duplicate`);
+          if (canI && dupI) {
+            const c = mockTables.quiz_attempts.find((q:any)=>q.id===canI);
+            const d = mockTables.quiz_attempts.find((q:any)=>q.id===dupI);
+            if (!c || !d || c.quizId !== d.quizId) throw new Error(`Quiz attempts ${canI} and ${dupI} do not share identical quizId`);
+          }
         }
         for (let i=0;i<relResArr.length;i++) {
           const r=relResArr[i]; const keep=r.keep; const canI=r.canonical_id??r.canonicalId; const dupI=r.duplicate_id??r.duplicateId;
           if (!['canonical','duplicate','A','B'].includes(keep)) throw new Error(`Invalid release keep ${keep}`);
           if (canI && !mockTables.release_log.some((x:any)=>x.id===canI && x.studentId===canId)) throw new Error(`Release ${canI} not canonical`);
           if (dupI && !mockTables.release_log.some((x:any)=>x.id===dupI && x.studentId===dupId)) throw new Error(`Release ${dupI} not duplicate`);
+          if (canI && dupI) {
+            const c = mockTables.release_log.find((x:any)=>x.id===canI);
+            const d = mockTables.release_log.find((x:any)=>x.id===dupI);
+            const cDay = (c?.createdAt||'').slice(0,10);
+            const dDay = (d?.createdAt||'').slice(0,10);
+            if (!c || !d || cDay !== dDay) throw new Error(`Release logs ${canI} and ${dupI} do not share identical UTC date`);
+          }
         }
         for (let i=0;i<repResArr.length;i++) {
           const r=repResArr[i]; const keep=r.keep; const canI=r.canonical_id??r.canonicalId; const dupI=r.duplicate_id??r.duplicateId;
           if (!['canonical','duplicate','A','B'].includes(keep)) throw new Error(`Invalid report keep ${keep}`);
           if (canI && !mockTables.report_comments.some((x:any)=>x.id===canI && x.studentId===canId)) throw new Error(`Report ${canI} not canonical`);
           if (dupI && !mockTables.report_comments.some((x:any)=>x.id===dupI && x.studentId===dupId)) throw new Error(`Report ${dupI} not duplicate`);
+          if (canI && dupI) {
+            const c = mockTables.report_comments.find((x:any)=>x.id===canI);
+            const d = mockTables.report_comments.find((x:any)=>x.id===dupI);
+            if (!c || !d || c.termId !== d.termId) throw new Error(`Report comments ${canI} and ${dupI} do not share identical termId`);
+          }
         }
 
         // ── Apply profile ──
@@ -1702,25 +1724,43 @@ function createMockSupabase(): SupabaseClient {
         can.parentPhone = finalPhone;
         can.transport = finalTransport;
 
-        // Enrollment handling
+        // Enrollment handling — SAFE: exactly ONE open must remain
         const canOpen2 = mockTables.student_enrollments.find((e:any)=>e.studentId===canId && e.effectiveTo==null) || null;
         const dupOpen2 = mockTables.student_enrollments.find((e:any)=>e.studentId===dupId && e.effectiveTo==null) || null;
-        if (dupOpen2) {
-          if (enrollAction==='consolidate') {
-            mockTables.student_enrollments = mockTables.student_enrollments.filter((e:any)=>e.id!==dupOpen2.id);
+        const today = new Date().toISOString().slice(0,10);
+        if (canOpen2 && dupOpen2) {
+          const sameClassYear = canOpen2.className === dupOpen2.className && (canOpen2.academicYearId||null) === (dupOpen2.academicYearId||null);
+          if (sameClassYear) {
+            if (enrollAction==='consolidate') {
+              mockTables.student_enrollments = mockTables.student_enrollments.filter((e:any)=>e.id!==dupOpen2.id);
+            } else if ((enrollAction==='transfer' || enrollAction==='keep_duplicate') && enrollKeep==='duplicate') {
+              // replace canonical with duplicate
+              canOpen2.effectiveTo = today;
+              dupOpen2.studentId = canId;
+            } else {
+              // keep canonical, close duplicate as historical
+              dupOpen2.studentId = canId;
+              dupOpen2.effectiveTo = today;
+            }
           } else {
-            dupOpen2.studentId = canId;
-            // If class changed and enrollment still points to old class, update to finalClass
-            if (dupOpen2.className !== finalClass && enrollAction!=='consolidate') {
-              // keep as is for history, but open should reflect finalClass
-              // The open enrollment for canonical should be finalClass
-              if (canOpen2) canOpen2.className = finalClass;
-              else dupOpen2.className = finalClass;
+            // different class/year -> explicit required, exactly ONE open
+            if (!finalEnrRes) throw new Error(`Enrollment histories are contradictory (${canOpen2.className} vs ${dupOpen2.className} / year ${canOpen2.academicYearId||'null'} vs ${dupOpen2.academicYearId||'null'}). Provide explicit enrollment_resolution.`);
+            if (enrollAction==='consolidate') throw new Error('Cannot consolidate enrollments with different class or academic year. Choose transfer or preserve.');
+            if (enrollKeep==='duplicate' || enrollAction==='keep_duplicate') {
+              canOpen2.effectiveTo = today;
+              dupOpen2.studentId = canId;
+            } else {
+              dupOpen2.studentId = canId;
+              dupOpen2.effectiveTo = today;
             }
           }
+        } else if (dupOpen2) {
+          dupOpen2.studentId = canId;
         }
         for (const e of mockTables.student_enrollments) if (e.studentId===dupId) e.studentId=canId;
-        if (canOpen2 && canOpen2.className!==finalClass) canOpen2.className = finalClass;
+        // Update open enrollment class to match finalClass (only open)
+        const finalOpen = mockTables.student_enrollments.find((e:any)=>e.studentId===canId && e.effectiveTo==null);
+        if (finalOpen && finalOpen.className!==finalClass) finalOpen.className = finalClass;
 
         // Resolve conflicting history: delete losers
         for (let i=0;i<examResArr.length;i++) {
@@ -1763,6 +1803,13 @@ function createMockSupabase(): SupabaseClient {
           if (!exists) r.studentId=canId; else mockTables.authorized_pickup_students = mockTables.authorized_pickup_students.filter((x:any)=>x!==r);
         }
 
+        // Final open-enrollment assertion: canonical must have exactly 1 open, duplicate 0 open and 0 total
+        const canOpenCntFinal = mockTables.student_enrollments.filter((e:any)=>e.studentId===canId && e.effectiveTo==null).length;
+        if (canOpenCntFinal !== 1) throw new Error(`Post-merge verification failed: canonical must have exactly 1 open enrollment, found ${canOpenCntFinal}`);
+        const dupOpenCntFinal = mockTables.student_enrollments.filter((e:any)=>e.studentId===dupId && e.effectiveTo==null).length;
+        if (dupOpenCntFinal !== 0) throw new Error(`Post-merge verification failed: duplicate still has ${dupOpenCntFinal} open enrollments`);
+        const dupTotalEnr = mockTables.student_enrollments.filter((e:any)=>e.studentId===dupId).length;
+        if (dupTotalEnr !== 0) throw new Error(`Post-merge verification failed: duplicate still has ${dupTotalEnr} enrollments`);
         // Verify duplicate has no children before delete
         const checks = [
           mockTables.exams.filter((e:any)=>e.studentId===dupId).length,
@@ -1773,7 +1820,6 @@ function createMockSupabase(): SupabaseClient {
           mockTables.authorized_pickup_students.filter((x:any)=>x.studentId===dupId).length,
           mockTables.release_log.filter((r:any)=>r.studentId===dupId).length,
           mockTables.report_comments.filter((r:any)=>r.studentId===dupId).length,
-          mockTables.student_enrollments.filter((e:any)=>e.studentId===dupId).length,
         ];
         if (checks.some(c=>c>0)) throw new Error('Post-merge verification failed: duplicate still has children');
 

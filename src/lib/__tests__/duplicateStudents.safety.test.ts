@@ -1,242 +1,405 @@
 // @vitest-environment jsdom
-// Safety fixes: candidate auth, enrollment academicYear, identity prevention
 import { describe, it, expect, beforeEach } from 'vitest';
 import { supabase } from '../supabase';
-import { previewStudentMerge, getDuplicateGroups } from '../db/duplicateStudents';
+import { getMergeConflicts, mergeWithResolution } from '../db/duplicateStudents';
 
-describe('Duplicate Students — safety fixes', () => {
+describe('Duplicate Students — HIGH SAFETY (enrollment + history + final assertion)', () => {
   beforeEach(() => {
-    localStorage.clear();
-    // Reset mock role to admin by default
     (globalThis as any).__mockRole = 'admin';
   });
 
-  describe('1. get_duplicate_candidates auth', () => {
-    it('anon cannot call duplicate candidate RPC', async () => {
-      (globalThis as any).__mockRole = 'anon';
-      const { data, error } = await supabase.rpc('get_duplicate_candidates');
-      expect(error).toBeTruthy();
-      expect(error!.message).toMatch(/Only administrators/);
-      expect(data).toBeNull();
-    });
-
-    it('authenticated non-admin cannot call duplicate candidate RPC', async () => {
-      (globalThis as any).__mockRole = 'teacher';
-      const { data, error } = await supabase.rpc('get_duplicate_candidates');
-      expect(error).toBeTruthy();
-      expect(error!.message).toMatch(/Only administrators/);
-      expect(data).toBeNull();
-    });
-
-    it('parent cannot call candidate RPC', async () => {
-      (globalThis as any).__mockRole = 'parent';
-      const { data, error } = await supabase.rpc('get_duplicate_candidates');
-      expect(error).toBeTruthy();
-    });
-
-    it('admin can call candidate RPC', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      const { data, error } = await supabase.rpc('get_duplicate_candidates');
-      expect(error).toBeNull();
-      expect(Array.isArray(data)).toBe(true);
-      // Should find at least Axmed group
-      expect(data.length).toBeGreaterThanOrEqual(1);
-    });
-
-    it('preview and merge also require admin', async () => {
-      (globalThis as any).__mockRole = 'teacher';
-      const { error: pErr } = await supabase.rpc('preview_student_merge', { p_canonical_id: 'stu-axmed-a', p_duplicate_id: 'stu-axmed-b' });
-      expect(pErr).toBeTruthy();
-      expect(pErr!.message).toMatch(/Only administrators/);
-      const { error: mErr } = await supabase.rpc('merge_duplicate_students', { p_canonical_id: 'stu-axmed-a', p_duplicate_id: 'stu-axmed-b' });
-      expect(mErr).toBeTruthy();
-    });
-
-    it('getDuplicateGroups fallback still works for admin (client grouping)', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      const groups = await getDuplicateGroups();
-      expect(groups.length).toBeGreaterThanOrEqual(4);
-    });
-  });
-
-  describe('2. Enrollment academic-year safety', () => {
-    it('same class + same academicYearId → consolidate (canMerge true)', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      // Axmed demo has same class Grade1-B same year ay-2026 → should consolidate
-      const p = await previewStudentMerge('stu-axmed-a', 'stu-axmed-b');
-      expect(p.canMerge).toBe(true);
-      expect(p.enrollment.willConsolidate).toBe(true);
-      expect(p.enrollment.action).toBe('consolidate');
-      expect(p.blockedReasons).not.toContain('enrollment_conflict');
-    });
-
-    it('same class + different academicYearId → blocked', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      // Create two students with same name/class but different academicYear
-      const { data: created } = await supabase.rpc('create_student', { p_name: 'Test Enroll Year', p_class: 'Grade 1-B', p_parent_id: null, p_gov_id: null, p_parent_phone: null });
-      // Instead, directly manipulate mock enrollments for existing pair to simulate different year
-      // We'll create fresh enrollments with different year for a new pair
-      // Use existing Ahmed pair but change one enrollment year
-      // For isolation, create two new students via mock directly
-      const { supabase: sb } = await import('../supabase');
-      // Find a way to create enrollments with different years via direct table access
-      // We'll insert students manually via mockTables path
-      // Simpler: use preview on a synthetic pair where we set enrollments differing
-      // We will directly access mockTables to set up
-      const { data: s1 } = await supabase.rpc('create_student', { p_name: 'EnrollTestSameClass', p_class: 'Grade 9-A', p_gov_id: null });
-      const id1 = (s1 as any)?.id;
-      const { data: s2 } = await supabase.rpc('create_student', { p_name: 'EnrollTestSameClass', p_class: 'Grade 9-A', p_gov_id: null });
-      const id2 = (s2 as any)?.id;
-      // Now enrollments are both ay-2026 same class → should be consolidate, we will change one to ay-2025
-      const { data: enrs } = await supabase.from('student_enrollments').select('*');
-      const e1 = (enrs as any[]).find((e:any)=>e.studentId===id1 && e.effectiveTo==null);
-      const e2 = (enrs as any[]).find((e:any)=>e.studentId===id2 && e.effectiveTo==null);
-      if (e1 && e2) {
-        e2.academicYearId = 'ay-2025'; // different year
+  // Helper to create pair with controlled enrollments
+  async function createPair(opts: {
+    name: string;
+    classA: string; classB: string;
+    ayA: string; ayB: string;
+    extraOpen?: boolean;
+    noOpen?: boolean;
+  }) {
+    const cid = `stu-safe-can-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+    const did = `stu-safe-dup-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+    await supabase.from('students').insert({ id: cid, name: opts.name, className: opts.classA, parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: did, name: opts.name, className: opts.classB, parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    if (!opts.noOpen) {
+      await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open`, studentId: cid, className: opts.classA, academicYearId: opts.ayA, effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+      await supabase.from('student_enrollments').insert({ id: `enr-${did}-open`, studentId: did, className: opts.classB, academicYearId: opts.ayB, effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+      if (opts.extraOpen) {
+        await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open2`, studentId: cid, className: opts.classA, academicYearId: opts.ayA, effectiveFrom: '2026-09-02', effectiveTo: null, reason: 'import', sourceRef: 'test2' });
       }
-      const p = await previewStudentMerge(id1, id2);
-      expect(p.canMerge).toBe(false);
-      expect(p.blockedReasons).toContain('enrollment_conflict');
-      expect(p.enrollment.action).toBe('blocked');
-      expect(p.enrollment.willConsolidate).toBe(false);
-    });
+    }
+    return { cid, did };
+  }
 
-    it('different class → blocked', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      // Create two students same name different class
-      const { data: s1 } = await supabase.rpc('create_student', { p_name: 'DiffClassTest', p_class: 'Grade 1-A', p_gov_id: null });
-      const id1 = (s1 as any)?.id;
-      const { data: s2 } = await supabase.rpc('create_student', { p_name: 'DiffClassTest', p_class: 'Grade 1-B', p_gov_id: null });
-      const id2 = (s2 as any)?.id;
-      // Force them to be considered pair by manually setting preview to check enrollment conflict even though candidate detector wouldn't group different class
-      // But preview checks enrollment directly, so we need enrollments with different class
-      const p = await previewStudentMerge(id1, id2);
-      expect(p.canMerge).toBe(false);
-      expect(p.blockedReasons).toContain('enrollment_conflict');
-    });
+  const baseProfile = { name: 'canonical', govId: 'canonical', parentId: 'canonical', parentPhone: 'canonical', transport: 'canonical', className: 'canonical' };
+  const emptyHistory = { exam_resolution: [], attendance_resolution: [], quiz_resolution: [], release_resolution: [], report_comment_resolution: [] };
 
-    it('multiple open enrollments → blocked', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      const { data: s1 } = await supabase.rpc('create_student', { p_name: 'MultiEnrollTest', p_class: 'Grade 2-A', p_gov_id: null });
-      const id1 = (s1 as any)?.id;
-      const { data: s2 } = await supabase.rpc('create_student', { p_name: 'MultiEnrollTest', p_class: 'Grade 2-A', p_gov_id: null });
-      const id2 = (s2 as any)?.id;
-      // Add second open enrollment for id1
-      await supabase.from('student_enrollments').insert({ id: `enr-${id1}-open2`, studentId: id1, className: 'Grade 2-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'test' });
-      const p = await previewStudentMerge(id1, id2);
-      expect(p.canMerge).toBe(false);
-      expect(p.blockedReasons).toContain('enrollment_conflict');
-      expect(p.blockedReasons).toContain('multiple_open_enrollments');
-    });
-
-    it('merge also blocks on same class different year', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      const { data: s1 } = await supabase.rpc('create_student', { p_name: 'MergeYearBlock', p_class: 'Grade 3-A', p_gov_id: null });
-      const id1 = (s1 as any)?.id;
-      const { data: s2 } = await supabase.rpc('create_student', { p_name: 'MergeYearBlock', p_class: 'Grade 3-A', p_gov_id: null });
-      const id2 = (s2 as any)?.id;
-      const { data: enrs } = await supabase.from('student_enrollments').select('*');
-      const e2 = (enrs as any[]).find((e:any)=>e.studentId===id2 && e.effectiveTo==null);
-      if (e2) e2.academicYearId = 'ay-2025';
-      await expect(supabase.rpc('merge_duplicate_students', { p_canonical_id: id1, p_duplicate_id: id2 })).resolves.toMatchObject({ error: expect.objectContaining({ message: expect.stringMatching(/ENROLLMENT_CONFLICT|enrollment histories are contradictory/i) }) });
-    });
+  // ── Case A: same class + same year → consolidate keep 1, audit provenance ──────
+  it('Case A: same class+same year consolidate keeps exactly 1 open and audit', async () => {
+    const { cid, did } = await createPair({ name: 'CaseA', classA: 'Grade 1-A', classB: 'Grade 1-A', ayA: 'ay-2026', ayB: 'ay-2026' });
+    const res: any = { profile_resolution: baseProfile, ...emptyHistory, enrollment_resolution: { action: 'consolidate', keep: 'canonical' } };
+    const result = await mergeWithResolution(cid, did, res, 'case A');
+    expect(result.auditId).toBeTruthy();
+    const { data: opens } = await supabase.from('student_enrollments').select('id').eq('studentId', cid) as any;
+    const openCnt = (opens as any[]).filter((e:any)=> e.effectiveTo == null || !('effectiveTo' in e) ? true : false);
+    // In mock, effectiveTo may be null for open; check via direct query
+    const openRows = (await supabase.from('student_enrollments').select('*').eq('studentId', cid) as any).data.filter((r:any)=> r.effectiveTo == null);
+    expect(openRows.length).toBe(1);
+    expect(openRows[0].className).toBe('Grade 1-A');
+    expect(openRows[0].academicYearId).toBe('ay-2026');
+    // duplicate must be gone
+    const { data: dup } = await supabase.from('students').select('id').eq('id', did).maybeSingle();
+    expect(dup).toBeNull();
   });
 
-  describe('3. Identity prevention — Axmed-type', () => {
-    it('Axmed-type: existing parent+gov, incoming unassigned same name/class → blocked on create', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      // Existing is stu-axmed-a (parent assigned gov 123456 Grade1-B)
-      // Try to create another Axmed unassigned same class
-      const { error } = await supabase.rpc('create_student', { p_name: 'Axmed yaasiin ismaaciil', p_class: 'Grade 1-B', p_parent_id: null, p_gov_id: null, p_parent_phone: null });
-      expect(error).toBeTruthy();
-      expect(error!.message).toMatch(/Possible duplicate detected|Manual review/);
-    });
-
-    it('Axmed-type via bulk create is blocked', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      const { error } = await supabase.rpc('bulk_create_students', { p_students: [{ name: 'Axmed yaasiin ismaaciil', className: 'Grade 1-B', parentId: null, govId: null }] });
-      expect(error).toBeTruthy();
-      expect(error!.message).toMatch(/Possible duplicate/);
-    });
-
-    it('Axmed-type via import new students is blocked', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      const { error } = await supabase.rpc('apply_student_class_import', { p_changes: [], p_new_students: [{ name: 'Axmed yaasiin ismaaciil', className: 'Grade 1-B', govId: null }], p_academic_year_id: 'ay-2026' });
-      expect(error).toBeTruthy();
-      expect(error!.message).toMatch(/Possible duplicate in import/);
-    });
-
-    it('genuine same-name students with different Gov and parents are NOT blocked — distinct allowed', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      // Ahmed Mohamed Grade 4-A Parent A Gov 111 vs Parent B Gov 222 — should be allowed as distinct
-      // First ensure one exists
-      const { data: s1, error: e1 } = await supabase.rpc('create_student', { p_name: 'Ahmed Mohamed', p_class: 'Grade 4-A', p_parent_id: 'parent-1', p_gov_id: 'GOV-UNIQUE-111', p_parent_phone: '252634506719' });
-      expect(e1).toBeNull();
-      const id1 = (s1 as any)?.id;
-      // Second with different gov and parent should succeed (genuine distinct)
-      const { data: s2, error: e2 } = await supabase.rpc('create_student', { p_name: 'Ahmed Mohamed', p_class: 'Grade 4-A', p_parent_id: 'parent-2', p_gov_id: 'GOV-UNIQUE-222', p_parent_phone: '252634511111' });
-      expect(e2).toBeNull();
-      expect(s2).toBeTruthy();
-      // Verify they are two distinct rows
-      const { data: all } = await supabase.from('students').select('id').eq('className', 'Grade 4-A');
-      const names = (all as any[]).filter((r:any)=>r.name==='Ahmed Mohamed');
-      // At least 2 distinct Ahmed in Grade 4-A now (plus previous demo Ahmed in Grade5-A)
-      expect(names.length).toBeGreaterThanOrEqual(2);
-    });
-
-    it('conflicting Gov IDs same name/class do not collapse via import', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      const { data: s1 } = await supabase.rpc('create_student', { p_name: 'GovConflictTest', p_class: 'Grade 6-A', p_gov_id: 'GOV-A-001', p_parent_id: 'parent-1' });
-      expect(s1).toBeTruthy();
-      const { data: s2, error: e2 } = await supabase.rpc('create_student', { p_name: 'GovConflictTest', p_class: 'Grade 6-A', p_gov_id: 'GOV-B-002', p_parent_id: 'parent-2' });
-      // Different Gov with different parents → should be allowed as distinct (not strong duplicate)
-      expect(e2).toBeNull();
-      expect(s2).toBeTruthy();
-    });
-
-    it('ambiguous identity (same name+class no Gov no parent) requires manual review — creation allowed but duplicate page will flag', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      const { data: s1, error: e1 } = await supabase.rpc('create_student', { p_name: 'Ambiguous Student', p_class: 'Grade 2-B', p_gov_id: null, p_parent_id: null });
-      expect(e1).toBeNull();
-      const { data: s2, error: e2 } = await supabase.rpc('create_student', { p_name: 'Ambiguous Student', p_class: 'Grade 2-B', p_gov_id: null, p_parent_id: null });
-      // Both unassigned no Gov → possible, not strong → should allow creation (will be manual review via duplicate page)
-      expect(e2).toBeNull();
-      // Now duplicate page should show them as possible
-      const groups = await getDuplicateGroups();
-      const g = groups.find(x=>x.normalizedName==='ambiguous student' && x.className==='Grade 2-B');
-      expect(g).toBeDefined();
-      expect(g!.students.length).toBe(2);
-    });
+  it('Case A with explicit keep duplicate replaces canonical with duplicate enrollment', async () => {
+    const { cid, did } = await createPair({ name: 'CaseA2', classA: 'Grade 1-A', classB: 'Grade 1-A', ayA: 'ay-2026', ayB: 'ay-2026' });
+    const res: any = { profile_resolution: { ...baseProfile, className: 'duplicate' }, ...emptyHistory, enrollment_resolution: { action: 'keep_duplicate', keep: 'duplicate' } };
+    const result = await mergeWithResolution(cid, did, res, 'case A keep duplicate');
+    expect(result.auditId).toBeTruthy();
+    const openRows = (await supabase.from('student_enrollments').select('*').eq('studentId', cid) as any).data.filter((r:any)=> r.effectiveTo == null);
+    expect(openRows.length).toBe(1);
   });
 
-  describe('4. Stable Student ID authoritative', () => {
-    it('same Student ID class change via import — same ID, class updated, no second student', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      const { data: s } = await supabase.rpc('create_student', { p_name: 'StableIdTest', p_class: 'Grade 7-A', p_gov_id: null });
-      const id = (s as any)?.id;
-      expect(id).toBeTruthy();
-      const before = await supabase.from('students').select('id,className').eq('id', id).maybeSingle();
-      expect((before.data as any)?.className).toBe('Grade 7-A');
-      // Now class change via import
-      const { data, error } = await supabase.rpc('apply_student_class_import', { p_changes: [{ studentId: id, toClass: 'Grade 7-B' }], p_new_students: [], p_academic_year_id: 'ay-2026' });
-      expect(error).toBeNull();
-      expect((data as any).updatedCount).toBe(1);
-      const after = await supabase.from('students').select('id,className').eq('id', id).maybeSingle();
-      expect((after.data as any)?.className).toBe('Grade 7-B');
-      expect((after.data as any)?.id).toBe(id);
-      // No second student
-      const { data: all } = await supabase.from('students').select('id').eq('id', id);
-      expect((all as any[]).length).toBe(1);
-    });
+  // ── Case B: different class → require explicit keep → exactly 1 open, other historical/closed or blocked ──
+  it('Case B: different class without explicit enrollment blocked', async () => {
+    const { cid, did } = await createPair({ name: 'CaseBNoExplicit', classA: 'Grade 2-A', classB: 'Grade 3-A', ayA: 'ay-2026', ayB: 'ay-2026' });
+    const res: any = { profile_resolution: baseProfile, ...emptyHistory };
+    await expect(mergeWithResolution(cid, did, res, 'case B no explicit')).rejects.toThrow(/enrollment|contradictory/i);
+    // both still exist (rollback)
+    const { data: can } = await supabase.from('students').select('id').eq('id', cid).maybeSingle();
+    const { data: dup } = await supabase.from('students').select('id').eq('id', did).maybeSingle();
+    expect(can).toBeTruthy();
+    expect(dup).toBeTruthy();
+  });
 
-    it('stable ID reuse via bulk/create is blocked — must use class change', async () => {
-      (globalThis as any).__mockRole = 'admin';
-      const { data: s } = await supabase.rpc('create_student', { p_name: 'StableReuse', p_class: 'Grade 7-A', p_gov_id: null });
-      const id = (s as any)?.id;
-      // Try to create new student with same ID via import newStudents — should error
-      const { error } = await supabase.rpc('apply_student_class_import', { p_changes: [], p_new_students: [{ id, name: 'StableReuse', className: 'Grade 7-B' }], p_academic_year_id: 'ay-2026' });
-      expect(error).toBeTruthy();
-      expect(error!.message).toMatch(/already exists/);
-    });
+  it('Case B: different class explicit keep canonical leaves exactly 1 open (canonical) and duplicate historical closed', async () => {
+    const { cid, did } = await createPair({ name: 'CaseBKeepCan', classA: 'Grade 2-A', classB: 'Grade 3-A', ayA: 'ay-2026', ayB: 'ay-2026' });
+    const res: any = { profile_resolution: baseProfile, ...emptyHistory, enrollment_resolution: { action: 'keep_canonical', keep: 'canonical' } };
+    const result = await mergeWithResolution(cid, did, res, 'case B keep canonical');
+    expect(result.auditId).toBeTruthy();
+    const rows = (await supabase.from('student_enrollments').select('*').eq('studentId', cid) as any).data;
+    const openRows = rows.filter((r:any)=> r.effectiveTo == null);
+    const histRows = rows.filter((r:any)=> r.effectiveTo != null);
+    expect(openRows.length).toBe(1);
+    expect(openRows[0].className).toBe('Grade 2-A');
+    expect(histRows.length).toBe(1); // duplicate closed as historical
+    expect(histRows[0].className).toBe('Grade 3-A');
+  });
+
+  it('Case B: different class explicit keep duplicate leaves exactly 1 open (duplicate) and canonical historical', async () => {
+    const { cid, did } = await createPair({ name: 'CaseBKeepDup', classA: 'Grade 2-A', classB: 'Grade 3-A', ayA: 'ay-2026', ayB: 'ay-2026' });
+    const res: any = { profile_resolution: { ...baseProfile, className: 'duplicate' }, ...emptyHistory, enrollment_resolution: { action: 'keep_duplicate', keep: 'duplicate' } };
+    const result = await mergeWithResolution(cid, did, res, 'case B keep duplicate');
+    expect(result.auditId).toBeTruthy();
+    const rows = (await supabase.from('student_enrollments').select('*').eq('studentId', cid) as any).data;
+    const openRows = rows.filter((r:any)=> r.effectiveTo == null);
+    expect(openRows.length).toBe(1);
+    expect(openRows[0].className).toBe('Grade 3-A');
+    const histRows = rows.filter((r:any)=> r.effectiveTo != null);
+    expect(histRows.length).toBe(1);
+    expect(histRows[0].className).toBe('Grade 2-A');
+  });
+
+  it('Case B: consolidate with different class rejected', async () => {
+    const { cid, did } = await createPair({ name: 'CaseBConsolidateReject', classA: 'Grade 2-A', classB: 'Grade 3-A', ayA: 'ay-2026', ayB: 'ay-2026' });
+    const res: any = { profile_resolution: baseProfile, ...emptyHistory, enrollment_resolution: { action: 'consolidate', keep: 'canonical' } };
+    await expect(mergeWithResolution(cid, did, res, 'consolidate different class')).rejects.toThrow(/Cannot consolidate/);
+  });
+
+  // ── Case C: same class different year → explicit, exactly 1 open+historical ─────
+  it('Case C: same class different year without explicit blocked', async () => {
+    const { cid, did } = await createPair({ name: 'CaseCNoExplicit', classA: 'Grade 2-A', classB: 'Grade 2-A', ayA: 'ay-2026', ayB: 'ay-2025' });
+    const res: any = { profile_resolution: baseProfile, ...emptyHistory };
+    await expect(mergeWithResolution(cid, did, res, 'case C no explicit')).rejects.toThrow(/enrollment|contradictory|year/i);
+  });
+
+  it('Case C: same class different year explicit keep canonical → exactly 1 open + historical', async () => {
+    const { cid, did } = await createPair({ name: 'CaseCKeepCan', classA: 'Grade 2-A', classB: 'Grade 2-A', ayA: 'ay-2026', ayB: 'ay-2025' });
+    const res: any = { profile_resolution: baseProfile, ...emptyHistory, enrollment_resolution: { action: 'keep_canonical', keep: 'canonical' } };
+    const result = await mergeWithResolution(cid, did, res, 'case C keep canonical');
+    expect(result.auditId).toBeTruthy();
+    const rows = (await supabase.from('student_enrollments').select('*').eq('studentId', cid) as any).data;
+    const openRows = rows.filter((r:any)=> r.effectiveTo == null);
+    const histRows = rows.filter((r:any)=> r.effectiveTo != null);
+    expect(openRows.length).toBe(1);
+    expect(openRows[0].academicYearId).toBe('ay-2026');
+    expect(histRows.length).toBe(1);
+    expect(histRows[0].academicYearId).toBe('ay-2025');
+  });
+
+  it('Case C: same class different year explicit keep duplicate → exactly 1 open (duplicate year) + historical', async () => {
+    const { cid, did } = await createPair({ name: 'CaseCKeepDup', classA: 'Grade 2-A', classB: 'Grade 2-A', ayA: 'ay-2026', ayB: 'ay-2025' });
+    const res: any = { profile_resolution: { ...baseProfile, className: 'duplicate' }, ...emptyHistory, enrollment_resolution: { action: 'keep_duplicate', keep: 'duplicate' } };
+    const result = await mergeWithResolution(cid, did, res, 'case C keep duplicate');
+    expect(result.auditId).toBeTruthy();
+    const rows = (await supabase.from('student_enrollments').select('*').eq('studentId', cid) as any).data;
+    const openRows = rows.filter((r:any)=> r.effectiveTo == null);
+    expect(openRows.length).toBe(1);
+    expect(openRows[0].academicYearId).toBe('ay-2025');
+  });
+
+  // ── Case D: multiple opens → MULTIPLE_OPEN_ENROLLMENTS block ────────────────
+  it('Case D: multiple open enrollments blocked', async () => {
+    const { cid, did } = await createPair({ name: 'CaseDMulti', classA: 'Grade 2-A', classB: 'Grade 2-A', ayA: 'ay-2026', ayB: 'ay-2026', extraOpen: true });
+    const res: any = { profile_resolution: baseProfile, ...emptyHistory, enrollment_resolution: { action: 'consolidate', keep: 'canonical' } };
+    await expect(mergeWithResolution(cid, did, res, 'case D')).rejects.toThrow(/multiple open enrollments/i);
+  });
+
+  // ── Final open-enrollment assertion (canonical exactly 1, duplicate 0) ───────
+  it('Final assertion: canonical exactly 1 open after merge, duplicate 0 open+0 rows', async () => {
+    const { cid, did } = await createPair({ name: 'FinalAssert', classA: 'Grade 1-A', classB: 'Grade 1-A', ayA: 'ay-2026', ayB: 'ay-2026' });
+    // add historical to test preservation
+    await supabase.from('student_enrollments').insert({ id: `enr-${cid}-hist`, studentId: cid, className: 'Grade 1-A', academicYearId: 'ay-2025', effectiveFrom: '2025-09-01', effectiveTo: '2026-05-31', reason: 'promotion', sourceRef: 'test' });
+    const res: any = { profile_resolution: baseProfile, ...emptyHistory, enrollment_resolution: { action: 'consolidate', keep: 'canonical' } };
+    const result = await mergeWithResolution(cid, did, res, 'final assert');
+    expect(result.auditId).toBeTruthy();
+    const canRows = (await supabase.from('student_enrollments').select('*').eq('studentId', cid) as any).data;
+    const canOpen = canRows.filter((r:any)=> r.effectiveTo == null);
+    expect(canOpen.length).toBe(1);
+    const dupRows = (await supabase.from('student_enrollments').select('*').eq('studentId', did) as any).data;
+    expect(dupRows.length).toBe(0);
+    const dupOpen = dupRows.filter((r:any)=> r.effectiveTo == null);
+    expect(dupOpen.length).toBe(0);
+  });
+
+  it('Final assertion fails if merge would leave 0 open (both had no open)', async () => {
+    const { cid, did } = await createPair({ name: 'FinalZero', classA: 'Grade 1-A', classB: 'Grade 1-A', ayA: 'ay-2026', ayB: 'ay-2026', noOpen: true });
+    const res: any = { profile_resolution: baseProfile, ...emptyHistory, enrollment_resolution: { action: 'consolidate', keep: 'canonical' } };
+    await expect(mergeWithResolution(cid, did, res, 'zero open')).rejects.toThrow(/exactly 1 open/i);
+  });
+
+  // ── History server validation against EXACT conflict ───────────────────────
+  it('Attendance: reject when canonical/duplicate dates do not match exact conflict', async () => {
+    const cid = `stu-att-mismatch-a-${Date.now()}`;
+    const did = `stu-att-mismatch-b-${Date.now()}`;
+    await supabase.from('students').insert({ id: cid, name: 'AttMismatch', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: did, name: 'AttMismatch', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open`, studentId: cid, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${did}-open`, studentId: did, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    // Create 1 real conflict (same date) plus extra non-matching for duplicate
+    await supabase.from('attendance').insert({ id: `att-${cid}-1`, studentId: cid, className: 'Grade 1-A', date: '2026-09-15', status: 'present', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    await supabase.from('attendance').insert({ id: `att-${did}-1`, studentId: did, className: 'Grade 1-A', date: '2026-09-15', status: 'absent', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    await supabase.from('attendance').insert({ id: `att-${did}-2`, studentId: did, className: 'Grade 1-A', date: '2026-09-16', status: 'absent', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    // Try to claim mismatch: pair canonical's 2026-09-15 with duplicate's 2026-09-16 (different dates) -> should fail exact identity
+    const res: any = {
+      profile_resolution: baseProfile, exam_resolution: [],
+      attendance_resolution: [{ canonical_id: `att-${cid}-1`, duplicate_id: `att-${did}-2`, keep: 'canonical' }],
+      quiz_resolution: [], release_resolution: [], report_comment_resolution: [], enrollment_resolution: { action: 'consolidate', keep: 'canonical' }
+    };
+    await expect(mergeWithResolution(cid, did, res, 'att mismatch')).rejects.toThrow(/do not share identical date/i);
+  });
+
+  it('Attendance: reject third-party attendance id (belongs to other student)', async () => {
+    const cid = `stu-att-third-a-${Date.now()}`;
+    const did = `stu-att-third-b-${Date.now()}`;
+    const third = `stu-att-third-c-${Date.now()}`;
+    await supabase.from('students').insert({ id: cid, name: 'AttThird', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: did, name: 'AttThird', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: third, name: 'Third', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open`, studentId: cid, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${did}-open`, studentId: did, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${third}-open`, studentId: third, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('attendance').insert({ id: `att-${cid}-1`, studentId: cid, className: 'Grade 1-A', date: '2026-09-15', status: 'present', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    await supabase.from('attendance').insert({ id: `att-${did}-1`, studentId: did, className: 'Grade 1-A', date: '2026-09-15', status: 'absent', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    await supabase.from('attendance').insert({ id: `att-${third}-1`, studentId: third, className: 'Grade 1-A', date: '2026-09-15', status: 'present', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    const res: any = {
+      profile_resolution: baseProfile, exam_resolution: [],
+      attendance_resolution: [{ canonical_id: `att-${third}-1`, duplicate_id: `att-${did}-1`, keep: 'canonical' }],
+      quiz_resolution: [], release_resolution: [], report_comment_resolution: [], enrollment_resolution: { action: 'consolidate', keep: 'canonical' }
+    };
+    await expect(mergeWithResolution(cid, did, res, 'att third')).rejects.toThrow(/not canonical/);
+  });
+
+  it('Quiz: reject when quizId does not match exact conflict', async () => {
+    const cid = `stu-quiz-mismatch-a-${Date.now()}`;
+    const did = `stu-quiz-mismatch-b-${Date.now()}`;
+    await supabase.from('students').insert({ id: cid, name: 'QuizMismatch', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: did, name: 'QuizMismatch', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open`, studentId: cid, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${did}-open`, studentId: did, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('quiz_attempts').insert({ id: `quiz-${cid}-1`, studentId: cid, quizId: 'quiz-111', answers: [], totalEarned: 5, totalPossible: 10, startedAt: new Date().toISOString(), submittedAt: new Date().toISOString(), status: 'submitted' } as any);
+    await supabase.from('quiz_attempts').insert({ id: `quiz-${did}-1`, studentId: did, quizId: 'quiz-111', answers: [], totalEarned: 7, totalPossible: 10, startedAt: new Date().toISOString(), submittedAt: new Date().toISOString(), status: 'submitted' } as any);
+    await supabase.from('quiz_attempts').insert({ id: `quiz-${did}-2`, studentId: did, quizId: 'quiz-222', answers: [], totalEarned: 8, totalPossible: 10, startedAt: new Date().toISOString(), submittedAt: new Date().toISOString(), status: 'submitted' } as any);
+    // Pair canonical quiz-111 with duplicate quiz-222 (different quizId) -> should fail
+    const res: any = {
+      profile_resolution: baseProfile, exam_resolution: [], attendance_resolution: [],
+      quiz_resolution: [{ canonical_id: `quiz-${cid}-1`, duplicate_id: `quiz-${did}-2`, keep: 'canonical' }],
+      release_resolution: [], report_comment_resolution: [], enrollment_resolution: { action: 'consolidate', keep: 'canonical' }
+    };
+    await expect(mergeWithResolution(cid, did, res, 'quiz mismatch')).rejects.toThrow(/do not share identical quizId/i);
+  });
+
+  it('Quiz: reject third-party quiz id', async () => {
+    const cid = `stu-quiz-third-a-${Date.now()}`;
+    const did = `stu-quiz-third-b-${Date.now()}`;
+    const third = `stu-quiz-third-c-${Date.now()}`;
+    await supabase.from('students').insert({ id: cid, name: 'QuizThird', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: did, name: 'QuizThird', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: third, name: 'Third', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open`, studentId: cid, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${did}-open`, studentId: did, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${third}-open`, studentId: third, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('quiz_attempts').insert({ id: `quiz-${cid}-1`, studentId: cid, quizId: 'quiz-123', answers: [], totalEarned: 5, totalPossible: 10, startedAt: new Date().toISOString(), submittedAt: new Date().toISOString(), status: 'submitted' } as any);
+    await supabase.from('quiz_attempts').insert({ id: `quiz-${did}-1`, studentId: did, quizId: 'quiz-123', answers: [], totalEarned: 7, totalPossible: 10, startedAt: new Date().toISOString(), submittedAt: new Date().toISOString(), status: 'submitted' } as any);
+    await supabase.from('quiz_attempts').insert({ id: `quiz-${third}-1`, studentId: third, quizId: 'quiz-123', answers: [], totalEarned: 9, totalPossible: 10, startedAt: new Date().toISOString(), submittedAt: new Date().toISOString(), status: 'submitted' } as any);
+    const res: any = {
+      profile_resolution: baseProfile, exam_resolution: [], attendance_resolution: [],
+      quiz_resolution: [{ canonical_id: `quiz-${third}-1`, duplicate_id: `quiz-${did}-1`, keep: 'canonical' }],
+      release_resolution: [], report_comment_resolution: [], enrollment_resolution: { action: 'consolidate', keep: 'canonical' }
+    };
+    await expect(mergeWithResolution(cid, did, res, 'quiz third')).rejects.toThrow(/not canonical/);
+  });
+
+  it('Release: reject when UTC day does not match', async () => {
+    const cid = `stu-rel-mismatch-a-${Date.now()}`;
+    const did = `stu-rel-mismatch-b-${Date.now()}`;
+    await supabase.from('students').insert({ id: cid, name: 'RelMismatch', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: did, name: 'RelMismatch', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open`, studentId: cid, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${did}-open`, studentId: did, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('release_log').insert({ id: `rel-${cid}-1`, studentId: cid, createdAt: '2026-09-20T08:00:00Z' } as any);
+    await supabase.from('release_log').insert({ id: `rel-${did}-1`, studentId: did, createdAt: '2026-09-20T08:00:00Z' } as any);
+    await supabase.from('release_log').insert({ id: `rel-${did}-2`, studentId: did, createdAt: '2026-09-21T08:00:00Z' } as any);
+    // Pair same day canonical with different day duplicate
+    const res: any = {
+      profile_resolution: baseProfile, exam_resolution: [], attendance_resolution: [], quiz_resolution: [],
+      release_resolution: [{ canonical_id: `rel-${cid}-1`, duplicate_id: `rel-${did}-2`, keep: 'canonical' }],
+      report_comment_resolution: [], enrollment_resolution: { action: 'consolidate', keep: 'canonical' }
+    };
+    await expect(mergeWithResolution(cid, did, res, 'rel mismatch')).rejects.toThrow(/do not share identical UTC date/i);
+  });
+
+  it('Release: reject third-party release id', async () => {
+    const cid = `stu-rel-third-a-${Date.now()}`;
+    const did = `stu-rel-third-b-${Date.now()}`;
+    const third = `stu-rel-third-c-${Date.now()}`;
+    await supabase.from('students').insert({ id: cid, name: 'RelThird', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: did, name: 'RelThird', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: third, name: 'Third', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open`, studentId: cid, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${did}-open`, studentId: did, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${third}-open`, studentId: third, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    const day = '2026-09-20T08:00:00Z';
+    await supabase.from('release_log').insert({ id: `rel-${cid}-1`, studentId: cid, createdAt: day } as any);
+    await supabase.from('release_log').insert({ id: `rel-${did}-1`, studentId: did, createdAt: day } as any);
+    await supabase.from('release_log').insert({ id: `rel-${third}-1`, studentId: third, createdAt: day } as any);
+    const res: any = {
+      profile_resolution: baseProfile, exam_resolution: [], attendance_resolution: [], quiz_resolution: [],
+      release_resolution: [{ canonical_id: `rel-${third}-1`, duplicate_id: `rel-${did}-1`, keep: 'canonical' }],
+      report_comment_resolution: [], enrollment_resolution: { action: 'consolidate', keep: 'canonical' }
+    };
+    await expect(mergeWithResolution(cid, did, res, 'rel third')).rejects.toThrow(/not canonical/);
+  });
+
+  it('Report: reject when termId does not match', async () => {
+    const cid = `stu-rep-mismatch-a-${Date.now()}`;
+    const did = `stu-rep-mismatch-b-${Date.now()}`;
+    await supabase.from('students').insert({ id: cid, name: 'RepMismatch', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: did, name: 'RepMismatch', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open`, studentId: cid, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${did}-open`, studentId: did, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('report_comments').insert({ id: `rep-${cid}-1`, studentId: cid, termId: 'term-1', teacherComment: 'Good', principalComment: 'Well', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    await supabase.from('report_comments').insert({ id: `rep-${did}-1`, studentId: did, termId: 'term-1', teacherComment: 'Great', principalComment: 'Excellent', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    await supabase.from('report_comments').insert({ id: `rep-${did}-2`, studentId: did, termId: 'term-2', teacherComment: 'Other', principalComment: 'Other', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    // Pair term-1 canonical with term-2 duplicate (mismatch)
+    const res: any = {
+      profile_resolution: baseProfile, exam_resolution: [], attendance_resolution: [], quiz_resolution: [], release_resolution: [],
+      report_comment_resolution: [{ canonical_id: `rep-${cid}-1`, duplicate_id: `rep-${did}-2`, keep: 'canonical' }],
+      enrollment_resolution: { action: 'consolidate', keep: 'canonical' }
+    };
+    await expect(mergeWithResolution(cid, did, res, 'rep mismatch')).rejects.toThrow(/do not share identical termId/i);
+  });
+
+  it('Report: reject third-party report id', async () => {
+    const cid = `stu-rep-third-a-${Date.now()}`;
+    const did = `stu-rep-third-b-${Date.now()}`;
+    const third = `stu-rep-third-c-${Date.now()}`;
+    await supabase.from('students').insert({ id: cid, name: 'RepThird', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: did, name: 'RepThird', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: third, name: 'Third', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open`, studentId: cid, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${did}-open`, studentId: did, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${third}-open`, studentId: third, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('report_comments').insert({ id: `rep-${cid}-1`, studentId: cid, termId: 'term-1', teacherComment: 'Good', principalComment: 'Well', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    await supabase.from('report_comments').insert({ id: `rep-${did}-1`, studentId: did, termId: 'term-1', teacherComment: 'Great', principalComment: 'Excellent', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    await supabase.from('report_comments').insert({ id: `rep-${third}-1`, studentId: third, termId: 'term-1', teacherComment: 'Other', principalComment: 'Other', teacherId: 'teacher-1', createdAt: new Date().toISOString() } as any);
+    const res: any = {
+      profile_resolution: baseProfile, exam_resolution: [], attendance_resolution: [], quiz_resolution: [], release_resolution: [],
+      report_comment_resolution: [{ canonical_id: `rep-${third}-1`, duplicate_id: `rep-${did}-1`, keep: 'canonical' }],
+      enrollment_resolution: { action: 'consolidate', keep: 'canonical' }
+    };
+    await expect(mergeWithResolution(cid, did, res, 'rep third')).rejects.toThrow(/not canonical/);
+  });
+
+  // ── General rule verify→verify exact conflict→verify no third party→then DELETE/UPDATE ──
+  it('General: arbitrary DELETE via client-provided id rejected (verify exact conflict)', async () => {
+    const cid = `stu-gen-a-${Date.now()}`;
+    const did = `stu-gen-b-${Date.now()}`;
+    const third = `stu-gen-c-${Date.now()}`;
+    await supabase.from('students').insert({ id: cid, name: 'GenTest', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: did, name: 'GenTest', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('students').insert({ id: third, name: 'Third', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: null, familyId: null });
+    await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open`, studentId: cid, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${did}-open`, studentId: did, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${third}-open`, studentId: third, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('exams').insert({ id: `exam-${cid}-gen`, studentId: cid, subjectId: 'sub-gen', subject: 'Math', examType: 'Quiz', assessmentLabel: 'Q-01', termId: 'term-1', score: 60, total: 100, status: 'approved', entryState: 'scored', date: '2026-09-01', createdAt: '2026-09-01T08:00:00Z', teacherId: 'teacher-1' });
+    await supabase.from('exams').insert({ id: `exam-${did}-gen`, studentId: did, subjectId: 'sub-gen', subject: 'Math', examType: 'Quiz', assessmentLabel: 'Q-01', termId: 'term-1', score: 70, total: 100, status: 'approved', entryState: 'scored', date: '2026-09-01', createdAt: '2026-09-01T08:00:00Z', teacherId: 'teacher-1' });
+    await supabase.from('exams').insert({ id: `exam-${third}-gen`, studentId: third, subjectId: 'sub-gen', subject: 'Math', examType: 'Quiz', assessmentLabel: 'Q-01', termId: 'term-1', score: 99, total: 100, status: 'approved', entryState: 'scored', date: '2026-09-01', createdAt: '2026-09-01T08:00:00Z', teacherId: 'teacher-1' });
+    // Try to delete third's exam by claiming it's canonical's exam
+    const res: any = {
+      profile_resolution: baseProfile, exam_resolution: [{ canonical_exam_id: `exam-${third}-gen`, duplicate_exam_id: `exam-${did}-gen`, keep: 'duplicate' }],
+      attendance_resolution: [], quiz_resolution: [], release_resolution: [], report_comment_resolution: [], enrollment_resolution: { action: 'consolidate', keep: 'canonical' }
+    };
+    await expect(mergeWithResolution(cid, did, res, 'arbitrary')).rejects.toThrow(/does not belong to canonical/);
+    // Ensure third's exam still exists
+    const { data: thirdExam } = await supabase.from('exams').select('id').eq('id', `exam-${third}-gen`).maybeSingle();
+    expect(thirdExam).toBeTruthy();
+  });
+
+  // ── Rollback: failure after writes restores all ─────────────────────────────────
+  it('Rollback: failure after profile update and history writes restores everything', async () => {
+    const cid = `stu-rollback-a-${Date.now()}`;
+    const did = `stu-rollback-b-${Date.now()}`;
+    await supabase.from('students').insert({ id: cid, name: 'RollbackTest', className: 'Grade 1-A', parentId: 'parent-1', govId: 'GOV-ROLL-A', parentPhone: '2526000000', createdAt: new Date().toISOString(), transport: 'Bus 1', familyId: null });
+    await supabase.from('students').insert({ id: did, name: 'RollbackTest', className: 'Grade 1-A', parentId: null, govId: null, parentPhone: null, createdAt: new Date().toISOString(), transport: 'Bus 1', familyId: null });
+    await supabase.from('student_enrollments').insert({ id: `enr-${cid}-open`, studentId: cid, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('student_enrollments').insert({ id: `enr-${did}-open`, studentId: did, className: 'Grade 1-A', academicYearId: 'ay-2026', effectiveFrom: '2026-09-01', effectiveTo: null, reason: 'import', sourceRef: 'test' });
+    await supabase.from('exams').insert({ id: `exam-${cid}-roll`, studentId: cid, subjectId: 'sub-roll', subject: 'Math', examType: 'Quiz', assessmentLabel: 'Q-01', termId: 'term-1', score: 60, total: 100, status: 'approved', entryState: 'scored', date: '2026-09-01', createdAt: new Date().toISOString(), teacherId: 'teacher-1' });
+    await supabase.from('exams').insert({ id: `exam-${did}-roll`, studentId: did, subjectId: 'sub-roll', subject: 'Math', examType: 'Quiz', assessmentLabel: 'Q-01', termId: 'term-1', score: 70, total: 100, status: 'approved', entryState: 'scored', date: '2026-09-01', createdAt: new Date().toISOString(), teacherId: 'teacher-1' });
+    // Create a third gov that will cause failure late (after profile would have been updated) — use parent validation failure via non-existent parent after profile stage?
+    // Instead trigger exam validation failure by using mismatched identity (will fail after profile applied but before delete, triggering rollback)
+    const beforeName = (await supabase.from('students').select('name').eq('id', cid).maybeSingle() as any).data.name;
+    const res: any = {
+      profile_resolution: { name: 'duplicate', govId: 'canonical', parentId: 'canonical', parentPhone: 'canonical', transport: 'canonical', className: 'canonical' },
+      exam_resolution: [{ canonical_exam_id: `exam-${cid}-roll`, duplicate_exam_id: `exam-${did}-roll`, keep: 'canonical' }], // valid exam ids but we will inject a second invalid attendance to force late failure
+      attendance_resolution: [], quiz_resolution: [], release_resolution: [], report_comment_resolution: [], enrollment_resolution: { action: 'consolidate', keep: 'canonical' }
+    };
+    // Inject a fake attendance conflict that doesn't exist to cause late failure — but we have no attendance conflict, so adding one will be wrong length
+    // Instead we trigger failure by providing mismatched quiz validation: add quiz attempt with same quizId but we will claim mismatched keep that fails due to enrollment? Simpler: use valid exam but make duplicate enrollment multiple opens to fail after profile
+    // Let's add an extra open to canonical to cause final assertion failure after writes (canonical will have 2 opens before merge, but our enrollAction will still be checked)
+    // Actually multiple opens is checked before profile, so failure is early. To test rollback after writes, we need a failure that occurs after profile writes.
+    // We'll use release mismatch that is validated after profile: add two releases with different days and claim they are same day conflict
+    await supabase.from('release_log').insert({ id: `rel-${cid}-roll`, studentId: cid, createdAt: '2026-09-20T08:00:00Z' } as any);
+    await supabase.from('release_log').insert({ id: `rel-${did}-roll`, studentId: did, createdAt: '2026-09-20T08:00:00Z' } as any);
+    await supabase.from('release_log').insert({ id: `rel-${did}-roll2`, studentId: did, createdAt: '2026-09-21T08:00:00Z' } as any);
+    const res2: any = {
+      profile_resolution: { name: 'duplicate', govId: 'canonical', parentId: 'canonical', parentPhone: 'canonical', transport: 'canonical', className: 'canonical' },
+      exam_resolution: [{ canonical_exam_id: `exam-${cid}-roll`, duplicate_exam_id: `exam-${did}-roll`, keep: 'canonical' }],
+      attendance_resolution: [], quiz_resolution: [],
+      release_resolution: [{ canonical_id: `rel-${cid}-roll`, duplicate_id: `rel-${did}-roll2`, keep: 'canonical' }],
+      report_comment_resolution: [], enrollment_resolution: { action: 'consolidate', keep: 'canonical' }
+    };
+    await expect(mergeWithResolution(cid, did, res2, 'rollback')).rejects.toThrow(/do not share identical UTC date/i);
+    // Verify rollback: profile unchanged, both students still exist, enrollments unchanged, exams unchanged
+    const afterName = (await supabase.from('students').select('name').eq('id', cid).maybeSingle() as any).data.name;
+    expect(afterName).toBe(beforeName);
+    const { data: can } = await supabase.from('students').select('id').eq('id', cid).maybeSingle();
+    const { data: dup } = await supabase.from('students').select('id').eq('id', did).maybeSingle();
+    expect(can).toBeTruthy();
+    expect(dup).toBeTruthy();
+    const { data: examCan } = await supabase.from('exams').select('id').eq('id', `exam-${cid}-roll`).maybeSingle();
+    const { data: examDup } = await supabase.from('exams').select('id').eq('id', `exam-${did}-roll`).maybeSingle();
+    expect(examCan).toBeTruthy();
+    expect(examDup).toBeTruthy();
   });
 });

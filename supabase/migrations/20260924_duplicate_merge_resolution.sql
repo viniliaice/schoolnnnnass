@@ -370,7 +370,7 @@ BEGIN
 
   -- Validate enrollment action
   IF v_enroll_action_text NOT IN ('consolidate','transfer','preserve_history','keep_canonical','keep_duplicate','blocked') THEN
-    RAISE EXCEPTION 'Invalid enrollment action %', v_enroll_action USING ERRCODE='invalid_parameter_value';
+    RAISE EXCEPTION 'Invalid enrollment action %', v_enroll_action_text USING ERRCODE='invalid_parameter_value';
   END IF;
   -- For different class/year, only allow explicit resolution if provided; if not provided and they differ, block unless resolved
   IF v_open_can."className" IS NOT NULL AND v_open_dup."className" IS NOT NULL THEN
@@ -461,6 +461,12 @@ BEGIN
     IF v_dup_att_id IS NOT NULL THEN
       IF NOT EXISTS (SELECT 1 FROM public.attendance WHERE id=v_dup_att_id AND "studentId"=p_duplicate_id) THEN RAISE EXCEPTION 'Attendance % not duplicate', v_dup_att_id USING ERRCODE='foreign_key_violation'; END IF;
     END IF;
+    -- Verify exact conflict identity: canonical.date = duplicate.date
+    IF v_can_att_id IS NOT NULL AND v_dup_att_id IS NOT NULL THEN
+      IF NOT EXISTS (SELECT 1 FROM public.attendance c JOIN public.attendance d ON c.date = d.date WHERE c.id=v_can_att_id AND d.id=v_dup_att_id AND c."studentId"=p_canonical_id AND d."studentId"=p_duplicate_id) THEN
+        RAISE EXCEPTION 'Attendance % and % do not share identical date', v_can_att_id, v_dup_att_id USING ERRCODE='invalid_parameter_value';
+      END IF;
+    END IF;
   END LOOP;
 
   -- Quiz
@@ -477,6 +483,12 @@ BEGIN
     IF v_keep NOT IN ('canonical','duplicate','A','B') THEN RAISE EXCEPTION 'Invalid quiz keep %', v_keep USING ERRCODE='invalid_parameter_value'; END IF;
     IF v_can_quiz_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.quiz_attempts WHERE id=v_can_quiz_id AND "studentId"=p_canonical_id) THEN RAISE EXCEPTION 'Quiz attempt % not canonical', v_can_quiz_id USING ERRCODE='foreign_key_violation'; END IF;
     IF v_dup_quiz_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.quiz_attempts WHERE id=v_dup_quiz_id AND "studentId"=p_duplicate_id) THEN RAISE EXCEPTION 'Quiz attempt % not duplicate', v_dup_quiz_id USING ERRCODE='foreign_key_violation'; END IF;
+    -- Verify exact conflict identity: canonical.quizId = duplicate.quizId
+    IF v_can_quiz_id IS NOT NULL AND v_dup_quiz_id IS NOT NULL THEN
+      IF NOT EXISTS (SELECT 1 FROM public.quiz_attempts c JOIN public.quiz_attempts d ON c."quizId"=d."quizId" WHERE c.id=v_can_quiz_id AND d.id=v_dup_quiz_id AND c."studentId"=p_canonical_id AND d."studentId"=p_duplicate_id) THEN
+        RAISE EXCEPTION 'Quiz attempts % and % do not share identical quizId', v_can_quiz_id, v_dup_quiz_id USING ERRCODE='invalid_parameter_value';
+      END IF;
+    END IF;
   END LOOP;
 
   -- Release
@@ -493,6 +505,12 @@ BEGIN
     IF v_keep NOT IN ('canonical','duplicate','A','B') THEN RAISE EXCEPTION 'Invalid release keep %', v_keep USING ERRCODE='invalid_parameter_value'; END IF;
     IF v_can_rel_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.release_log WHERE id=v_can_rel_id AND "studentId"=p_canonical_id) THEN RAISE EXCEPTION 'Release % not canonical', v_can_rel_id USING ERRCODE='foreign_key_violation'; END IF;
     IF v_dup_rel_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.release_log WHERE id=v_dup_rel_id AND "studentId"=p_duplicate_id) THEN RAISE EXCEPTION 'Release % not duplicate', v_dup_rel_id USING ERRCODE='foreign_key_violation'; END IF;
+    -- Verify exact conflict identity: UTC date of canonical = UTC date of duplicate
+    IF v_can_rel_id IS NOT NULL AND v_dup_rel_id IS NOT NULL THEN
+      IF NOT EXISTS (SELECT 1 FROM public.release_log c JOIN public.release_log d ON (c."createdAt" AT TIME ZONE 'UTC')::date = (d."createdAt" AT TIME ZONE 'UTC')::date WHERE c.id=v_can_rel_id AND d.id=v_dup_rel_id AND c."studentId"=p_canonical_id AND d."studentId"=p_duplicate_id) THEN
+        RAISE EXCEPTION 'Release logs % and % do not share identical UTC date', v_can_rel_id, v_dup_rel_id USING ERRCODE='invalid_parameter_value';
+      END IF;
+    END IF;
   END LOOP;
 
   -- Report
@@ -509,6 +527,12 @@ BEGIN
     IF v_keep NOT IN ('canonical','duplicate','A','B') THEN RAISE EXCEPTION 'Invalid report keep %', v_keep USING ERRCODE='invalid_parameter_value'; END IF;
     IF v_can_rep_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.report_comments WHERE id=v_can_rep_id AND "studentId"=p_canonical_id) THEN RAISE EXCEPTION 'Report comment % not canonical', v_can_rep_id USING ERRCODE='foreign_key_violation'; END IF;
     IF v_dup_rep_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM public.report_comments WHERE id=v_dup_rep_id AND "studentId"=p_duplicate_id) THEN RAISE EXCEPTION 'Report comment % not duplicate', v_dup_rep_id USING ERRCODE='foreign_key_violation'; END IF;
+    -- Verify exact conflict identity: canonical.termId = duplicate.termId
+    IF v_can_rep_id IS NOT NULL AND v_dup_rep_id IS NOT NULL THEN
+      IF NOT EXISTS (SELECT 1 FROM public.report_comments c JOIN public.report_comments d ON c."termId"=d."termId" WHERE c.id=v_can_rep_id AND d.id=v_dup_rep_id AND c."studentId"=p_canonical_id AND d."studentId"=p_duplicate_id) THEN
+        RAISE EXCEPTION 'Report comments % and % do not share identical termId', v_can_rep_id, v_dup_rep_id USING ERRCODE='invalid_parameter_value';
+      END IF;
+    END IF;
   END LOOP;
 
   -- ── Snapshot before ──────────────────────────────────────────────────
@@ -554,28 +578,49 @@ BEGIN
   -- But we will handle enrollment consolidation below; for class change via profile, we need to update open enrollment class if consolidate not used?
   -- We'll handle enrollment after profile.
 
-  -- ── Enrollment consolidation per resolution ───────────────────────────
-  IF v_open_dup.id IS NOT NULL THEN
-    IF v_enroll_action_text = 'consolidate' THEN
-      -- Only valid when same class/year (already validated)
-      DELETE FROM public.student_enrollments WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NULL;
-    ELSIF v_enroll_action_text = 'transfer' OR v_enroll_action = 'keep_duplicate' THEN
-      UPDATE public.student_enrollments SET "studentId"=p_canonical_id WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NULL;
-    ELSIF v_enroll_action_text = 'preserve_history' OR v_enroll_action = 'keep_canonical' THEN
-      -- Keep canonical open, move duplicate open to history? Actually duplicate open should be closed or kept? For preserve, we keep both histories but only one open should remain.
-      -- If duplicate open is different class/year and we preserve history, we should close duplicate open as historical? But spec says preserve both when legitimate history, only one open should remain.
-      -- Simplest: transfer duplicate open as historical closed? For now, just delete duplicate open if different but preserving? Instead transfer duplicate open with effectiveTo = today-1 to keep history.
-      -- We'll transfer duplicate open to canonical but close it immediately to preserve history
-      UPDATE public.student_enrollments SET "studentId"=p_canonical_id WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NULL;
-      -- Then close it as historical if it's not the canonical's current
-      -- This is handled by record_class_assignment logic, but for simplicity keep as open transferred (will be deduped later)
+  -- ── Enrollment consolidation per resolution (SAFE — exactly ONE open) ──
+  -- Case A: same class + same year → consolidate (delete duplicate open)
+  -- Case B: different class → explicit, exactly ONE open (close non-kept)
+  -- Case C: same class + different year → explicit, exactly ONE open + historical preserved
+  -- Case D: multiple open already blocked above
+  IF v_open_can.id IS NOT NULL AND v_open_dup.id IS NOT NULL THEN
+    IF v_open_can."className" = v_open_dup."className" AND v_open_can."academicYearId" IS NOT DISTINCT FROM v_open_dup."academicYearId" THEN
+      -- Case A: identical
+      IF v_enroll_action_text = 'consolidate' THEN
+        DELETE FROM public.student_enrollments WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NULL;
+      ELSIF v_enroll_action_text IN ('transfer','keep_duplicate') AND v_enroll_keep = 'duplicate' THEN
+        -- Replace canonical with duplicate's enrollment (explicit)
+        UPDATE public.student_enrollments SET "effectiveTo" = CURRENT_DATE WHERE "studentId"=p_canonical_id AND "effectiveTo" IS NULL;
+        UPDATE public.student_enrollments SET "studentId"=p_canonical_id WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NULL;
+      ELSIF v_enroll_action_text IN ('transfer','keep_canonical','preserve_history') THEN
+        -- Keep canonical, close duplicate as historical (preserve provenance)
+        UPDATE public.student_enrollments SET "studentId"=p_canonical_id, "effectiveTo" = CURRENT_DATE WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NULL;
+      ELSE
+        RAISE EXCEPTION 'Invalid enrollment action % for identical class/year', v_enroll_action_text USING ERRCODE='invalid_parameter_value';
+      END IF;
     ELSE
-      -- default preserve
-      UPDATE public.student_enrollments SET "studentId"=p_canonical_id WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NULL;
+      -- Case B/C: different class or year → explicit required, exactly ONE open must remain
+      IF v_enr_res IS NULL THEN
+        RAISE EXCEPTION 'Enrollment histories are contradictory (% vs % / year % vs %). Provide explicit enrollment_resolution.', v_open_can."className", v_open_dup."className", COALESCE(v_open_can."academicYearId",'null'), COALESCE(v_open_dup."academicYearId",'null') USING ERRCODE='integrity_constraint_violation';
+      END IF;
+      IF v_enroll_action_text = 'consolidate' THEN
+        RAISE EXCEPTION 'Cannot consolidate enrollments with different class or academic year. Choose transfer or preserve.' USING ERRCODE='invalid_parameter_value';
+      END IF;
+      IF v_enroll_keep = 'duplicate' OR v_enroll_action_text = 'keep_duplicate' THEN
+        -- Keep duplicate's enrollment, close canonical's open as historical
+        UPDATE public.student_enrollments SET "effectiveTo" = CURRENT_DATE WHERE "studentId"=p_canonical_id AND "effectiveTo" IS NULL;
+        UPDATE public.student_enrollments SET "studentId"=p_canonical_id WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NULL;
+      ELSE
+        -- Keep canonical, close duplicate as historical (preserve)
+        UPDATE public.student_enrollments SET "studentId"=p_canonical_id, "effectiveTo" = CURRENT_DATE WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NULL;
+      END IF;
     END IF;
+  ELSIF v_open_dup.id IS NOT NULL THEN
+    -- Only duplicate has open → transfer to canonical (no conflict)
+    UPDATE public.student_enrollments SET "studentId"=p_canonical_id WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NULL;
   END IF;
   -- Transfer remaining historical enrollments
-  UPDATE public.student_enrollments SET "studentId"=p_canonical_id WHERE "studentId"=p_duplicate_id;
+  UPDATE public.student_enrollments SET "studentId"=p_canonical_id WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NOT NULL;
 
   -- If final class differs from canonical's previous class, ensure ledger reflects new class assignment
   -- Already updated students.className; if enrollment open class doesn't match final class, update it
@@ -681,6 +726,18 @@ BEGIN
   INSERT INTO public.audit_logs (action, details, "createdAt")
   VALUES ('students.merge', jsonb_build_object('auditId', v_audit_id, 'canonicalId', p_canonical_id, 'duplicateId', p_duplicate_id, 'actor', v_actor, 'reason', p_reason, 'before', v_before_counts, 'after', v_after, 'enrollmentAction', v_enroll_action_json, 'resolution', p_resolution), NOW());
 
+  -- ── Final open-enrollment assertion (must be exactly ONE open for canonical) ──
+  SELECT count(*) INTO v_count FROM public.student_enrollments WHERE "studentId"=p_canonical_id AND "effectiveTo" IS NULL;
+  IF v_count <> 1 THEN
+    RAISE EXCEPTION 'Post-merge verification failed: canonical must have exactly 1 open enrollment, found %', v_count USING ERRCODE='integrity_constraint_violation';
+  END IF;
+  SELECT count(*) INTO v_count FROM public.student_enrollments WHERE "studentId"=p_duplicate_id AND "effectiveTo" IS NULL;
+  IF v_count <> 0 THEN
+    RAISE EXCEPTION 'Post-merge verification failed: duplicate still has % open enrollments', v_count USING ERRCODE='integrity_constraint_violation';
+  END IF;
+  SELECT count(*) INTO v_count FROM public.student_enrollments WHERE "studentId"=p_duplicate_id;
+  IF v_count <> 0 THEN RAISE EXCEPTION 'Post-merge verification failed: duplicate still has % enrollments', v_count USING ERRCODE='integrity_constraint_violation'; END IF;
+
   -- ── Zero-dependency verification ─────────────────────────────────────
   SELECT count(*) INTO v_count FROM public.exams WHERE "studentId"=p_duplicate_id;
   IF v_count>0 THEN RAISE EXCEPTION 'Post-merge verification failed: duplicate still has % exams', v_count USING ERRCODE='integrity_constraint_violation'; END IF;
@@ -698,8 +755,7 @@ BEGIN
   IF v_count>0 THEN RAISE EXCEPTION 'Post-merge verification failed: % release', v_count USING ERRCODE='integrity_constraint_violation'; END IF;
   SELECT count(*) INTO v_count FROM public.report_comments WHERE "studentId"=p_duplicate_id;
   IF v_count>0 THEN RAISE EXCEPTION 'Post-merge verification failed: % report', v_count USING ERRCODE='integrity_constraint_violation'; END IF;
-  SELECT count(*) INTO v_count FROM public.student_enrollments WHERE "studentId"=p_duplicate_id;
-  IF v_count>0 THEN RAISE EXCEPTION 'Post-merge verification failed: % enrollments', v_count USING ERRCODE='integrity_constraint_violation'; END IF;
+
 
   DELETE FROM public.students WHERE id=p_duplicate_id;
   IF NOT FOUND THEN RAISE EXCEPTION 'Failed to delete duplicate %', p_duplicate_id USING ERRCODE='integrity_constraint_violation'; END IF;
