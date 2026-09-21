@@ -885,10 +885,20 @@ export function DuplicateStudents() {
                       <div>All required fields valid? {checklist.profileOk ? 'YES' : 'NO'}</div>
                       <div>No duplicate Gov ID? YES</div>
                       <div>No unresolved conflicts? {checklist.unresolved===0 ? 'YES' : `NO (${checklist.unresolved})`}</div>
+                      <div className={checklist.reasonOk ? 'text-emerald-700 font-bold' : 'text-amber-700 font-bold'}>Merge reason? {checklist.reasonOk ? 'YES' : 'NO — enter below ↓'}</div>
                       <div id="admin-confirmation" className={checklist.adminOk ? 'text-emerald-700 font-bold' : 'text-amber-700 font-bold'}>Admin confirmation? {checklist.adminOk ? 'YES' : 'NO — check boxes below ↓'}</div>
                     </div>
-                    <div className="mt-3 font-bold text-center">{checklist.canMergeResolved ? 'READY TO MERGE — All conflicts resolved' : checklist.unresolved>0 ? `MERGE DISABLED — ${checklist.unresolved} conflicts remaining` : 'MERGE BLOCKED — Review checklist'}</div>
-                    {!checklist.adminOk && <button type="button" onClick={()=> document.getElementById('admin-confirmation-section')?.scrollIntoView({behavior:'smooth'})} className="mt-2 w-full rounded-lg border border-amber-300 bg-amber-50 py-2 text-xs font-bold text-amber-800">Go to Admin Confirmation ↓</button>}
+                    <div className="mt-3 font-bold text-center">{
+                      checklist.canMergeResolved ? 'READY TO MERGE — All conflicts resolved'
+                        : !checklist.reasonOk ? 'MERGE BLOCKED — Merge reason required (enter below ↓)'
+                        : !checklist.adminOk ? 'MERGE BLOCKED — Admin confirmation incomplete'
+                        : checklist.unresolved>0 ? `MERGE DISABLED — ${checklist.unresolved} conflicts remaining`
+                        : 'MERGE BLOCKED — Review checklist'}</div>
+                    {(!checklist.adminOk || !checklist.reasonOk) && <div className="mt-2 text-xs text-amber-800">
+                      {!checklist.reasonOk && <div>• Enter a merge reason below (required when exams/gov/parent conflicts exist)</div>}
+                      {!checklist.adminOk && <div>• Complete Admin confirmation checkboxes below</div>}
+                    </div>}
+                    {(!checklist.adminOk || !checklist.reasonOk) && <button type="button" onClick={()=> document.getElementById('admin-confirmation-section')?.scrollIntoView({behavior:'smooth'})} className="mt-2 w-full rounded-lg border border-amber-300 bg-amber-50 py-2 text-xs font-bold text-amber-800">Go to Admin Confirmation ↓</button>}
                   </div>
                 )}
                 {/* Admin confirmation — always visible so MASTER CHECKLIST Admin confirmation? is not hidden */}
@@ -901,6 +911,10 @@ export function DuplicateStudents() {
                     <label className="flex items-start gap-2 text-sm font-semibold"><input type="checkbox" checked={finalConfirm.verifiedParentGov} onChange={e => setFinalConfirm({...finalConfirm, verifiedParentGov: e.target.checked})} className="mt-0.5 h-4 w-4 accent-indigo-600" /> I have verified the selected parent/Gov ID.</label>
                     <label className="flex items-start gap-2 text-sm font-semibold"><input type="checkbox" checked={finalConfirm.understandRemove} onChange={e => setFinalConfirm({...finalConfirm, understandRemove: e.target.checked})} className="mt-0.5 h-4 w-4 accent-indigo-600" /> I understand the duplicate record will be removed after verification.</label>
                     <label className="flex items-start gap-2 text-sm font-semibold"><input type="checkbox" checked={reviewChecked} onChange={e => setReviewChecked(e.target.checked)} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have reviewed this merge and the student I am keeping.</label>
+                    <label className="block text-sm font-semibold">Merge reason <span className={checklist?.reasonOk ? "text-emerald-700" : "text-rose-700"}>{checklist?.reasonOk ? '✓ provided' : '(required — gov/parent/exams)'}</span>
+                      <textarea value={mergeReason} onChange={e => setMergeReason(e.target.value)} rows={3} placeholder="Example: Duplicate created during September class import; verified using Gov ID and parent account. Exam records reviewed and correct records selected." className={"mt-1 w-full rounded-xl border p-3 text-sm " + (checklist?.reasonOk ? "bg-white border-slate-300" : "bg-white border-rose-300 ring-1 ring-rose-200")} />
+                      <span className={"text-xs " + (checklist?.reasonOk ? "text-emerald-700" : "text-rose-700")}>{checklist?.reasonOk ? "✓ Reason provided" : "Required: explain verification (gov/parent/exams reviewed)"}</span>
+                    </label>
                   </div>
                 )}
 
@@ -939,7 +953,7 @@ export function DuplicateStudents() {
                     {(preview.riskLevel === 'high' || preview.riskLevel === 'critical' || isResolvable) && <label className="block text-sm font-bold text-rose-800">High-risk — type MERGE<input value={mergeInput} onChange={e => setMergeInput(e.target.value)} placeholder="MERGE" className="mt-1 w-full rounded-xl border border-rose-300 bg-white p-3 font-mono uppercase text-sm" /></label>}
                     <div className="flex gap-3">
                       <button type="button" onClick={() => setShowConfirm(false)} className="flex-1 rounded-xl border bg-white py-3 font-bold">Cancel</button>
-                      <button type="button" onClick={handleMerge} disabled={!!(merging || !reviewChecked || (isResolvable && (!finalConfirm.reviewedConflicts || !finalConfirm.verifiedParentGov || !finalConfirm.understandRemove)) || ((preview?.riskLevel === 'high' || preview?.riskLevel === 'critical' || isResolvable) && mergeInput.trim().toUpperCase() !== 'MERGE'))} className="flex-1 rounded-xl bg-rose-600 py-3 font-bold text-white hover:bg-rose-700 disabled:opacity-50 flex items-center justify-center gap-2">{merging && <Loader2 className="h-4 w-4 animate-spin" />}Merge Students</button>
+                      <button type="button" onClick={handleMerge} disabled={!!(merging || !reviewChecked || (isResolvable && (!finalConfirm.reviewedConflicts || !finalConfirm.verifiedParentGov || !finalConfirm.understandRemove || !mergeReason.trim())) || ((preview?.riskLevel === 'high' || preview?.riskLevel === 'critical' || isResolvable) && mergeInput.trim().toUpperCase() !== 'MERGE'))} className="flex-1 rounded-xl bg-rose-600 py-3 font-bold text-white hover:bg-rose-700 disabled:opacity-50 flex items-center justify-center gap-2">{merging && <Loader2 className="h-4 w-4 animate-spin" />}Merge Students</button>
                     </div>
                     {isResolvable && <div className="text-xs text-slate-600">MERGE will execute as one transaction: validate → apply profile → resolve history → consolidate enrollment → verify → audit → delete duplicate. Any error rolls back.</div>}
                   </div>
@@ -947,10 +961,11 @@ export function DuplicateStudents() {
               }
               if (isResolvable) {
                 return (
-                  <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4 text-center">
-                    <div className="font-bold text-amber-900">{checklist?.unresolved ? `MERGE DISABLED — ${checklist?.unresolved} conflicts remaining` : '55 conflicts require resolution — No records have been changed. Review each conflict and choose which record to preserve.'}</div>
-                    <div className="mt-2 text-sm text-amber-800">No records have been changed. Review each conflict and choose which record to preserve. <button type="button" onClick={()=> setResolveExpanded(true)} className="ml-1 underline font-bold">Review Conflicts</button></div>
-                    <div className="mt-2 text-xs text-slate-500">CONFLICTS TO RESOLVE — {preview.conflicts.examConflicts} exam conflicts, {conflicts?.profile.govIdConflict ? 'Gov ID conflict' : ''} {conflicts?.profile.parentConflict ? 'Parent conflict' : ''}</div>
+                  <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4 text-center space-y-2">
+                    <div className="font-bold text-amber-900">{checklist && !checklist.reasonOk ? 'MERGE BLOCKED — Merge reason required (enter below ↓)' : checklist && !checklist.adminOk ? 'MERGE BLOCKED — Admin confirmation incomplete' : checklist?.unresolved ? `MERGE DISABLED — ${checklist?.unresolved} conflicts remaining` : '55 conflicts require resolution — No records have been changed. Review each conflict and choose which record to preserve.'}</div>
+                    <div className="mt-2 text-sm text-amber-800">{checklist && !checklist.reasonOk ? 'Enter merge reason in Admin confirmation below.' : checklist && !checklist.adminOk ? 'Complete all 5 Admin confirmation checkboxes below.' : <>No records have been changed. Review each conflict and choose which record to preserve. <button type="button" onClick={()=> { setResolveExpanded(true); document.getElementById('admin-confirmation-section')?.scrollIntoView({behavior:'smooth'}) }} className="ml-1 underline font-bold">Review Conflicts</button></>}</div>
+                    {(checklist && (!checklist.reasonOk || !checklist.adminOk)) && <button type="button" onClick={()=> document.getElementById('admin-confirmation-section')?.scrollIntoView({behavior:'smooth'})} className="mx-auto mt-2 rounded-full border border-amber-300 bg-white px-4 py-2 text-xs font-bold text-amber-800">Go to reason & confirmation ↓</button>}
+                    <div className="mt-2 text-xs text-slate-500">CONFLICTS TO RESOLVE — {preview.conflicts.examConflicts} exam conflicts, {conflicts?.profile.govIdConflict ? 'Gov ID conflict' : ''} {conflicts?.profile.parentConflict ? 'Parent conflict' : ''} {checklist ? `· Exams ${checklist.examsOk ? 'YES' : examResMap.size+"/"+checklist.examsTotal} · Reason ${checklist.reasonOk ? 'YES':'NO'} · Admin ${checklist.adminOk ? 'YES':'NO'}` : ''}</div>
                     <div className="mt-2"><XCircle className="mx-auto h-8 w-8 text-slate-400" /><p className="mt-2 font-bold">Merge disabled for this pair</p><p className="text-xs text-slate-500">Resolve identity conflicts before merging. No data will be deleted.</p></div>
                   </div>
                 );
