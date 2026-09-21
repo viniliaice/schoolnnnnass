@@ -37,21 +37,33 @@ link shared by a supervisor still opens.
 
 ## Sidebar entries
 
-The lesson-plan pages use the `NotepadText` (review) and `ListChecks` (submission tracking) icons from `lucide-react`.
+Since the 2026-09-15 sidebar redesign the menu is grouped, so these rows live in
+the `academic` section of `NAV` in [navigation.ts](https://github.com/org/repo/blob/main/src/lib/navigation.ts)
+rather than in a flat list inside `Sidebar.tsx`. Paths, labels and icons are
+unchanged — `NotepadText` for review, `ListChecks` for submission tracking.
 
 ```typescript
-// Teacher sidebar
+// NAV.teacher.sections → id: 'academic'
 { label: 'Lesson Plans', icon: NotepadText, path: '/teacher/lesson-plans' }
 
-// Supervisor sidebar — Submission Tracking answers "who submitted?",
-// Lesson Plans is the review page.
+// NAV.supervisor.sections → id: 'academic'
+// Submission Tracking answers "who submitted?", Lesson Plans is the review page.
+{ label: 'Lesson Plans', icon: NotepadText, path: '/supervisor/lesson-plans' },
 { label: 'Submission Tracking', icon: ListChecks, path: '/supervisor/lesson-plan-submissions' }
-{ label: 'Lesson Plans', icon: NotepadText, path: '/supervisor/lesson-plans' }
 
-// Admin sidebar (same pair, under /admin/*)
+// NAV.admin.sections → id: 'academic' (same pair, under /admin/*)
+{ label: 'Lesson Plans', icon: NotepadText, path: '/admin/lesson-plans' },
 { label: 'Submission Tracking', icon: ListChecks, path: '/admin/lesson-plan-submissions' }
-{ label: 'Lesson Plans', icon: NotepadText, path: '/admin/lesson-plans' }
 ```
+
+The `academic` group is collapsed by default unless it holds the current page,
+so tests that drive the real `<App />` must expand it before clicking a row —
+see `clickNav()` in `src/lib/__tests__/admin-lesson-plan-review.test.tsx`, which
+resolves the owning group with `sectionIdForPath()` and clicks its
+`button[aria-controls="nav-section-academic"]` header first.
+
+Menu structure, remembered expand state and the mobile drawer are documented in
+[core/ui/sidebar-navigation](../../core/ui/sidebar-navigation.md).
 
 ## App.tsx routing
 

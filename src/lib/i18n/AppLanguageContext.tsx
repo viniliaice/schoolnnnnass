@@ -73,6 +73,7 @@ const dictionaries: Record<AppLanguage, Dictionary> = {
     'nav.Student Directory': 'Student Directory',
     'nav.Submission Tracking': 'Submission Tracking',
     'nav.Monitor Marks Entries': 'Monitor Marks Entries',
+    'nav.Duplicate Students': 'Duplicate Students',
     'marksMonitor.title': 'Monitor Marks Entries',
     'marksMonitor.subtitle': 'Track mark-entry completion by academic period, teacher, class, subject, and exam workflow.',
     'marksMonitor.totalAssignments': 'Assignments',
@@ -165,6 +166,32 @@ const dictionaries: Record<AppLanguage, Dictionary> = {
     'marksMonitor.scope.quiz': 'Quiz',
     'marksMonitor.scope.attendance': 'Attendance',
     'marksMonitor.scope.discipline': 'Akhlaaq / Discipline',
+
+    // Grouped sidebar — collapsible section headers.
+    'nav.Students': 'Students',
+    'nav.Academic': 'Academic',
+    'nav.Grades & Exams': 'Grades & Exams',
+    'nav.Classroom': 'Classroom',
+    'nav.Users & Staff': 'Users & Staff',
+    'nav.Transport': 'Transport',
+    'nav.Communications': 'Communications',
+    'nav.Administration': 'Administration',
+    'nav.Reports': 'Reports',
+    'nav.Quizzes': 'Quizzes',
+
+    // Item labels the flat menu rendered through the t() fallback only.
+    'nav.Class Updates / Import': 'Class Updates / Import',
+    'nav.Lesson Plan Upload': 'Lesson Plan Upload',
+    'nav.Grade Corrections': 'Grade Corrections',
+    'nav.Manage Drivers': 'Manage Drivers',
+
+    // Sidebar chrome (drawer, filter box, a11y names).
+    'nav.menu': 'Main navigation',
+    'nav.openMenu': 'Open menu',
+    'nav.closeMenu': 'Close menu',
+    'nav.filter': 'Filter menu',
+    'nav.filterPlaceholder': 'Filter menu…',
+    'nav.noMatches': 'No menu items match your search.',
 
     'lessonReview.title': 'Lesson Plan Review',
     'lessonReview.subtitle': 'Read the plan, check the AI score, then approve or request revisions.',
@@ -308,6 +335,7 @@ const dictionaries: Record<AppLanguage, Dictionary> = {
     'nav.Student Directory': 'دليل الطلاب',
     'nav.Submission Tracking': 'متابعة التسليم',
     'nav.Monitor Marks Entries': 'متابعة إدخال الدرجات',
+    'nav.Duplicate Students': 'الطلاب المكررون',
     'marksMonitor.title': 'متابعة إدخال الدرجات',
     'marksMonitor.subtitle': 'تابع اكتمال إدخال الدرجات حسب العام والفصل والمعلم والصف والمادة ونوع الاختبار.',
     'marksMonitor.totalAssignments': 'التكليفات',
@@ -400,6 +428,32 @@ const dictionaries: Record<AppLanguage, Dictionary> = {
     'marksMonitor.scope.quiz': 'الاختبار',
     'marksMonitor.scope.attendance': 'الحضور',
     'marksMonitor.scope.discipline': 'الأخلاق / الانضباط',
+
+    // Grouped sidebar — collapsible section headers.
+    'nav.Students': 'الطلاب',
+    'nav.Academic': 'الشؤون الأكاديمية',
+    'nav.Grades & Exams': 'الدرجات والاختبارات',
+    'nav.Classroom': 'الأنشطة الصفية',
+    'nav.Users & Staff': 'المستخدمون والموظفون',
+    'nav.Transport': 'النقل',
+    'nav.Communications': 'التواصل',
+    'nav.Administration': 'الإدارة',
+    'nav.Reports': 'التقارير',
+    'nav.Quizzes': 'الاختبارات القصيرة',
+
+    // Item labels the flat menu rendered through the t() fallback only.
+    'nav.Class Updates / Import': 'تحديث الصفوف / الاستيراد',
+    'nav.Lesson Plan Upload': 'رفع خطة الدرس',
+    'nav.Grade Corrections': 'تصحيحات الدرجات',
+    'nav.Manage Drivers': 'إدارة السائقين',
+
+    // Sidebar chrome (drawer, filter box, a11y names).
+    'nav.menu': 'القائمة الرئيسية',
+    'nav.openMenu': 'فتح القائمة',
+    'nav.closeMenu': 'إغلاق القائمة',
+    'nav.filter': 'تصفية القائمة',
+    'nav.filterPlaceholder': 'ابحث في القائمة…',
+    'nav.noMatches': 'لا توجد عناصر مطابقة لبحثك.',
 
     'lessonReview.title': 'مراجعة خطة الدرس',
     'lessonReview.subtitle': 'اقرأ الخطة، راجع درجة الذكاء الاصطناعي، ثم وافق أو اطلب تعديلات.',

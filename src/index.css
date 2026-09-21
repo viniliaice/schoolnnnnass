@@ -286,6 +286,13 @@ html[data-theme="aurora"][data-mode="light"] {
   to { transform: translateX(0); }
 }
 
+/* Mirror of slideRight for the RTL (Arabic) mobile nav drawer, which is
+   anchored to the inline-start edge and therefore enters from the right. */
+@keyframes slideLeft {
+  from { transform: translateX(100%); }
+  to { transform: translateX(0); }
+}
+
 @keyframes themeFade {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: translateY(0); }
@@ -749,6 +756,17 @@ html[data-mode="light"] .theme-sidebar .text-amber-100 { color: var(--text) !imp
 html[data-mode="light"] .theme-sidebar [class*="bg-white/"] { background-color: color-mix(in srgb, var(--accent) 12%, transparent) !important; }
 html[data-mode="light"] .theme-sidebar [class*="bg-white/"][class*="shadow-lg"] { background-color: color-mix(in srgb, var(--accent) 18%, transparent) !important; }
 html[data-mode="light"] .theme-sidebar .hover\:text-white:hover { color: var(--text) !important; }
+
+/* Collapsible nav groups — the hairline that indents a group, the "you are
+   here" dot and the menu filter all use white-alpha tokens that disappear on
+   a light sidebar, so they get accent-based equivalents in light mode. */
+html[data-mode="light"] .theme-sidebar [class*="border-white/"] { border-color: color-mix(in srgb, var(--accent) 32%, transparent) !important; }
+.theme-nav-dot { background-color: rgba(255, 255, 255, 0.9); }
+html[data-mode="light"] .theme-sidebar .theme-nav-dot { background-color: var(--accent); }
+.theme-nav-filter::placeholder { color: rgba(255, 255, 255, 0.55); }
+html[data-mode="light"] .theme-sidebar .theme-nav-filter { border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
+html[data-mode="light"] .theme-sidebar .theme-nav-filter::placeholder { color: color-mix(in srgb, var(--text) 55%, transparent); }
+html[data-mode="light"] .theme-sidebar .theme-nav-filter:focus { border-color: color-mix(in srgb, var(--accent) 65%, transparent); }
 
 .theme-button-primary {
   background: var(--button-gradient);

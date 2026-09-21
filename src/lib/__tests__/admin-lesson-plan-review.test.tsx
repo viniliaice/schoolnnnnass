@@ -118,6 +118,8 @@ vi.mock('../../pages/shared/LessonPlanPdfDocument', () => ({ LessonPlanPdfDocume
 
 import App from '../../App';
 import { queryClient } from '../queryClient';
+import { navForRole, sectionIdForPath } from '../navigation';
+import type { Role } from '../../types';
 import { afterEach } from 'vitest';
 
 const ADMIN = { role: 'admin', userId: 'admin-1', userName: 'Admin One', email: 'admin@mbk.edu' };
@@ -158,11 +160,45 @@ async function waitFor(host: HTMLElement, predicate: () => boolean, label: strin
   if (!predicate()) throw new Error(`timed out waiting for ${label}`);
 }
 
+/** The collapsible group that holds a menu label for a role, if any. */
+function sectionIdForLabel(role: Role, label: string): string | undefined {
+  const nav = navForRole(role);
+  const path =
+    nav.sections.flatMap((section) => section.items).find((item) => item.label === label)?.path ??
+    nav.pinned.find((item) => item.label === label)?.path;
+  return path ? sectionIdForPath(role, path) : undefined;
+}
+
+/**
+ * Click a sidebar row, expanding its group first when needed.
+ *
+ * The sidebar now groups pages into collapsible sections (lib/navigation.ts),
+ * so a row that is not pinned only exists in the DOM once its section is open.
+ * The section is resolved through the real nav config rather than by clicking
+ * headers until the label shows up, so this still fails loudly if an entry
+ * disappears from the menu.
+ */
 async function clickNav(host: HTMLElement, label: string) {
-  const button = [...host.querySelectorAll('button')].find(
-    (candidate) => candidate.textContent?.trim() === label
-  );
-  if (!button) throw new Error(`no sidebar entry labelled "${label}"`);
+  const role = (sessionRef.current?.role ?? 'admin') as Role;
+  const findRow = () =>
+    [...host.querySelectorAll('button')].find((candidate) => candidate.textContent?.trim() === label);
+
+  let target = findRow();
+  if (!target) {
+    const sectionId = sectionIdForLabel(role, label);
+    const header = sectionId
+      ? host.querySelector<HTMLButtonElement>(`button[aria-controls="nav-section-${sectionId}"]`)
+      : null;
+    if (header?.getAttribute('aria-expanded') !== 'true') {
+      await act(async () => {
+        header?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      });
+    }
+    target = findRow();
+  }
+  if (!target) throw new Error(`no sidebar entry labelled "${label}"`);
+
+  const button = target;
   await act(async () => {
     button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
