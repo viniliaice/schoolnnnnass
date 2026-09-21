@@ -1423,8 +1423,382 @@ function createMockSupabase(): SupabaseClient {
       if (fn === 'resolve_class_import_rows') return { data: [], error: null };
     }
 
+
+    // ── Detailed merge conflicts (lazy loading) ──
+    if (fn === 'get_merge_conflicts') {
+      if (isAnon || !isAdmin) return { data: null, error: { message: 'Only administrators may view merge conflicts.', code: '42501' } };
+      const canId = params?.p_canonical_id ?? params?.p_canonicalId;
+      const dupId = params?.p_duplicate_id ?? params?.p_duplicateId;
+      const can = findStudent(canId);
+      const dup = findStudent(dupId);
+      if (!can || !dup) return { data: null, error: { message: 'Student not found', code: 'PGRST116' } };
+      const profile = {
+        govIdConflict: (can.govId||'') !== (dup.govId||''),
+        parentConflict: (can.parentId||null) !== (dup.parentId||null),
+        nameConflict: can.name !== dup.name,
+        classConflict: can.className !== dup.className,
+        transportConflict: (can.transport||'') !== (dup.transport||''),
+        phoneConflict: (can.parentPhone||'') !== (dup.parentPhone||''),
+        canonical: { id: can.id, name: can.name, className: can.className, govId: can.govId, parentId: can.parentId, parentPhone: can.parentPhone, transport: can.transport, familyId: can.familyId },
+        duplicate: { id: dup.id, name: dup.name, className: dup.className, govId: dup.govId, parentId: dup.parentId, parentPhone: dup.parentPhone, transport: dup.transport, familyId: dup.familyId },
+      };
+      const canExams = mockTables.exams.filter((e:any)=>e.studentId===canId);
+      const dupExams = mockTables.exams.filter((e:any)=>e.studentId===dupId);
+      const examConflicts:any[] = [];
+      for (const c of canExams) for (const d of dupExams) if ((c.subjectId||null)===(d.subjectId||null) && c.examType===d.examType && (c.assessmentLabel||null)===(d.assessmentLabel||null) && (c.termId||null)===(d.termId||null)) examConflicts.push({ identity: { subjectId: c.subjectId, examType: c.examType, assessmentLabel: c.assessmentLabel, termId: c.termId, subject: c.subject }, canonical: { id: c.id, score: c.score, total: c.total, status: c.status, createdAt: c.createdAt, date: c.date, subjectId: c.subjectId, examType: c.examType, assessmentLabel: c.assessmentLabel, termId: c.termId }, duplicate: { id: d.id, score: d.score, total: d.total, status: d.status, createdAt: d.createdAt, date: d.date, subjectId: d.subjectId, examType: d.examType, assessmentLabel: d.assessmentLabel, termId: d.termId }, identical: c.score===d.score && c.total===d.total && (c.subjectId||null)===(d.subjectId||null) });
+      // Attendance same date
+      const attConflicts:any[] = [];
+      const canAtt = mockTables.attendance.filter((a:any)=>a.studentId===canId);
+      const dupAtt = mockTables.attendance.filter((a:any)=>a.studentId===dupId);
+      for (const c of canAtt) for (const d of dupAtt) if (c.date===d.date) attConflicts.push({ identity: { date: c.date }, canonical: { id: c.id, status: c.status, date: c.date, className: c.className, createdAt: c.createdAt }, duplicate: { id: d.id, status: d.status, date: d.date, className: d.className, createdAt: d.createdAt } });
+      // Quiz same quizId
+      const quizConflicts:any[] = [];
+      const canQuiz = mockTables.quiz_attempts.filter((q:any)=>q.studentId===canId);
+      const dupQuiz = mockTables.quiz_attempts.filter((q:any)=>q.studentId===dupId);
+      for (const c of canQuiz) for (const d of dupQuiz) if (c.quizId===d.quizId) quizConflicts.push({ identity: { quizId: c.quizId }, canonical: { id: c.id, quizId: c.quizId, totalEarned: c.totalEarned, status: c.status, submittedAt: c.submittedAt }, duplicate: { id: d.id, quizId: d.quizId, totalEarned: d.totalEarned, status: d.status, submittedAt: d.submittedAt } });
+      // Release same UTC day
+      const relConflicts:any[] = [];
+      const canRel = mockTables.release_log.filter((r:any)=>r.studentId===canId);
+      const dupRel = mockTables.release_log.filter((r:any)=>r.studentId===dupId);
+      for (const c of canRel) for (const d of dupRel) if ((c.createdAt||'').slice(0,10)===(d.createdAt||'').slice(0,10)) relConflicts.push({ identity: { day: (c.createdAt||'').slice(0,10) }, canonical: { id: c.id, createdAt: c.createdAt, studentId: c.studentId }, duplicate: { id: d.id, createdAt: d.createdAt, studentId: d.studentId } });
+      // Report same termId
+      const repConflicts:any[] = [];
+      const canRep = mockTables.report_comments.filter((r:any)=>r.studentId===canId);
+      const dupRep = mockTables.report_comments.filter((r:any)=>r.studentId===dupId);
+      for (const c of canRep) for (const d of dupRep) if (c.termId===d.termId) repConflicts.push({ identity: { termId: c.termId }, canonical: { id: c.id, termId: c.termId, teacherComment: c.teacherComment, principalComment: c.principalComment }, duplicate: { id: d.id, termId: d.termId, teacherComment: d.teacherComment, principalComment: d.principalComment } });
+      const canOpen = mockTables.student_enrollments.find((e:any)=>e.studentId===canId && e.effectiveTo==null) || null;
+      const dupOpen = mockTables.student_enrollments.find((e:any)=>e.studentId===dupId && e.effectiveTo==null) || null;
+      const enrollments = {
+        canonicalOpen: canOpen ? { id: canOpen.id, className: canOpen.className, academicYearId: canOpen.academicYearId, effectiveFrom: canOpen.effectiveFrom } : null,
+        duplicateOpen: dupOpen ? { id: dupOpen.id, className: dupOpen.className, academicYearId: dupOpen.academicYearId, effectiveFrom: dupOpen.effectiveFrom } : null,
+        canonicalHistory: mockTables.student_enrollments.filter((e:any)=>e.studentId===canId && e.effectiveTo!=null).length,
+        duplicateHistory: mockTables.student_enrollments.filter((e:any)=>e.studentId===dupId && e.effectiveTo!=null).length,
+      };
+      return { data: { profile, exams: examConflicts, attendance: attConflicts, quizAttempts: quizConflicts, releaseLogs: relConflicts, reportComments: repConflicts, enrollments, counts: { exams: examConflicts.length, attendance: attConflicts.length, quizAttempts: quizConflicts.length, releaseLogs: relConflicts.length, reportComments: repConflicts.length } }, error: null };
+    }
+
+    // ── Resolved merge (guided resolution) ──
+    if (fn === 'merge_duplicate_students_resolved' || fn === 'merge_with_resolution') {
+      if (isAnon || !isAdmin) return { data: null, error: { message: 'Only administrators may merge students.', code: '42501' } };
+      const canId = params?.p_canonical_id ?? params?.p_canonicalId ?? params?.p_canonical_id;
+      const dupId = params?.p_duplicate_id ?? params?.p_duplicateId ?? params?.p_duplicate_id;
+      const resolution = params?.p_resolution ?? params?.p_resolution ?? params?.p_resolution ?? {};
+      const reason = params?.p_reason ?? null;
+      // Normalize resolution shape: allow both snake and camel, also allow p_profile_resolution etc if passed directly
+      const prof = resolution?.profile_resolution ?? resolution?.profileResolution ?? resolution?.profile ?? {};
+      const examRes = resolution?.exam_resolution ?? resolution?.examResolution ?? resolution?.exams ?? [];
+      const attRes = resolution?.attendance_resolution ?? resolution?.attendanceResolution ?? resolution?.attendance ?? [];
+      const quizRes = resolution?.quiz_resolution ?? resolution?.quizResolution ?? resolution?.quizAttempts ?? [];
+      const relRes = resolution?.release_resolution ?? resolution?.releaseResolution ?? resolution?.releaseLogs ?? [];
+      const repRes = resolution?.report_comment_resolution ?? resolution?.reportCommentResolution ?? resolution?.reportComments ?? [];
+      const enrRes = resolution?.enrollment_resolution ?? resolution?.enrollmentResolution ?? resolution?.enrollment ?? null;
+      // Also support top-level params if caller passed p_profile_resolution etc separately (older spec)
+      const p_prof = params?.p_profile_resolution ?? params?.p_profileResolution;
+      const finalProf = p_prof ? p_prof : prof;
+      const finalExamRes = params?.p_exam_resolution ?? params?.p_examResolution ?? examRes;
+      const finalAttRes = params?.p_attendance_resolution ?? attRes;
+      const finalQuizRes = params?.p_quiz_resolution ?? quizRes;
+      const finalRelRes = params?.p_release_resolution ?? relRes;
+      const finalRepRes = params?.p_report_comment_resolution ?? repRes;
+      const finalEnrRes = params?.p_enrollment_resolution ?? enrRes;
+      const can = findStudent(canId);
+      const dup = findStudent(dupId);
+      if (!can || !dup) return { data: null, error: { message: 'Student not found' } };
+      // Snapshot for rollback
+      const backup = JSON.parse(JSON.stringify(mockTables));
+      try {
+        // Validate Gov not belonging to third student if final gov chosen
+        const choiceGov = (finalProf?.gov_id ?? finalProf?.govId ?? finalProf?.gov ?? 'canonical');
+        let finalGov: string | null = null;
+        if (choiceGov === 'remove' || choiceGov === 'blank') finalGov = null;
+        else if (choiceGov === 'duplicate' || choiceGov === 'B') finalGov = dup.govId ? String(dup.govId).trim() : null;
+        else finalGov = can.govId ? String(can.govId).trim() : null;
+        // Normalize empty
+        if (finalGov === '') finalGov = null;
+        if (finalGov) {
+          const gkey = govKey(finalGov);
+          if (gkey !== '' && mockTables.students.some((s:any)=> s.id!==canId && s.id!==dupId && govKey(s.govId)===gkey)) {
+            throw new Error('This Government ID belongs to another student.');
+          }
+          // Also check duplicate gov in same batch? Already validated
+          // Verify chosen gov is actually from canonical or duplicate (or blank)
+          const canG = can.govId ? String(can.govId).trim() : null;
+          const dupG = dup.govId ? String(dup.govId).trim() : null;
+          const canGkey = canG ? govKey(canG) : '';
+          const dupGkey = dupG ? govKey(dupG) : '';
+          const finalGkey = govKey(finalGov);
+          if (finalGkey !== '' && finalGkey !== canGkey && finalGkey !== dupGkey) {
+            // Allow if one is blank? But if finalGov is non-blank not matching either, reject
+            if (!(finalGov===canG || finalGov===dupG)) {
+              // Check if caller tried to inject arbitrary gov
+              throw new Error('Selected Gov ID does not belong to either student.');
+            }
+          }
+        }
+        // Validate parent exists if chosen
+        const choiceParent = (finalProf?.parent_id ?? finalProf?.parentId ?? finalProf?.parent ?? 'canonical');
+        let finalParent: string | null = null;
+        let cp = choiceParent;
+        if (cp === 'A') cp='canonical'; if (cp==='B') cp='duplicate';
+        if (cp==='unassigned' || cp==='remove' || cp==='blank' || cp==='null') cp='remove';
+        if (cp==='remove') finalParent=null;
+        else if (cp==='duplicate') finalParent=dup.parentId;
+        else finalParent=can.parentId;
+        if (finalParent) {
+          const exists = mockTables.profiles.some((p:any)=>p.id===finalParent) || mockTables.students.some((s:any)=>s.id===finalParent);
+          // Also check demoProfiles via mockTables.profiles already includes demo
+          // If not found in mock, check demoProfiles directly (already in mockTables.profiles)
+          if (!mockTables.profiles.some((p:any)=>p.id===finalParent)) {
+            // Check if it's a valid profile in mockTables (maybe not seeded)
+            // To keep lenient, allow if parentId is from either student (since they were valid at creation)
+            const isFromEither = finalParent===can.parentId || finalParent===dup.parentId;
+            if (!isFromEither) throw new Error(`Selected parent ${finalParent} does not exist.`);
+          }
+        }
+        // Validate parentPhone choice
+        const choicePhone = (finalProf?.parent_phone ?? finalProf?.parentPhone ?? 'canonical');
+        // No strict validation beyond belonging check (phone is free form)
+        // Validate transport, name, class
+        const choiceName = (finalProf?.name ?? 'canonical');
+        const choiceClass = (finalProf?.class_name ?? finalProf?.className ?? finalProf?.class ?? 'canonical');
+        const choiceTransport = (finalProf?.transport ?? 'canonical');
+        // Validate enrollment
+        const canOpen = mockTables.student_enrollments.find((e:any)=>e.studentId===canId && e.effectiveTo==null) || null;
+        const dupOpen = mockTables.student_enrollments.find((e:any)=>e.studentId===dupId && e.effectiveTo==null) || null;
+        const canOpenCnt = mockTables.student_enrollments.filter((e:any)=>e.studentId===canId && e.effectiveTo==null).length;
+        const dupOpenCnt = mockTables.student_enrollments.filter((e:any)=>e.studentId===dupId && e.effectiveTo==null).length;
+        if (canOpenCnt>1 || dupOpenCnt>1) throw new Error('Merge blocked: multiple open enrollments detected. ENROLLMENT_CONFLICT');
+        let enrollAction = 'consolidate';
+        let enrollKeep = 'canonical';
+        if (finalEnrRes && typeof finalEnrRes==='object' && !Array.isArray(finalEnrRes)) {
+          enrollAction = finalEnrRes.action ?? finalEnrRes.keep ?? 'consolidate';
+          enrollKeep = finalEnrRes.keep ?? 'canonical';
+          // Normalize
+          if (enrollAction==='keep_canonical') enrollAction='consolidate';
+          if (enrollAction==='keep_duplicate') enrollAction='transfer';
+        } else {
+          if (canOpen && dupOpen && canOpen.className===dupOpen.className && (canOpen.academicYearId||null)===(dupOpen.academicYearId||null)) enrollAction='consolidate';
+          else if (dupOpen && !canOpen) enrollAction='transfer';
+          else if (!dupOpen) enrollAction='preserve_history';
+          else enrollAction='blocked';
+        }
+        if (canOpen && dupOpen && (canOpen.className!==dupOpen.className || (canOpen.academicYearId||null)!==(dupOpen.academicYearId||null))) {
+          if (!finalEnrRes) throw new Error(`Enrollment histories are contradictory (${canOpen.className} vs ${dupOpen.className} / year ${canOpen.academicYearId||'null'} vs ${dupOpen.academicYearId||'null'}). Provide explicit enrollment_resolution.`);
+          if (enrollAction==='consolidate') throw new Error('Cannot consolidate enrollments with different class or academic year. Choose transfer or preserve.');
+        }
+        // Validate exam conflicts: need resolution for each
+        const canExams = mockTables.exams.filter((e:any)=>e.studentId===canId);
+        const dupExams = mockTables.exams.filter((e:any)=>e.studentId===dupId);
+        const examConflicts: any[] = [];
+        for (const d of dupExams) for (const c of canExams) if ((c.subjectId||null)===(d.subjectId||null) && c.examType===d.examType && (c.assessmentLabel||null)===(d.assessmentLabel||null) && (c.termId||null)===(d.termId||null)) examConflicts.push({c,d});
+        // Attendance
+        const canAtt = mockTables.attendance.filter((a:any)=>a.studentId===canId);
+        const dupAtt = mockTables.attendance.filter((a:any)=>a.studentId===dupId);
+        const attConflicts:any[]=[]; for (const c of canAtt) for (const d of dupAtt) if (c.date===d.date) attConflicts.push({c,d});
+        const canQuiz = mockTables.quiz_attempts.filter((q:any)=>q.studentId===canId);
+        const dupQuiz = mockTables.quiz_attempts.filter((q:any)=>q.studentId===dupId);
+        const quizConflicts:any[]=[]; for (const c of canQuiz) for (const d of dupQuiz) if (c.quizId===d.quizId) quizConflicts.push({c,d});
+        const canRel = mockTables.release_log.filter((r:any)=>r.studentId===canId);
+        const dupRel = mockTables.release_log.filter((r:any)=>r.studentId===dupId);
+        const relConflicts:any[]=[]; for (const c of canRel) for (const d of dupRel) if ((c.createdAt||'').slice(0,10)===(d.createdAt||'').slice(0,10)) relConflicts.push({c,d});
+        const canRep = mockTables.report_comments.filter((r:any)=>r.studentId===canId);
+        const dupRep = mockTables.report_comments.filter((r:any)=>r.studentId===dupId);
+        const repConflicts:any[]=[]; for (const c of canRep) for (const d of dupRep) if (c.termId===d.termId) repConflicts.push({c,d});
+
+        const examResArr = Array.isArray(finalExamRes) ? finalExamRes : [];
+        const attResArr = Array.isArray(finalAttRes) ? finalAttRes : [];
+        const quizResArr = Array.isArray(finalQuizRes) ? finalQuizRes : [];
+        const relResArr = Array.isArray(finalRelRes) ? finalRelRes : [];
+        const repResArr = Array.isArray(finalRepRes) ? finalRepRes : [];
+
+        if (examConflicts.length!==examResArr.length) {
+          if (examConflicts.length>0 && examResArr.length===0) throw new Error(`Exam conflicts require resolution: ${examConflicts.length} conflicts, 0 provided`);
+          if (examConflicts.length!==examResArr.length) throw new Error(`Exam resolution incomplete: ${examConflicts.length} conflicts, ${examResArr.length} provided`);
+        }
+        if (attConflicts.length!==attResArr.length) {
+          if (attConflicts.length>0 && attResArr.length===0) throw new Error(`Attendance conflicts require resolution: ${attConflicts.length} conflicts`);
+          if (attConflicts.length!==attResArr.length) throw new Error('Attendance resolution incomplete');
+        }
+        if (quizConflicts.length!==quizResArr.length) {
+          if (quizConflicts.length>0 && quizResArr.length===0) throw new Error(`Quiz conflicts require resolution: ${quizConflicts.length} conflicts`);
+          if (quizConflicts.length!==quizResArr.length) throw new Error('Quiz resolution incomplete');
+        }
+        if (relConflicts.length!==relResArr.length) {
+          if (relConflicts.length>0 && relResArr.length===0) throw new Error(`Release conflicts require resolution: ${relConflicts.length} conflicts`);
+          if (relConflicts.length!==relResArr.length) throw new Error('Release resolution incomplete');
+        }
+        if (repConflicts.length!==repResArr.length) {
+          if (repConflicts.length>0 && repResArr.length===0) throw new Error(`Report comment conflicts require resolution: ${repConflicts.length} conflicts`);
+          if (repConflicts.length!==repResArr.length) throw new Error('Report resolution incomplete');
+        }
+        // Validate each exam resolution points to valid ids belonging to correct students and matching identity
+        for (let i=0;i<examResArr.length;i++) {
+          const r = examResArr[i];
+          const keep = r.keep ?? r.Keep ?? '';
+          const canIdR = r.canonical_exam_id ?? r.canonicalExamId ?? r.canonical_id ?? r.canId;
+          const dupIdR = r.duplicate_exam_id ?? r.duplicateExamId ?? r.duplicate_id ?? r.dupId;
+          if (!['canonical','duplicate','A','B'].includes(keep)) throw new Error(`Invalid exam keep ${keep} at ${i}`);
+          if (canIdR && !mockTables.exams.some((e:any)=>e.id===canIdR && e.studentId===canId)) throw new Error(`Exam ${canIdR} does not belong to canonical ${canId}`);
+          if (dupIdR && !mockTables.exams.some((e:any)=>e.id===dupIdR && e.studentId===dupId)) throw new Error(`Exam ${dupIdR} does not belong to duplicate ${dupId}`);
+          if (canIdR && dupIdR) {
+            const c = mockTables.exams.find((e:any)=>e.id===canIdR);
+            const d = mockTables.exams.find((e:any)=>e.id===dupIdR);
+            if (!c || !d || (c.subjectId||null)!==(d.subjectId||null) || c.examType!==d.examType || (c.assessmentLabel||null)!==(d.assessmentLabel||null) || (c.termId||null)!==(d.termId||null)) throw new Error(`Exams ${canIdR} and ${dupIdR} do not share identity`);
+          }
+        }
+        for (let i=0;i<attResArr.length;i++) {
+          const r=attResArr[i]; const keep=r.keep; const canI=r.canonical_id??r.canonicalId; const dupI=r.duplicate_id??r.duplicateId;
+          if (!['canonical','duplicate','A','B'].includes(keep)) throw new Error(`Invalid attendance keep ${keep}`);
+          if (canI && !mockTables.attendance.some((a:any)=>a.id===canI && a.studentId===canId)) throw new Error(`Attendance ${canI} not canonical`);
+          if (dupI && !mockTables.attendance.some((a:any)=>a.id===dupI && a.studentId===dupId)) throw new Error(`Attendance ${dupI} not duplicate`);
+        }
+        for (let i=0;i<quizResArr.length;i++) {
+          const r=quizResArr[i]; const keep=r.keep; const canI=r.canonical_id??r.canonicalId; const dupI=r.duplicate_id??r.duplicateId;
+          if (!['canonical','duplicate','A','B'].includes(keep)) throw new Error(`Invalid quiz keep ${keep}`);
+          if (canI && !mockTables.quiz_attempts.some((q:any)=>q.id===canI && q.studentId===canId)) throw new Error(`Quiz ${canI} not canonical`);
+          if (dupI && !mockTables.quiz_attempts.some((q:any)=>q.id===dupI && q.studentId===dupId)) throw new Error(`Quiz ${dupI} not duplicate`);
+        }
+        for (let i=0;i<relResArr.length;i++) {
+          const r=relResArr[i]; const keep=r.keep; const canI=r.canonical_id??r.canonicalId; const dupI=r.duplicate_id??r.duplicateId;
+          if (!['canonical','duplicate','A','B'].includes(keep)) throw new Error(`Invalid release keep ${keep}`);
+          if (canI && !mockTables.release_log.some((x:any)=>x.id===canI && x.studentId===canId)) throw new Error(`Release ${canI} not canonical`);
+          if (dupI && !mockTables.release_log.some((x:any)=>x.id===dupI && x.studentId===dupId)) throw new Error(`Release ${dupI} not duplicate`);
+        }
+        for (let i=0;i<repResArr.length;i++) {
+          const r=repResArr[i]; const keep=r.keep; const canI=r.canonical_id??r.canonicalId; const dupI=r.duplicate_id??r.duplicateId;
+          if (!['canonical','duplicate','A','B'].includes(keep)) throw new Error(`Invalid report keep ${keep}`);
+          if (canI && !mockTables.report_comments.some((x:any)=>x.id===canI && x.studentId===canId)) throw new Error(`Report ${canI} not canonical`);
+          if (dupI && !mockTables.report_comments.some((x:any)=>x.id===dupI && x.studentId===dupId)) throw new Error(`Report ${dupI} not duplicate`);
+        }
+
+        // ── Apply profile ──
+        // Gov: need to null duplicate first if moving
+        if (finalGov !== (can.govId ? String(can.govId).trim() : null)) {
+          if (finalGov === null) {
+            can.govId = null;
+          } else {
+            if (dup.govId && govKey(dup.govId)===govKey(finalGov)) {
+              dup.govId = null;
+            }
+            can.govId = finalGov;
+          }
+        }
+        // Determine final values for other fields
+        let finalName = can.name;
+        if (choiceName==='duplicate' || choiceName==='B') finalName = dup.name;
+        let finalClass = can.className;
+        if (choiceClass==='duplicate' || choiceClass==='B') finalClass = dup.className;
+        if (!finalClass || !String(finalClass).trim()) throw new Error('Class resolution yields empty');
+        let finalTransport: string|null = can.transport ?? null;
+        if (choiceTransport==='duplicate' || choiceTransport==='B') finalTransport = dup.transport ?? null;
+        else if (choiceTransport==='remove' || choiceTransport==='blank') finalTransport = null;
+        let finalPhone: string|null = can.parentPhone ?? null;
+        if (choicePhone==='duplicate' || choicePhone==='B') finalPhone = dup.parentPhone ?? null;
+        else if (choicePhone==='remove' || choicePhone==='blank') finalPhone = null;
+
+        can.name = finalName;
+        can.className = finalClass;
+        can.parentId = finalParent;
+        can.parentPhone = finalPhone;
+        can.transport = finalTransport;
+
+        // Enrollment handling
+        const canOpen2 = mockTables.student_enrollments.find((e:any)=>e.studentId===canId && e.effectiveTo==null) || null;
+        const dupOpen2 = mockTables.student_enrollments.find((e:any)=>e.studentId===dupId && e.effectiveTo==null) || null;
+        if (dupOpen2) {
+          if (enrollAction==='consolidate') {
+            mockTables.student_enrollments = mockTables.student_enrollments.filter((e:any)=>e.id!==dupOpen2.id);
+          } else {
+            dupOpen2.studentId = canId;
+            // If class changed and enrollment still points to old class, update to finalClass
+            if (dupOpen2.className !== finalClass && enrollAction!=='consolidate') {
+              // keep as is for history, but open should reflect finalClass
+              // The open enrollment for canonical should be finalClass
+              if (canOpen2) canOpen2.className = finalClass;
+              else dupOpen2.className = finalClass;
+            }
+          }
+        }
+        for (const e of mockTables.student_enrollments) if (e.studentId===dupId) e.studentId=canId;
+        if (canOpen2 && canOpen2.className!==finalClass) canOpen2.className = finalClass;
+
+        // Resolve conflicting history: delete losers
+        for (let i=0;i<examResArr.length;i++) {
+          const r=examResArr[i];
+          const keep=r.keep; const canI=r.canonical_exam_id??r.canonicalExamId??r.canonical_id??r.canId; const dupI=r.duplicate_exam_id??r.duplicateExamId??r.duplicate_id??r.dupId;
+          if (keep==='duplicate' || keep==='B') {
+            if (canI) mockTables.exams = mockTables.exams.filter((e:any)=>e.id!==canI);
+          } else {
+            if (dupI) mockTables.exams = mockTables.exams.filter((e:any)=>e.id!==dupI);
+          }
+        }
+        for (let i=0;i<attResArr.length;i++) {
+          const r=attResArr[i]; const keep=r.keep; const canI=r.canonical_id??r.canonicalId; const dupI=r.duplicate_id??r.duplicateId;
+          if (keep==='duplicate' || keep==='B') { if (canI) mockTables.attendance = mockTables.attendance.filter((a:any)=>a.id!==canI); }
+          else { if (dupI) mockTables.attendance = mockTables.attendance.filter((a:any)=>a.id!==dupI); }
+        }
+        for (let i=0;i<quizResArr.length;i++) {
+          const r=quizResArr[i]; const keep=r.keep; const canI=r.canonical_id??r.canonicalId; const dupI=r.duplicate_id??r.duplicateId;
+          if (keep==='duplicate' || keep==='B') { if (canI) mockTables.quiz_attempts = mockTables.quiz_attempts.filter((q:any)=>q.id!==canI); }
+          else { if (dupI) mockTables.quiz_attempts = mockTables.quiz_attempts.filter((q:any)=>q.id!==dupI); }
+        }
+        for (let i=0;i<relResArr.length;i++) {
+          const r=relResArr[i]; const keep=r.keep; const canI=r.canonical_id??r.canonicalId; const dupI=r.duplicate_id??r.duplicateId;
+          if (keep==='duplicate' || keep==='B') { if (canI) mockTables.release_log = mockTables.release_log.filter((x:any)=>x.id!==canI); }
+          else { if (dupI) mockTables.release_log = mockTables.release_log.filter((x:any)=>x.id!==dupI); }
+        }
+        for (let i=0;i<repResArr.length;i++) {
+          const r=repResArr[i]; const keep=r.keep; const canI=r.canonical_id??r.canonicalId; const dupI=r.duplicate_id??r.duplicateId;
+          if (keep==='duplicate' || keep==='B') { if (canI) mockTables.report_comments = mockTables.report_comments.filter((x:any)=>x.id!==canI); }
+          else { if (dupI) mockTables.report_comments = mockTables.report_comments.filter((x:any)=>x.id!==dupI); }
+        }
+
+        // Transfer remaining non-conflicting
+        for (const t of ['exams','attendance','homework','student_promotions','quiz_attempts','report_comments','release_log'] as const) {
+          for (const r of mockTables[t] as any[]) if (r.studentId===dupId) r.studentId=canId;
+        }
+        const toMove = mockTables.authorized_pickup_students.filter((x:any)=>x.studentId===dupId);
+        for (const r of toMove) {
+          const exists = mockTables.authorized_pickup_students.some((x:any)=>x.authorizedPickupId===r.authorizedPickupId && x.studentId===canId);
+          if (!exists) r.studentId=canId; else mockTables.authorized_pickup_students = mockTables.authorized_pickup_students.filter((x:any)=>x!==r);
+        }
+
+        // Verify duplicate has no children before delete
+        const checks = [
+          mockTables.exams.filter((e:any)=>e.studentId===dupId).length,
+          mockTables.attendance.filter((a:any)=>a.studentId===dupId).length,
+          mockTables.homework.filter((h:any)=>h.studentId===dupId).length,
+          mockTables.student_promotions.filter((p:any)=>p.studentId===dupId).length,
+          mockTables.quiz_attempts.filter((q:any)=>q.studentId===dupId).length,
+          mockTables.authorized_pickup_students.filter((x:any)=>x.studentId===dupId).length,
+          mockTables.release_log.filter((r:any)=>r.studentId===dupId).length,
+          mockTables.report_comments.filter((r:any)=>r.studentId===dupId).length,
+          mockTables.student_enrollments.filter((e:any)=>e.studentId===dupId).length,
+        ];
+        if (checks.some(c=>c>0)) throw new Error('Post-merge verification failed: duplicate still has children');
+
+        // Delete duplicate student
+        mockTables.students = mockTables.students.filter((s:any)=>s.id!==dupId);
+
+        // Audit
+        const auditId = `merge-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+        const before = { exams: { canonical: canExams.length, duplicate: dupExams.length } };
+        const after = { exams: mockTables.exams.filter((e:any)=>e.studentId===canId).length };
+        const enrollmentAction = { action: enrollAction, keep: enrollKeep };
+        const audit = { id: auditId, canonical_id: canId, duplicate_id: dupId, admin_id: 'preview-admin', reason, before_counts: before, after_counts: after, enrollment_action: enrollmentAction, exam_conflicts: { examConflicts: examConflicts.length, resolution: resolution }, created_at: new Date().toISOString(), resolution };
+        mockTables.student_merge_audits.push(audit);
+        mockTables.audit_logs.push({ id: mockTables.audit_logs.length+1, action: 'students.merge', details: { auditId, canonicalId: canId, duplicateId: dupId, reason, resolution }, createdAt: new Date().toISOString() });
+        return { data: { auditId, canonicalId: canId, duplicateId: dupId, before, after, enrollmentAction, createdAt: new Date().toISOString(), resolution }, error: null };
+      } catch (e:any) {
+        // Rollback
+        for (const k of Object.keys(mockTables)) mockTables[k] = backup[k];
+        return { data: null, error: { message: e.message || 'Merge failed' } };
+      }
+    }
+
     // For class_students_for_term etc fallback
     return { data: null, error: { message: `Mock RPC ${fn} not implemented`, code: 'PGRST202' } };
+
   };
 
   // Realtime is how the lesson-plan detail, message, and announcement pages

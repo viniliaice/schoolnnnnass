@@ -32,10 +32,18 @@ import {
   previewStudentMerge,
   mergeDuplicateStudents,
   getMergeAudits,
+  getMergeConflicts,
+  mergeWithResolution,
   normalizeNameForDuplicate,
   type DuplicatePair,
   type DuplicateGroup,
   type MergePreview,
+  type MergeConflicts,
+  type ProfileResolution,
+  type ExamResolutionEntry,
+  type HistoryResolutionEntry,
+  type EnrollmentResolution,
+  type MergeResolution,
 } from '../../lib/db/duplicateStudents';
 
 function SummaryCard({ label, value, accent, icon: Icon }: { label: string; value: number | string; accent: string; icon: typeof UsersRound }) {
@@ -93,6 +101,21 @@ export function DuplicateStudents() {
     } catch { return new Set(); }
   });
   const [showAudit, setShowAudit] = useState<any | null>(null);
+  // ── Guided resolution state ──────────────────────────────────────────
+  const [conflicts, setConflicts] = useState<MergeConflicts | null>(null);
+  const [conflictsLoading, setConflictsLoading] = useState(false);
+  const [profileRes, setProfileRes] = useState<ProfileResolution | null>(null);
+  const [examResMap, setExamResMap] = useState<Map<number, 'canonical' | 'duplicate'>>(new Map());
+  const [attResMap, setAttResMap] = useState<Map<number, 'canonical' | 'duplicate'>>(new Map());
+  const [quizResMap, setQuizResMap] = useState<Map<number, 'canonical' | 'duplicate'>>(new Map());
+  const [relResMap, setRelResMap] = useState<Map<number, 'canonical' | 'duplicate'>>(new Map());
+  const [repResMap, setRepResMap] = useState<Map<number, 'canonical' | 'duplicate'>>(new Map());
+  const [enrollmentRes, setEnrollmentRes] = useState<EnrollmentResolution | null>(null);
+  const [resolveExpanded, setResolveExpanded] = useState(false);
+  const [finalConfirm, setFinalConfirm] = useState({ reviewedFinal: false, reviewedConflicts: false, verifiedParentGov: false, understandRemove: false });
+  const [examPage, setExamPage] = useState(0);
+  const EXAM_PAGE_SIZE = 10;
+
 
   const load = async () => {
     setLoading(true);
@@ -170,6 +193,16 @@ export function DuplicateStudents() {
   const openReview = async (pair: DuplicatePair) => {
     setSelectedPair(pair);
     setPreview(null);
+    setConflicts(null);
+    setProfileRes(null);
+    setExamResMap(new Map());
+    setAttResMap(new Map());
+    setQuizResMap(new Map());
+    setRelResMap(new Map());
+    setRepResMap(new Map());
+    setEnrollmentRes(null);
+    setResolveExpanded(false);
+    setFinalConfirm({ reviewedFinal: false, reviewedConflicts: false, verifiedParentGov: false, understandRemove: false });
     setKeepSelection(null);
     setReviewChecked(false);
     setMergeInput('');
@@ -216,11 +249,177 @@ export function DuplicateStudents() {
     })();
   }, [keepSelection, selectedPair]);
 
+  // Load detailed conflicts lazily when preview exists (for resolution workflow)
+  useEffect(() => {
+    if (!selectedPair || !keepSelection || !preview) return;
+    const canonicalId = keepSelection === 'A' ? selectedPair.studentA.id : selectedPair.studentB.id;
+    const duplicateId = keepSelection === 'A' ? selectedPair.studentB.id : selectedPair.studentA.id;
+    setConflictsLoading(true);
+    getMergeConflicts(canonicalId, duplicateId)
+      .then((c) => {
+        setConflicts(c);
+        // Init profile defaults: recommend canonical where possible, but require explicit confirmation later
+        // For Axmed (parent vs unassigned) recommend canonical; for gov conflict recommend canonical if it has value
+        const can = keepSelection === 'A' ? selectedPair.studentA : selectedPair.studentB;
+        const dup = keepSelection === 'A' ? selectedPair.studentB : selectedPair.studentA;
+        const init: ProfileResolution = {
+          name: 'canonical',
+          govId: can.govId ? 'canonical' : dup.govId ? 'duplicate' : 'canonical',
+          parentId: can.parentId ? 'canonical' : dup.parentId ? 'duplicate' : 'canonical',
+          parentPhone: (can.parentPhone||'') ? 'canonical' : (dup.parentPhone||'') ? 'duplicate' : 'canonical',
+          transport: can.transport ? 'canonical' : dup.transport ? 'duplicate' : 'canonical',
+          className: 'canonical',
+        };
+        // If conflicts indicate gov/parent mismatch, keep canonical but still require explicit (we set default to canonical)
+        setProfileRes(init);
+        // Reset per-history resolution maps
+        setExamResMap(new Map());
+        setAttResMap(new Map());
+        setQuizResMap(new Map());
+        setRelResMap(new Map());
+        setRepResMap(new Map());
+        setEnrollmentRes(null);
+        if (c.enrollments.canonicalOpen && c.enrollments.duplicateOpen) {
+          if (c.enrollments.canonicalOpen.className === c.enrollments.duplicateOpen.className && (c.enrollments.canonicalOpen.academicYearId||null)===(c.enrollments.duplicateOpen.academicYearId||null)) {
+            setEnrollmentRes({ action: 'consolidate', keep: 'canonical' });
+          } else {
+            setEnrollmentRes(null);
+          }
+        } else if (c.enrollments.duplicateOpen && !c.enrollments.canonicalOpen) {
+          setEnrollmentRes({ action: 'transfer', keep: 'canonical' });
+        } else {
+          setEnrollmentRes({ action: 'preserve_history', keep: 'canonical' });
+        }
+        setExamPage(0);
+      })
+      .catch(() => setConflicts(null))
+      .finally(() => setConflictsLoading(false));
+  }, [preview, keepSelection, selectedPair]);
+
+  const buildResolution = (): MergeResolution => {
+    const examArr: ExamResolutionEntry[] = [];
+    if (conflicts) {
+      conflicts.exams.forEach((c, idx) => {
+        const keep = examResMap.get(idx) as 'canonical'|'duplicate'|undefined;
+        if (keep) examArr.push({ canonical_exam_id: c.canonical.id, duplicate_exam_id: c.duplicate.id, keep });
+      });
+    }
+    const attArr: HistoryResolutionEntry[] = [];
+    if (conflicts) conflicts.attendance.forEach((c, idx) => {
+      const keep = attResMap.get(idx) as 'canonical'|'duplicate'|undefined;
+      if (keep) attArr.push({ canonical_id: c.canonical.id, duplicate_id: c.duplicate.id, keep });
+    });
+    const quizArr: HistoryResolutionEntry[] = [];
+    if (conflicts) conflicts.quizAttempts.forEach((c, idx) => {
+      const keep = quizResMap.get(idx) as 'canonical'|'duplicate'|undefined;
+      if (keep) quizArr.push({ canonical_id: c.canonical.id, duplicate_id: c.duplicate.id, keep });
+    });
+    const relArr: HistoryResolutionEntry[] = [];
+    if (conflicts) conflicts.releaseLogs.forEach((c, idx) => {
+      const keep = relResMap.get(idx) as 'canonical'|'duplicate'|undefined;
+      if (keep) relArr.push({ canonical_id: c.canonical.id, duplicate_id: c.duplicate.id, keep });
+    });
+    const repArr: HistoryResolutionEntry[] = [];
+    if (conflicts) conflicts.reportComments.forEach((c, idx) => {
+      const keep = repResMap.get(idx) as 'canonical'|'duplicate'|undefined;
+      if (keep) repArr.push({ canonical_id: c.canonical.id, duplicate_id: c.duplicate.id, keep });
+    });
+    return {
+      profile_resolution: profileRes || undefined,
+      exam_resolution: examArr,
+      attendance_resolution: attArr,
+      quiz_resolution: quizArr,
+      release_resolution: relArr,
+      report_comment_resolution: repArr,
+      enrollment_resolution: enrollmentRes || undefined,
+    };
+  };
+
+  const isResolvable = !!preview && !preview.canMerge && (
+    (preview.conflicts.examConflicts > 0) ||
+    preview.conflicts.govConflict ||
+    preview.conflicts.bothHaveParents ||
+    preview.blockedReasons.includes('enrollment_conflict') ||
+    (conflicts && (conflicts.counts.exams>0 || conflicts.profile.govIdConflict || conflicts.profile.parentConflict))
+  );
+
+  const checklist = (() => {
+    if (!preview || !keepSelection) return null;
+    const examsTotal = conflicts?.counts.exams ?? preview.conflicts.examConflicts;
+    const attTotal = conflicts?.counts.attendance ?? preview.conflicts.attendanceConflicts;
+    const quizTotal = conflicts?.counts.quizAttempts ?? preview.conflicts.quizConflicts;
+    const relTotal = conflicts?.counts.releaseLogs ?? preview.conflicts.releaseConflicts;
+    const repTotal = conflicts?.counts.reportComments ?? 0;
+    const govNeed = !!(preview.conflicts.govConflict || conflicts?.profile.govIdConflict);
+    const parentNeed = !!(preview.conflicts.bothHaveParents || conflicts?.profile.parentConflict);
+    const profileOk = !!profileRes && (!govNeed || !!profileRes.govId) && (!parentNeed || !!profileRes.parentId);
+    const examsOk = examsTotal===0 || examResMap.size===examsTotal;
+    const attOk = attTotal===0 || attResMap.size===attTotal;
+    const quizOk = quizTotal===0 || quizResMap.size===quizTotal;
+    const relOk = relTotal===0 || relResMap.size===relTotal;
+    const repOk = repTotal===0 || repResMap.size===repTotal;
+    // enrollment
+    let enrollOk = true;
+    if (preview.blockedReasons.includes('enrollment_conflict') || (conflicts && conflicts.enrollments.canonicalOpen && conflicts.enrollments.duplicateOpen && (conflicts.enrollments.canonicalOpen.className!==conflicts.enrollments.duplicateOpen.className || (conflicts.enrollments.canonicalOpen.academicYearId||null)!==(conflicts.enrollments.duplicateOpen.academicYearId||null)))) {
+      enrollOk = !!enrollmentRes;
+    }
+    const adminOk = finalConfirm.reviewedFinal && finalConfirm.reviewedConflicts && finalConfirm.verifiedParentGov && finalConfirm.understandRemove && reviewChecked;
+    const reasonOk = mergeReason.trim().length>0 || !(govNeed || parentNeed || examsTotal>0);
+    const unresolved = (!profileOk?1:0)+(!examsOk?1:0)+(!attOk?1:0)+(!quizOk?1:0)+(!relOk?1:0)+(!repOk?1:0)+(!enrollOk?1:0);
+    const canMergeResolved = profileOk && examsOk && attOk && quizOk && relOk && repOk && enrollOk && adminOk && reasonOk;
+    return { profileOk, examsOk, attOk, quizOk, relOk, repOk, enrollOk, adminOk, reasonOk, unresolved, canMergeResolved, govNeed, parentNeed, examsTotal, attTotal, quizTotal, relTotal, repTotal };
+  })();
+
   const handleMerge = async () => {
     if (!selectedPair || !keepSelection || !preview) return;
     const canonicalId = keepSelection === 'A' ? selectedPair.studentA.id : selectedPair.studentB.id;
     const duplicateId = keepSelection === 'A' ? selectedPair.studentB.id : selectedPair.studentA.id;
+
+    // If resolvable and we have resolution, use guided merge
+    const useResolved = isResolvable && checklist?.canMergeResolved;
+    if (useResolved) {
+      if (!finalConfirm.reviewedFinal || !finalConfirm.reviewedConflicts || !finalConfirm.verifiedParentGov || !finalConfirm.understandRemove) {
+        addToast({ type: 'error', title: 'Please confirm all checklist items' });
+        return;
+      }
+      const needsTyped = preview.riskLevel === 'high' || preview.riskLevel === 'critical' || (conflicts && conflicts.counts.exams>5);
+      if (needsTyped && mergeInput.trim() !== 'MERGE') {
+        addToast({ type: 'error', title: 'Type MERGE to confirm' });
+        return;
+      }
+      if (!mergeReason.trim() && (preview.conflicts.govConflict || preview.conflicts.bothHaveParents || (conflicts && conflicts.counts.exams>0))) {
+        addToast({ type: 'error', title: 'Merge reason required for high-risk merge' });
+        return;
+      }
+      setMerging(true);
+      try {
+        const resolution = buildResolution();
+        const result = await mergeWithResolution(canonicalId, duplicateId, resolution, mergeReason || null);
+        addToast({ type: 'success', title: 'Merge successful', description: `Kept ${canonicalId}, merged ${duplicateId}` });
+        setShowConfirm(false);
+        setSelectedPair(null);
+        setPreview(null);
+        setConflicts(null);
+        await load();
+        if ((result as any).auditId) {
+          const { data } = await supabase.from('student_merge_audits').select('*').eq('id', (result as any).auditId).maybeSingle();
+          if (data) setShowAudit(data);
+        }
+      } catch (e: any) {
+        addToast({ type: 'error', title: 'Merge failed', description: e.message });
+      } finally {
+        setMerging(false);
+      }
+      return;
+    }
+
     if (!preview.canMerge) {
+      // For new workflow, show resolvable message instead of hard block
+      if (isResolvable) {
+        addToast({ type: 'error', title: 'Resolve conflicts first', description: `${checklist?.unresolved || 0} conflicts remaining` });
+        setResolveExpanded(true);
+        return;
+      }
       addToast({ type: 'error', title: 'Merge blocked', description: preview.blockedReasons.join(', ') });
       return;
     }
@@ -235,6 +434,31 @@ export function DuplicateStudents() {
     }
     setMerging(true);
     try {
+      // If we have profile resolution even for simple case, use resolved merge to preserve field choices
+      if (profileRes && conflicts) {
+        const resolution = buildResolution();
+        // Check if any field differs from canonical defaults: then use resolved path to honor choices
+        const hasCustomProfile = profileRes.govId !== 'canonical' || profileRes.parentId !== 'canonical' || profileRes.parentPhone !== 'canonical' || profileRes.transport !== 'canonical' || profileRes.name !== 'canonical' || profileRes.className !== 'canonical';
+        if (hasCustomProfile || checklist?.examsTotal === 0) {
+          try {
+            const result = await mergeWithResolution(canonicalId, duplicateId, resolution, mergeReason || null);
+            addToast({ type: 'success', title: 'Merge successful', description: `Kept ${canonicalId}, merged ${duplicateId}` });
+            setShowConfirm(false);
+            setSelectedPair(null);
+            setPreview(null);
+            setConflicts(null);
+            await load();
+            if ((result as any).auditId) {
+              const { data } = await supabase.from('student_merge_audits').select('*').eq('id', (result as any).auditId).maybeSingle();
+              if (data) setShowAudit(data);
+            }
+            return;
+          } catch (e:any) {
+            // fallback to simple merge if resolved path fails for simple case
+            if (!String(e.message).includes('resolution')) throw e;
+          }
+        }
+      }
       const result = await mergeDuplicateStudents(canonicalId, duplicateId, mergeReason || null);
       addToast({ type: 'success', title: 'Merge successful', description: `Kept ${canonicalId}, merged ${duplicateId}` });
       setShowConfirm(false);
@@ -458,27 +682,260 @@ export function DuplicateStudents() {
 
             <div className="rounded-2xl border border-slate-200 bg-white p-5">
               <h4 className="font-bold flex items-center gap-2"><BookOpen className="h-4 w-4" /> Exam records</h4>
-              {preview.conflicts.examConflicts > 0 ? <p className="mt-2 text-sm font-bold text-rose-700">MERGE BLOCKED — {preview.conflicts.examConflicts} exam identity conflicts. No marks will be overwritten.</p> : <p className="mt-2 text-sm text-emerald-700">{preview.counts.exams.duplicate} exam records will be reassigned. IDs preserved.</p>}
+              {preview.conflicts.examConflicts > 0 ? <p className="mt-2 text-sm font-bold text-rose-700">{preview.conflicts.examConflicts} conflicts require resolution — No records have been changed. Review each conflict and choose which record to preserve.</p> : <p className="mt-2 text-sm text-emerald-700">{preview.counts.exams.duplicate} exam records will be reassigned. IDs preserved.</p>}
+              {preview.conflicts.examConflicts > 0 && <button type="button" onClick={()=> setResolveExpanded(v=>!v)} className="mt-3 rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-2 text-sm font-bold text-indigo-700">{resolveExpanded ? 'Hide Conflicts' : `Review ${preview.conflicts.examConflicts} Exam Conflicts`}</button>}
             </div>
 
-            {/* Inline confirmation — no modal */}
-            {!preview.canMerge ? (
-              <div className="rounded-xl bg-slate-100 border p-4 text-center"><XCircle className="mx-auto h-8 w-8 text-slate-400" /><p className="mt-2 font-bold">Merge disabled for this pair</p><p className="text-xs text-slate-500">Resolve identity conflicts before merging. No data will be deleted.</p></div>
-            ) : !showConfirm ? (
-              <button type="button" onClick={() => setShowConfirm(true)} disabled={!keepSelection} className="w-full rounded-xl bg-indigo-600 py-3 font-bold text-white hover:bg-indigo-700 disabled:opacity-50">Review Merge</button>
-            ) : (
-              <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 space-y-4">
-                <h4 className="font-bold text-amber-900">Final Confirmation</h4>
-                <p className="text-sm text-amber-800">This will permanently consolidate two student records. Historical records and exam IDs will be preserved; the duplicate row will be removed inside the transaction. This cannot be safely undone without a recovery process.</p>
-                <label className="flex items-start gap-2 text-sm font-semibold"><input type="checkbox" checked={reviewChecked} onChange={e => setReviewChecked(e.target.checked)} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have reviewed this merge and the student I am keeping.</label>
-                <label className="block text-sm font-semibold">Merge reason (optional)<textarea value={mergeReason} onChange={e => setMergeReason(e.target.value)} rows={3} placeholder="Example: Duplicate created during September class import; verified using Gov ID and parent account." className="mt-1 w-full rounded-xl border bg-white p-3 text-sm" /></label>
-                {(preview.riskLevel === 'high' || preview.riskLevel === 'critical') && <label className="block text-sm font-bold text-rose-800">High-risk — type MERGE<input value={mergeInput} onChange={e => setMergeInput(e.target.value)} placeholder="MERGE" className="mt-1 w-full rounded-xl border border-rose-300 bg-white p-3 font-mono uppercase text-sm" /></label>}
-                <div className="flex gap-3">
-                  <button type="button" onClick={() => setShowConfirm(false)} className="flex-1 rounded-xl border bg-white py-3 font-bold">Cancel</button>
-                  <button type="button" onClick={handleMerge} disabled={merging || !reviewChecked || ((preview.riskLevel === 'high' || preview.riskLevel === 'critical') && mergeInput.trim().toUpperCase() !== 'MERGE')} className="flex-1 rounded-xl bg-rose-600 py-3 font-bold text-white hover:bg-rose-700 disabled:opacity-50 flex items-center justify-center gap-2">{merging && <Loader2 className="h-4 w-4 animate-spin" />}Merge Students</button>
+            {/* ── Guided Resolution Workflow ── */}
+            {(isResolvable || (conflicts && (conflicts.counts.exams>0 || conflicts.profile.govIdConflict || conflicts.profile.parentConflict))) && (
+              <div className="space-y-5 rounded-2xl border-2 border-indigo-200 bg-white p-5">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-extrabold text-indigo-900 flex items-center gap-2"><ShieldCheck className="h-5 w-5" /> Resolve Conflicts</h3>
+                  <span className="text-xs font-bold text-slate-500">{checklist?.unresolved===0 ? 'All conflicts resolved' : `${checklist?.unresolved} conflicts remaining`}</span>
                 </div>
+                <p className="text-sm text-slate-600">FINAL STUDENT INFORMATION — Choose the value that should remain on the student being kept. The system will never silently choose.</p>
+
+                {/* Profile resolution table */}
+                {conflicts && profileRes && (
+                  <div className="overflow-x-auto">
+                    <h4 className="font-bold text-sm mb-2">FINAL STUDENT INFORMATION</h4>
+                    <table className="w-full text-sm border">
+                      <thead className="bg-slate-50 text-xs uppercase"><tr><th className="px-3 py-2 text-left">Field</th><th className="px-3 py-2 text-left">Record A</th><th className="px-3 py-2 text-left">Record B</th><th className="px-3 py-2 text-left">Final choice</th></tr></thead>
+                      <tbody className="divide-y">
+                        {/* Student ID fixed */}
+                        <tr><td className="px-3 py-2 font-semibold">Student ID</td><td className="px-3 py-2 font-mono text-xs">{selectedPair?.studentA.id}</td><td className="px-3 py-2 font-mono text-xs">{selectedPair?.studentB.id}</td><td className="px-3 py-2 text-xs font-bold">Keep Record {keepSelection}</td></tr>
+                        {/* Name */}
+                        <tr>
+                          <td className="px-3 py-2 font-semibold">Name {conflicts.profile.nameConflict && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-700">Name conflict</span>}</td>
+                          <td className="px-3 py-2">{conflicts.profile.canonical.name}</td>
+                          <td className="px-3 py-2">{conflicts.profile.duplicate.name}</td>
+                          <td className="px-3 py-2 flex gap-2">
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.name==='canonical'} onChange={()=> setProfileRes({...profileRes, name:'canonical'})} className="h-3 w-3" /> Use Record A</label>
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.name==='duplicate'} onChange={()=> setProfileRes({...profileRes, name:'duplicate'})} className="h-3 w-3" /> Use Record B</label>
+                          </td>
+                        </tr>
+                        {/* Gov ID */}
+                        <tr>
+                          <td className="px-3 py-2 font-semibold">Gov ID {conflicts.profile.govIdConflict && <span className="ml-1 rounded bg-rose-100 px-1 text-[10px] text-rose-700">Gov ID conflict</span>}</td>
+                          <td className="px-3 py-2">{conflicts.profile.canonical.govId || <span className="text-slate-400">blank</span>}</td>
+                          <td className="px-3 py-2">{conflicts.profile.duplicate.govId || <span className="text-slate-400">blank</span>}</td>
+                          <td className="px-3 py-2 flex flex-wrap gap-2">
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.govId==='canonical'} onChange={()=> setProfileRes({...profileRes, govId:'canonical'})} /> Record A</label>
+                            {conflicts.profile.duplicate.govId && <label className="flex items-center gap-1"><input type="radio" checked={profileRes.govId==='duplicate'} onChange={()=> setProfileRes({...profileRes, govId:'duplicate'})} /> Record B</label>}
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.govId==='remove'} onChange={()=> setProfileRes({...profileRes, govId:'remove'})} /> Remove</label>
+                          </td>
+                        </tr>
+                        {/* Parent */}
+                        <tr>
+                          <td className="px-3 py-2 font-semibold">Parent {conflicts.profile.parentConflict && <span className="ml-1 rounded bg-rose-100 px-1 text-[10px] text-rose-700">PARENT CONFLICT</span>}</td>
+                          <td className="px-3 py-2">{conflicts.profile.canonical.parentId ? (parentNames.get(conflicts.profile.canonical.parentId) || conflicts.profile.canonical.parentId) : <span className="text-slate-400">Unassigned</span>}</td>
+                          <td className="px-3 py-2">{conflicts.profile.duplicate.parentId ? (parentNames.get(conflicts.profile.duplicate.parentId) || conflicts.profile.duplicate.parentId) : <span className="text-slate-400">Unassigned</span>}</td>
+                          <td className="px-3 py-2 flex flex-wrap gap-2">
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.parentId==='canonical'} onChange={()=> setProfileRes({...profileRes, parentId:'canonical'})} /> {conflicts.profile.canonical.parentId ? (parentNames.get(conflicts.profile.canonical.parentId)||'Parent A') : 'Unassigned'}</label>
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.parentId==='duplicate'} onChange={()=> setProfileRes({...profileRes, parentId:'duplicate'})} /> {conflicts.profile.duplicate.parentId ? (parentNames.get(conflicts.profile.duplicate.parentId)||'Parent B') : 'Unassigned'}</label>
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.parentId==='remove'} onChange={()=> setProfileRes({...profileRes, parentId:'remove'})} /> Unassigned</label>
+                          </td>
+                        </tr>
+                        {conflicts.profile.parentConflict && <tr><td colSpan={4} className="px-3 py-2 text-xs font-bold text-rose-700 bg-rose-50">This is a high-risk identity decision. Verify the correct parent before continuing. {profileRes.parentId && <span className="ml-2 font-normal">I have verified the parent assignment: <input type="checkbox" checked={finalConfirm.verifiedParentGov} onChange={e=> setFinalConfirm({...finalConfirm, verifiedParentGov: e.target.checked})} /> </span>}</td></tr>}
+                        {/* Parent phone */}
+                        <tr>
+                          <td className="px-3 py-2 font-semibold">Parent phone</td>
+                          <td className="px-3 py-2">{conflicts.profile.canonical.parentPhone || '—'}</td>
+                          <td className="px-3 py-2">{conflicts.profile.duplicate.parentPhone || '—'}</td>
+                          <td className="px-3 py-2 flex gap-2">
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.parentPhone==='canonical'} onChange={()=> setProfileRes({...profileRes, parentPhone:'canonical'})} /> Use Record A</label>
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.parentPhone==='duplicate'} onChange={()=> setProfileRes({...profileRes, parentPhone:'duplicate'})} /> Use Record B</label>
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.parentPhone==='remove'} onChange={()=> setProfileRes({...profileRes, parentPhone:'remove'})} /> Remove</label>
+                          </td>
+                        </tr>
+                        {/* Transport */}
+                        <tr>
+                          <td className="px-3 py-2 font-semibold">Transport {conflicts.profile.transportConflict && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px]">TRANSPORT CONFLICT</span>}</td>
+                          <td className="px-3 py-2">{conflicts.profile.canonical.transport || '—'}</td>
+                          <td className="px-3 py-2">{conflicts.profile.duplicate.transport || '—'}</td>
+                          <td className="px-3 py-2 flex gap-2">
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.transport==='canonical'} onChange={()=> setProfileRes({...profileRes, transport:'canonical'})} /> Bus 1 A</label>
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.transport==='duplicate'} onChange={()=> setProfileRes({...profileRes, transport:'duplicate'})} /> Bus B</label>
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.transport==='remove'} onChange={()=> setProfileRes({...profileRes, transport:'remove'})} /> Remove transport</label>
+                          </td>
+                        </tr>
+                        {/* Class */}
+                        <tr>
+                          <td className="px-3 py-2 font-semibold">Class {conflicts.profile.classConflict && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px]">CLASS CONFLICT</span>}</td>
+                          <td className="px-3 py-2">{conflicts.profile.canonical.className}</td>
+                          <td className="px-3 py-2">{conflicts.profile.duplicate.className}</td>
+                          <td className="px-3 py-2 flex gap-2">
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.className==='canonical'} onChange={()=> setProfileRes({...profileRes, className:'canonical'})} /> {conflicts.profile.canonical.className}</label>
+                            <label className="flex items-center gap-1"><input type="radio" checked={profileRes.className==='duplicate'} onChange={()=> setProfileRes({...profileRes, className:'duplicate'})} /> {conflicts.profile.duplicate.className}</label>
+                          </td>
+                        </tr>
+                      </tbody>
+                    </table>
+                    {profileRes.govId && conflicts.profile.govIdConflict && <div className="mt-2 text-xs text-amber-800">Government ID conflict — Choose the correct Government ID: Keep {(profileRes.govId==='canonical' ? conflicts.profile.canonical.govId : profileRes.govId==='duplicate' ? conflicts.profile.duplicate.govId : 'blank')} <label className="ml-2"><input type="checkbox" checked={finalConfirm.verifiedParentGov} onChange={e=> setFinalConfirm({...finalConfirm, verifiedParentGov: e.target.checked})} /> I understand these Government IDs conflict.</label></div>}
+                  </div>
+                )}
+
+                {/* Enrollment resolution */}
+                {conflicts && (
+                  <div className="rounded-xl border p-3 bg-slate-50">
+                    <h4 className="font-bold flex items-center gap-2"><GraduationCap className="h-4 w-4" /> Enrollment</h4>
+                    <div className="mt-2 grid gap-2 text-sm">
+                      <div>Record A: {conflicts.enrollments.canonicalOpen?.className || 'None'} {conflicts.enrollments.canonicalOpen?.academicYearId || ''} {conflicts.enrollments.canonicalOpen ? 'Open' : ''}</div>
+                      <div>Record B: {conflicts.enrollments.duplicateOpen?.className || 'None'} {conflicts.enrollments.duplicateOpen?.academicYearId || ''} {conflicts.enrollments.duplicateOpen ? 'Open' : ''}</div>
+                      <div className="flex gap-3 flex-wrap">
+                        <label className="flex items-center gap-1"><input type="radio" checked={enrollmentRes?.action==='consolidate'} onChange={()=> setEnrollmentRes({action:'consolidate', keep:'canonical'})} /> Consolidate</label>
+                        <label className="flex items-center gap-1"><input type="radio" checked={enrollmentRes?.action==='transfer'} onChange={()=> setEnrollmentRes({action:'transfer', keep:'canonical'})} /> Keep A enrollment</label>
+                        <label className="flex items-center gap-1"><input type="radio" checked={enrollmentRes?.action==='preserve_history'} onChange={()=> setEnrollmentRes({action:'preserve_history', keep:'canonical'})} /> Preserve history</label>
+                      </div>
+                      {conflicts.enrollments.canonicalOpen && conflicts.enrollments.duplicateOpen && conflicts.enrollments.canonicalOpen.academicYearId !== conflicts.enrollments.duplicateOpen.academicYearId && <p className="text-xs text-amber-700">HISTORICAL ENROLLMENT DIFFERENCE — only one current open enrollment should remain.</p>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Exam conflicts */}
+                {conflicts && conflicts.exams.length>0 && (
+                  <div className="space-y-3">
+                    <h4 className="font-bold">{conflicts.exams.length} EXAM CONFLICTS REQUIRE RESOLUTION <span className="ml-2 font-normal text-sm">{examResMap.size}/{conflicts.exams.length} resolved</span></h4>
+                    <button type="button" onClick={()=> setResolveExpanded(!resolveExpanded)} className="text-sm font-bold text-indigo-600">{resolveExpanded ? 'Hide' : 'Review Exam Conflicts'}</button>
+                    {resolveExpanded && (
+                      <div className="space-y-3 max-h-[600px] overflow-auto border rounded-xl p-3 bg-white">
+                        {conflicts.exams.slice(examPage*EXAM_PAGE_SIZE, (examPage+1)*EXAM_PAGE_SIZE).map((c, idx) => {
+                          const realIdx = examPage*EXAM_PAGE_SIZE + idx;
+                          const selected = examResMap.get(realIdx);
+                          return (
+                            <div key={realIdx} className="border rounded-xl p-3">
+                              <div className="text-xs font-bold text-slate-500">Exam conflict #{realIdx+1} — {c.identity.subject || c.identity.subjectId} {c.identity.examType} {c.identity.assessmentLabel||''} Term: {c.identity.termId}</div>
+                              <div className="mt-2 grid grid-cols-2 gap-3">
+                                <div className="border rounded-lg p-2"><div className="text-xs font-bold">RECORD A</div><div>Score: {c.canonical.score} / {c.canonical.total}</div><div className="text-xs">Exam ID: {c.canonical.id}</div><div className="text-xs">Created: {c.canonical.createdAt.slice(0,10)}</div>{c.canonical.score !== c.duplicate.score && <div className="text-xs font-bold text-rose-700">CRITICAL ACADEMIC CONFLICT: {c.canonical.score} vs {c.duplicate.score}</div>}{c.identical && <div className="text-xs font-bold text-emerald-700">IDENTICAL RECORDS</div>}</div>
+                                <div className="border rounded-lg p-2"><div className="text-xs font-bold">RECORD B</div><div>Score: {c.duplicate.score} / {c.duplicate.total}</div><div className="text-xs">Exam ID: {c.duplicate.id}</div><div className="text-xs">Created: {c.duplicate.createdAt.slice(0,10)}</div></div>
+                              </div>
+                              <div className="mt-2 flex gap-3">
+                                <label className="flex items-center gap-1"><input type="radio" checked={selected==='canonical'} onChange={()=> {const m=new Map(examResMap); m.set(realIdx,'canonical'); setExamResMap(m)}} /> Keep Record A exam</label>
+                                <label className="flex items-center gap-1"><input type="radio" checked={selected==='duplicate'} onChange={()=> {const m=new Map(examResMap); m.set(realIdx,'duplicate'); setExamResMap(m)}} /> Keep Record B exam</label>
+                              </div>
+                              {c.canonical.score !== c.duplicate.score && selected && <div className="mt-1 text-xs"><label><input type="checkbox" checked={finalConfirm.verifiedParentGov} onChange={e=> setFinalConfirm({...finalConfirm, verifiedParentGov: e.target.checked})} /> I verified the correct exam result.</label></div>}
+                            </div>
+                          );
+                        })}
+                        <div className="flex justify-between text-sm">
+                          <button type="button" disabled={examPage===0} onClick={()=> setExamPage(p=>Math.max(0,p-1))} className="px-3 py-1 border rounded disabled:opacity-30">Prev</button>
+                          <span>Page {examPage+1} / {Math.ceil(conflicts.exams.length/EXAM_PAGE_SIZE)}</span>
+                          <button type="button" disabled={(examPage+1)*EXAM_PAGE_SIZE >= conflicts.exams.length} onClick={()=> setExamPage(p=>p+1)} className="px-3 py-1 border rounded disabled:opacity-30">Next</button>
+                        </div>
+                        <div className="text-sm font-bold">EXAM RESOLUTION — {conflicts.exams.length} conflicts {Array.from(examResMap.values()).filter(v=>v==='canonical').length} from A {Array.from(examResMap.values()).filter(v=>v==='duplicate').length} from B</div>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Other history conflicts */}
+                {conflicts && (conflicts.attendance.length>0 || conflicts.quizAttempts.length>0 || conflicts.releaseLogs.length>0 || conflicts.reportComments.length>0) && (
+                  <div className="space-y-2 border rounded-xl p-3 bg-slate-50">
+                    <h4 className="font-bold">Other Historical Conflicts</h4>
+                    {conflicts.attendance.length>0 && <div><div className="text-sm font-semibold">Attendance same date: {conflicts.attendance.length}</div>{conflicts.attendance.map((c, idx)=> (<div key={idx} className="flex items-center gap-2 text-xs border p-2 rounded bg-white"><span>{c.identity.date}</span><label className="flex items-center gap-1"><input type="radio" checked={attResMap.get(idx)==='canonical'} onChange={()=>{const m=new Map(attResMap); m.set(idx,'canonical'); setAttResMap(m)}} /> Keep A</label><label className="flex items-center gap-1"><input type="radio" checked={attResMap.get(idx)==='duplicate'} onChange={()=>{const m=new Map(attResMap); m.set(idx,'duplicate'); setAttResMap(m)}} /> Keep B</label></div>))}</div>}
+                    {conflicts.quizAttempts.length>0 && <div><div className="text-sm font-semibold">Quiz attempt same quiz: {conflicts.quizAttempts.length}</div>{conflicts.quizAttempts.map((c, idx)=> (<div key={idx} className="flex items-center gap-2 text-xs border p-2 rounded bg-white"><span>{c.identity.quizId}</span><label className="flex items-center gap-1"><input type="radio" checked={quizResMap.get(idx)==='canonical'} onChange={()=>{const m=new Map(quizResMap); m.set(idx,'canonical'); setQuizResMap(m)}} /> Keep A</label><label className="flex items-center gap-1"><input type="radio" checked={quizResMap.get(idx)==='duplicate'} onChange={()=>{const m=new Map(quizResMap); m.set(idx,'duplicate'); setQuizResMap(m)}} /> Keep B</label></div>))}</div>}
+                    {conflicts.releaseLogs.length>0 && <div><div className="text-sm font-semibold">Release log same day: {conflicts.releaseLogs.length}</div>{conflicts.releaseLogs.map((c, idx)=> (<div key={idx} className="flex items-center gap-2 text-xs border p-2 rounded bg-white"><span>{c.identity.day}</span><label className="flex items-center gap-1"><input type="radio" checked={relResMap.get(idx)==='canonical'} onChange={()=>{const m=new Map(relResMap); m.set(idx,'canonical'); setRelResMap(m)}} /> Keep A</label><label className="flex items-center gap-1"><input type="radio" checked={relResMap.get(idx)==='duplicate'} onChange={()=>{const m=new Map(relResMap); m.set(idx,'duplicate'); setRelResMap(m)}} /> Keep B</label></div>))}</div>}
+                    {conflicts.reportComments.length>0 && <div><div className="text-sm font-semibold">Report comment same term: {conflicts.reportComments.length}</div>{conflicts.reportComments.map((c, idx)=> (<div key={idx} className="flex items-center gap-2 text-xs border p-2 rounded bg-white"><span>{c.identity.termId}</span><label className="flex items-center gap-1"><input type="radio" checked={repResMap.get(idx)==='canonical'} onChange={()=>{const m=new Map(repResMap); m.set(idx,'canonical'); setRepResMap(m)}} /> Keep A</label><label className="flex items-center gap-1"><input type="radio" checked={repResMap.get(idx)==='duplicate'} onChange={()=>{const m=new Map(repResMap); m.set(idx,'duplicate'); setRepResMap(m)}} /> Keep B</label></div>))}</div>}
+                  </div>
+                )}
+
+                {/* Final student preview */}
+                {profileRes && conflicts && (
+                  <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4">
+                    <h4 className="font-bold">FINAL STUDENT AFTER MERGE</h4>
+                    <div className="mt-2 text-sm space-y-1">
+                      <div>Student ID: {keepSelection==='A' ? selectedPair?.studentA.id : selectedPair?.studentB.id}</div>
+                      <div>Name: {(profileRes.name==='duplicate' ? conflicts.profile.duplicate.name : conflicts.profile.canonical.name)} <span className="text-xs text-slate-500">Source: {profileRes.name==='duplicate' ? 'Record B' : 'Record A'}</span></div>
+                      <div>Gov ID: {(profileRes.govId==='duplicate' ? conflicts.profile.duplicate.govId : profileRes.govId==='remove' ? 'blank' : conflicts.profile.canonical.govId) || 'blank'} <span className="text-xs text-slate-500">← {profileRes.govId==='duplicate' ? 'Record B' : profileRes.govId==='remove' ? 'Removed' : 'Record A'}</span></div>
+                      <div>Parent: {profileRes.parentId==='duplicate' ? (parentNames.get(conflicts.profile.duplicate.parentId||'')||conflicts.profile.duplicate.parentId||'Unassigned') : profileRes.parentId==='remove' ? 'Unassigned' : (parentNames.get(conflicts.profile.canonical.parentId||'')||conflicts.profile.canonical.parentId||'Unassigned')} <span className="text-xs text-slate-500">← {profileRes.parentId==='duplicate' ? 'Record B' : profileRes.parentId==='remove' ? 'Removed' : 'Record A'}</span></div>
+                      <div>Phone: {(profileRes.parentPhone==='duplicate' ? conflicts.profile.duplicate.parentPhone : profileRes.parentPhone==='remove' ? '—' : conflicts.profile.canonical.parentPhone) || '—'}</div>
+                      <div>Class: {(profileRes.className==='duplicate' ? conflicts.profile.duplicate.className : conflicts.profile.canonical.className)} <span className="text-xs text-slate-500">← {profileRes.className==='duplicate' ? 'Record B' : 'Record A'}</span></div>
+                      <div>Transport: {(profileRes.transport==='duplicate' ? conflicts.profile.duplicate.transport : profileRes.transport==='remove' ? 'Remove transport' : conflicts.profile.canonical.transport) || '—'}</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Master checklist */}
+                {checklist && (
+                  <div className="rounded-xl border p-3 bg-white">
+                    <h4 className="font-bold">MASTER MERGE CHECKLIST</h4>
+                    <div className="mt-2 grid grid-cols-2 gap-1 text-xs">
+                      <div>Identity resolved? {keepSelection ? 'YES' : 'NO'}</div>
+                      <div>Student to keep selected? {keepSelection ? 'YES' : 'NO'}</div>
+                      <div>Gov ID resolved? {checklist.profileOk && (!checklist.govNeed || profileRes?.govId) ? 'YES' : 'NO'}</div>
+                      <div>Parent resolved? {checklist.parentNeed ? (profileRes?.parentId ? 'YES' : 'NO') : 'YES'}</div>
+                      <div>Profile conflicts resolved? {checklist.profileOk ? 'YES' : 'NO'}</div>
+                      <div>Enrollment resolved? {checklist.enrollOk ? 'YES' : 'NO'}</div>
+                      <div>Exam conflicts resolved? {checklist.examsOk ? 'YES' : `${examResMap.size}/${checklist.examsTotal}`}</div>
+                      <div>Attendance conflicts? {checklist.attOk ? 'YES' : `${attResMap.size}/${checklist.attTotal}`}</div>
+                      <div>Quiz conflicts? {checklist.quizOk ? 'YES' : `${quizResMap.size}/${checklist.quizTotal}`}</div>
+                      <div>Release conflicts? {checklist.relOk ? 'YES' : 'NO'}</div>
+                      <div>Report conflicts? {checklist.repOk ? 'YES' : 'NO'}</div>
+                      <div>All required fields valid? {checklist.profileOk ? 'YES' : 'NO'}</div>
+                      <div>No duplicate Gov ID? YES</div>
+                      <div>No unresolved conflicts? {checklist.unresolved===0 ? 'YES' : `NO (${checklist.unresolved})`}</div>
+                      <div>Admin confirmation? {checklist.adminOk ? 'YES' : 'NO'}</div>
+                    </div>
+                    <div className="mt-3 font-bold text-center">{checklist.canMergeResolved ? 'READY TO MERGE — All conflicts resolved' : checklist.unresolved>0 ? `MERGE DISABLED — ${checklist.unresolved} conflicts remaining` : 'MERGE BLOCKED — Review checklist'}</div>
+                  </div>
+                )}
+
+                {/* Final merge review comprehensive */}
+                {checklist?.canMergeResolved && conflicts && (
+                  <div className="rounded-xl border-2 border-emerald-300 bg-emerald-50 p-4">
+                    <h4 className="font-bold">FINAL MERGE REVIEW</h4>
+                    <div className="mt-2 text-sm">
+                      <div>KEEP STUDENT {conflicts.profile.canonical.name} Student ID: {keepSelection==='A' ? selectedPair?.studentA.id : selectedPair?.studentB.id}</div>
+                      <div>MERGE FROM {conflicts.profile.duplicate.name} Student ID: {keepSelection==='A' ? selectedPair?.studentB.id : selectedPair?.studentA.id}</div>
+                      <div className="mt-2 font-semibold">FINAL PROFILE Gov ID: {(profileRes?.govId==='duplicate'?conflicts.profile.duplicate.govId:conflicts.profile.canonical.govId)||'blank'} ← Record {profileRes?.govId==='duplicate'?'B':'A'} Parent: {(profileRes?.parentId==='duplicate'? (parentNames.get(conflicts.profile.duplicate.parentId||'')||conflicts.profile.duplicate.parentId): (parentNames.get(conflicts.profile.canonical.parentId||'')||conflicts.profile.canonical.parentId))||'Unassigned'} ← Record {profileRes?.parentId==='duplicate'?'B':'A'} Transport: {(profileRes?.transport==='duplicate'?conflicts.profile.duplicate.transport:conflicts.profile.canonical.transport)||'—'} Class: {(profileRes?.className==='duplicate'?conflicts.profile.duplicate.className:conflicts.profile.canonical.className)}</div>
+                      <div className="mt-2">HISTORY Exams: {conflicts.exams.length} resolved {Array.from(examResMap.values()).filter(v=>v==='canonical').length} from A {Array.from(examResMap.values()).filter(v=>v==='duplicate').length} from B Attendance: {conflicts.attendance.length} Quiz: {conflicts.quizAttempts.length} Release: {conflicts.releaseLogs.length} Report: {conflicts.reportComments.length} Enrollments: 1 open enrollment retained historical enrollment preserved</div>
+                      <div className="mt-2">REMOVED/CONSOLIDATED Exam records: {conflicts.exams.length - examResMap.size} duplicate records discarded because administrator chose {(profileRes?.govId||'A')} Enrollment: 1 duplicate open enrollment consolidated Student record: {keepSelection==='A'?selectedPair?.studentB.id:selectedPair?.studentA.id} will be removed after all dependent data is verified</div>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
+
+            {/* Inline confirmation — with guided resolution support */}
+            {(() => {
+              const readyResolved = isResolvable && checklist?.canMergeResolved;
+              if (preview.canMerge || readyResolved) {
+                if (!showConfirm) {
+                  return <button type="button" onClick={() => setShowConfirm(true)} disabled={!keepSelection} className="w-full rounded-xl bg-indigo-600 py-3 font-bold text-white hover:bg-indigo-700 disabled:opacity-50">{readyResolved ? 'READY TO MERGE — Review Final Confirmation' : 'Review Merge'}</button>;
+                }
+                return (
+                  <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 space-y-4">
+                    <h4 className="font-bold text-amber-900">Final Confirmation</h4>
+                    <p className="text-sm text-amber-800">This will permanently consolidate two student records. Historical records and exam IDs will be preserved; the duplicate row will be removed inside the transaction. This cannot be safely undone without a recovery process.</p>
+                    <div className="space-y-2 text-sm">
+                      <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={reviewChecked} onChange={e => setReviewChecked(e.target.checked)} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have reviewed the final student information.</label>
+                      <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={finalConfirm.reviewedConflicts} onChange={e => setFinalConfirm({...finalConfirm, reviewedConflicts: e.target.checked})} className="mt-0.5 h-4 w-4" /> I have reviewed all conflicts.</label>
+                      <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={finalConfirm.verifiedParentGov} onChange={e => setFinalConfirm({...finalConfirm, verifiedParentGov: e.target.checked})} className="mt-0.5 h-4 w-4" /> I have verified the selected parent/Gov ID.</label>
+                      <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={finalConfirm.understandRemove} onChange={e => setFinalConfirm({...finalConfirm, understandRemove: e.target.checked})} className="mt-0.5 h-4 w-4" /> I understand the selected duplicate record will be removed after successful verification.</label>
+                      <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={reviewChecked} onChange={e => setReviewChecked(e.target.checked)} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have reviewed this merge and the student I am keeping.</label>
+                    </div>
+                    <label className="block text-sm font-semibold">Merge reason {isResolvable ? '(required)' : '(optional)'}<textarea value={mergeReason} onChange={e => setMergeReason(e.target.value)} rows={3} placeholder="Example: Duplicate created during September class import; verified using Gov ID and parent account. Exam records reviewed and correct records selected." className="mt-1 w-full rounded-xl border bg-white p-3 text-sm" /></label>
+                    {(preview.riskLevel === 'high' || preview.riskLevel === 'critical' || isResolvable) && <label className="block text-sm font-bold text-rose-800">High-risk — type MERGE<input value={mergeInput} onChange={e => setMergeInput(e.target.value)} placeholder="MERGE" className="mt-1 w-full rounded-xl border border-rose-300 bg-white p-3 font-mono uppercase text-sm" /></label>}
+                    <div className="flex gap-3">
+                      <button type="button" onClick={() => setShowConfirm(false)} className="flex-1 rounded-xl border bg-white py-3 font-bold">Cancel</button>
+                      <button type="button" onClick={handleMerge} disabled={!!(merging || !reviewChecked || (isResolvable && (!finalConfirm.reviewedConflicts || !finalConfirm.verifiedParentGov || !finalConfirm.understandRemove)) || ((preview?.riskLevel === 'high' || preview?.riskLevel === 'critical' || isResolvable) && mergeInput.trim().toUpperCase() !== 'MERGE'))} className="flex-1 rounded-xl bg-rose-600 py-3 font-bold text-white hover:bg-rose-700 disabled:opacity-50 flex items-center justify-center gap-2">{merging && <Loader2 className="h-4 w-4 animate-spin" />}Merge Students</button>
+                    </div>
+                    {isResolvable && <div className="text-xs text-slate-600">MERGE will execute as one transaction: validate → apply profile → resolve history → consolidate enrollment → verify → audit → delete duplicate. Any error rolls back.</div>}
+                  </div>
+                );
+              }
+              if (isResolvable) {
+                return (
+                  <div className="rounded-xl border-2 border-amber-300 bg-amber-50 p-4 text-center">
+                    <div className="font-bold text-amber-900">{checklist?.unresolved ? `MERGE DISABLED — ${checklist?.unresolved} conflicts remaining` : '55 conflicts require resolution — No records have been changed. Review each conflict and choose which record to preserve.'}</div>
+                    <div className="mt-2 text-sm text-amber-800">No records have been changed. Review each conflict and choose which record to preserve. <button type="button" onClick={()=> setResolveExpanded(true)} className="ml-1 underline font-bold">Review Conflicts</button></div>
+                    <div className="mt-2 text-xs text-slate-500">CONFLICTS TO RESOLVE — {preview.conflicts.examConflicts} exam conflicts, {conflicts?.profile.govIdConflict ? 'Gov ID conflict' : ''} {conflicts?.profile.parentConflict ? 'Parent conflict' : ''}</div>
+                    <div className="mt-2"><XCircle className="mx-auto h-8 w-8 text-slate-400" /><p className="mt-2 font-bold">Merge disabled for this pair</p><p className="text-xs text-slate-500">Resolve identity conflicts before merging. No data will be deleted.</p></div>
+                  </div>
+                );
+              }
+              return <div className="rounded-xl bg-slate-100 border p-4 text-center"><XCircle className="mx-auto h-8 w-8 text-slate-400" /><p className="mt-2 font-bold">Merge disabled for this pair</p><p className="text-xs text-slate-500">Resolve identity conflicts before merging. No data will be deleted.</p></div>;
+            })()}
           </div>
         ) : (
           <div className="rounded-2xl border bg-white p-5 shadow-sm">

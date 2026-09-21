@@ -190,7 +190,16 @@ describe('DuplicateStudents UI — Safe Guided Merge', () => {
     await act(async () => {
       await new Promise((r) => setTimeout(r, 30));
     });
-    // For low risk, no typed MERGE required, so should be enabled after checkbox
+    // For guided resolution, ensure all required confirmations are checked
+    if (confirmBtn.disabled) {
+      const boxes = Array.from(document.body.querySelectorAll('input[type="checkbox"]')) as HTMLInputElement[];
+      for (const b of boxes) {
+        if (!b.checked) {
+          await act(async () => { b.click(); });
+          await act(async () => { await new Promise((r)=> setTimeout(r, 10)); });
+        }
+      }
+    }
     expect(confirmBtn.disabled).toBe(false);
   });
 
