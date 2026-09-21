@@ -878,9 +878,22 @@ export function DuplicateStudents() {
                       <div>All required fields valid? {checklist.profileOk ? 'YES' : 'NO'}</div>
                       <div>No duplicate Gov ID? YES</div>
                       <div>No unresolved conflicts? {checklist.unresolved===0 ? 'YES' : `NO (${checklist.unresolved})`}</div>
-                      <div>Admin confirmation? {checklist.adminOk ? 'YES' : 'NO'}</div>
+                      <div id="admin-confirmation" className={checklist.adminOk ? 'text-emerald-700 font-bold' : 'text-amber-700 font-bold'}>Admin confirmation? {checklist.adminOk ? 'YES' : 'NO — check boxes below ↓'}</div>
                     </div>
                     <div className="mt-3 font-bold text-center">{checklist.canMergeResolved ? 'READY TO MERGE — All conflicts resolved' : checklist.unresolved>0 ? `MERGE DISABLED — ${checklist.unresolved} conflicts remaining` : 'MERGE BLOCKED — Review checklist'}</div>
+                    {!checklist.adminOk && <button type="button" onClick={()=> document.getElementById('admin-confirmation-section')?.scrollIntoView({behavior:'smooth'})} className="mt-2 w-full rounded-lg border border-amber-300 bg-amber-50 py-2 text-xs font-bold text-amber-800">Go to Admin Confirmation ↓</button>}
+                  </div>
+                )}
+                {/* Admin confirmation — always visible so MASTER CHECKLIST Admin confirmation? is not hidden */}
+                {isResolvable && checklist && (
+                  <div id="admin-confirmation-section" className="rounded-xl border-2 border-amber-200 bg-amber-50/50 p-4 space-y-3">
+                    <h4 className="font-bold text-amber-900 flex items-center gap-2"><ShieldCheck className="h-4 w-4" /> Admin confirmation (required)</h4>
+                    <p className="text-xs text-amber-800">This is what MASTER CHECKLIST calls <span className="font-mono font-bold">Admin confirmation?</span> — 4 checks + reason + type MERGE. All must be YES for READY TO MERGE.</p>
+                    <label className="flex items-start gap-2 text-sm font-semibold"><input type="checkbox" checked={finalConfirm.reviewedFinal} onChange={e => setFinalConfirm({...finalConfirm, reviewedFinal: e.target.checked})} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have reviewed the final student information.</label>
+                    <label className="flex items-start gap-2 text-sm font-semibold"><input type="checkbox" checked={finalConfirm.reviewedConflicts} onChange={e => setFinalConfirm({...finalConfirm, reviewedConflicts: e.target.checked})} className="mt-0.5 h-4 w-4 accent-indigo-600" /> I have reviewed all conflicts.</label>
+                    <label className="flex items-start gap-2 text-sm font-semibold"><input type="checkbox" checked={finalConfirm.verifiedParentGov} onChange={e => setFinalConfirm({...finalConfirm, verifiedParentGov: e.target.checked})} className="mt-0.5 h-4 w-4 accent-indigo-600" /> I have verified the selected parent/Gov ID.</label>
+                    <label className="flex items-start gap-2 text-sm font-semibold"><input type="checkbox" checked={finalConfirm.understandRemove} onChange={e => setFinalConfirm({...finalConfirm, understandRemove: e.target.checked})} className="mt-0.5 h-4 w-4 accent-indigo-600" /> I understand the duplicate record will be removed after verification.</label>
+                    <label className="flex items-start gap-2 text-sm font-semibold"><input type="checkbox" checked={reviewChecked} onChange={e => setReviewChecked(e.target.checked)} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have reviewed this merge and the student I am keeping.</label>
                   </div>
                 )}
 
@@ -911,12 +924,9 @@ export function DuplicateStudents() {
                   <div className="rounded-2xl border-2 border-amber-300 bg-amber-50 p-5 space-y-4">
                     <h4 className="font-bold text-amber-900">Final Confirmation</h4>
                     <p className="text-sm text-amber-800">This will permanently consolidate two student records. Historical records and exam IDs will be preserved; the duplicate row will be removed inside the transaction. This cannot be safely undone without a recovery process.</p>
-                    <div className="space-y-2 text-sm">
-                      <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={reviewChecked} onChange={e => setReviewChecked(e.target.checked)} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have reviewed the final student information.</label>
-                      <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={finalConfirm.reviewedConflicts} onChange={e => setFinalConfirm({...finalConfirm, reviewedConflicts: e.target.checked})} className="mt-0.5 h-4 w-4" /> I have reviewed all conflicts.</label>
-                      <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={finalConfirm.verifiedParentGov} onChange={e => setFinalConfirm({...finalConfirm, verifiedParentGov: e.target.checked})} className="mt-0.5 h-4 w-4" /> I have verified the selected parent/Gov ID.</label>
-                      <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={finalConfirm.understandRemove} onChange={e => setFinalConfirm({...finalConfirm, understandRemove: e.target.checked})} className="mt-0.5 h-4 w-4" /> I understand the selected duplicate record will be removed after successful verification.</label>
-                      <label className="flex items-start gap-2 font-semibold"><input type="checkbox" checked={reviewChecked} onChange={e => setReviewChecked(e.target.checked)} className="mt-0.5 h-4 w-4 accent-indigo-600" />I have reviewed this merge and the student I am keeping.</label>
+                    <div className="rounded-lg border bg-white p-3 text-xs">
+                      <div className="font-bold mb-1">Admin confirmation status (from section above):</div>
+                      <div>MASTER CHECKLIST Admin confirmation? <span className={checklist?.adminOk ? 'text-emerald-700 font-bold' : 'text-amber-700 font-bold'}>{checklist?.adminOk ? 'YES' : 'NO'}</span> — if NO, scroll up to <button type="button" onClick={()=> document.getElementById('admin-confirmation-section')?.scrollIntoView({behavior:'smooth'})} className="underline font-bold">Admin confirmation ↓</button></div>
                     </div>
                     <label className="block text-sm font-semibold">Merge reason {isResolvable ? '(required)' : '(optional)'}<textarea value={mergeReason} onChange={e => setMergeReason(e.target.value)} rows={3} placeholder="Example: Duplicate created during September class import; verified using Gov ID and parent account. Exam records reviewed and correct records selected." className="mt-1 w-full rounded-xl border bg-white p-3 text-sm" /></label>
                     {(preview.riskLevel === 'high' || preview.riskLevel === 'critical' || isResolvable) && <label className="block text-sm font-bold text-rose-800">High-risk — type MERGE<input value={mergeInput} onChange={e => setMergeInput(e.target.value)} placeholder="MERGE" className="mt-1 w-full rounded-xl border border-rose-300 bg-white p-3 font-mono uppercase text-sm" /></label>}
