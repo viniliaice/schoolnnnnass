@@ -941,7 +941,7 @@ function createMockSupabase(): SupabaseClient {
       }
       return { data: { weights: { ca: 60, midterm: 20, final: 20 }, results: [], overall_rank: 0, total_students: 0, comment: { teacher: '', principal: '' } }, error: null };
     }
-    if (fn === 'get_students_by_classes' || fn === 'get_students' || fn === 'create_student' || fn === 'update_student') {
+    if (fn === 'get_students_by_classes' || fn === 'get_students' || fn === 'update_student') {
       return { data: null, error: { message: 'Not implemented in mock', code: 'PGRST202' } };
     }
 
@@ -1117,7 +1117,13 @@ function createMockSupabase(): SupabaseClient {
     // ── Duplicate Students — preview & merge (mock) ────────────────────────
     const govKey = (v: string | null | undefined) => (v || '').toString().toUpperCase().replace(/[^A-Z0-9]/g, '').trim();
     const findStudent = (id: string) => mockTables.students.find((s: any) => s.id === id);
+    const mockRole = (globalThis as any).__mockRole ?? 'admin';
+    const isAnon = mockRole === 'anon';
+    const isAdmin = mockRole === 'admin';
     if (fn === 'get_duplicate_candidates') {
+      if (isAnon || !isAdmin) {
+        return { data: null, error: { message: 'Only administrators may view duplicate candidates.', code: '42501' } };
+      }
       const map = new Map<string, { ids: string[]; className: string }>();
       for (const s of mockTables.students as any[]) {
         const norm = (s.name || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
@@ -1133,6 +1139,7 @@ function createMockSupabase(): SupabaseClient {
       return { data: out, error: null };
     }
     if (fn === 'preview_student_merge' || fn === 'preview_merge') {
+      if (isAnon || !isAdmin) return { data: null, error: { message: 'Only administrators may preview student merges.', code: '42501' } };
       const canId = params?.p_canonical_id ?? params?.p_canonicalId;
       const dupId = params?.p_duplicate_id ?? params?.p_duplicateId;
       const can = findStudent(canId);
@@ -1159,10 +1166,23 @@ function createMockSupabase(): SupabaseClient {
       const oneHasParent = !!can.parentId !== !!dup.parentId;
       const canOpen = mockTables.student_enrollments.find((e: any) => e.studentId === canId && e.effectiveTo == null) || null;
       const dupOpen = mockTables.student_enrollments.find((e: any) => e.studentId === dupId && e.effectiveTo == null) || null;
+      const canOpenCnt = mockTables.student_enrollments.filter((e: any) => e.studentId === canId && e.effectiveTo == null).length;
+      const dupOpenCnt = mockTables.student_enrollments.filter((e: any) => e.studentId === dupId && e.effectiveTo == null).length;
       let blocked: string[] = [];
       let canMerge = true;
       let risk: string = 'low';
       let evidence: string = 'possible';
+      // Multiple open enrollments → blocked (safety)
+      if (canOpenCnt > 1 || dupOpenCnt > 1) {
+        blocked.push('enrollment_conflict');
+        blocked.push('multiple_open_enrollments');
+        canMerge = false;
+      }
+      // ClassName + academicYearId must match to consolidate
+      if (canOpen && dupOpen && (canOpen.className !== dupOpen.className || (canOpen.academicYearId || null) !== (dupOpen.academicYearId || null))) {
+        if (!blocked.includes('enrollment_conflict')) blocked.push('enrollment_conflict');
+        canMerge = false;
+      }
       if (govConflict) { blocked.push('gov_id_conflict'); canMerge = false; risk = 'critical'; evidence = 'conflicting'; }
       else if (sameGov) { evidence = 'strong'; risk = 'low'; }
       else if (bothHaveParents && !sameGov) { blocked.push('both_have_parents'); canMerge = false; risk = 'critical'; evidence = 'conflicting'; }
@@ -1193,8 +1213,8 @@ function createMockSupabase(): SupabaseClient {
         enrollment: {
           canonicalOpen: canOpen ? { className: canOpen.className, academicYearId: canOpen.academicYearId } : null,
           duplicateOpen: dupOpen ? { className: dupOpen.className, academicYearId: dupOpen.academicYearId } : null,
-          action: dupOpen && canOpen && canOpen.className === dupOpen.className ? 'consolidate' : dupOpen ? 'transfer' : 'preserve_history',
-          willConsolidate: !!(dupOpen && canOpen && canOpen.className === dupOpen.className),
+          action: dupOpen && canOpen && canOpen.className === dupOpen.className && (canOpen.academicYearId || null) === (dupOpen.academicYearId || null) ? 'consolidate' : dupOpen ? (canOpen && (canOpen.className !== dupOpen.className || (canOpen.academicYearId || null) !== (dupOpen.academicYearId || null)) ? 'blocked' : 'transfer') : 'preserve_history',
+          willConsolidate: !!(dupOpen && canOpen && canOpen.className === dupOpen.className && (canOpen.academicYearId || null) === (dupOpen.academicYearId || null)),
           canMerge,
         },
         conflicts: { examConflicts, attendanceConflicts: 0, quizConflicts: 0, releaseConflicts: 0, govConflict, bothHaveParents, sameGov },
@@ -1206,6 +1226,7 @@ function createMockSupabase(): SupabaseClient {
       return { data: preview, error: null };
     }
     if (fn === 'merge_duplicate_students' || fn === 'merge_students') {
+      if (isAnon || !isAdmin) return { data: null, error: { message: 'Only administrators may merge students.', code: '42501' } };
       const canId = params?.p_canonical_id ?? params?.p_canonicalId;
       const dupId = params?.p_duplicate_id ?? params?.p_duplicateId;
       const reason = params?.p_reason ?? null;
@@ -1219,6 +1240,15 @@ function createMockSupabase(): SupabaseClient {
       const bothHaveParents = !!can.parentId && !!dup.parentId;
       const sameGov = canHasGov && dupHasGov && govKey(can.govId) !== '' && govKey(can.govId) === govKey(dup.govId);
       if (bothHaveParents && !sameGov) return { data: null, error: { message: 'Merge blocked: both records have different parents' } };
+      // Enrollment safety: multiple opens and academicYear check
+      const canOpenCntChk = mockTables.student_enrollments.filter((e: any) => e.studentId === canId && e.effectiveTo == null).length;
+      const dupOpenCntChk = mockTables.student_enrollments.filter((e: any) => e.studentId === dupId && e.effectiveTo == null).length;
+      if (canOpenCntChk > 1 || dupOpenCntChk > 1) return { data: null, error: { message: 'Merge blocked: multiple open enrollments detected. ENROLLMENT_CONFLICT' } };
+      const canOpenChk = mockTables.student_enrollments.find((e: any) => e.studentId === canId && e.effectiveTo == null) || null;
+      const dupOpenChk = mockTables.student_enrollments.find((e: any) => e.studentId === dupId && e.effectiveTo == null) || null;
+      if (canOpenChk && dupOpenChk && (canOpenChk.className !== dupOpenChk.className || (canOpenChk.academicYearId || null) !== (dupOpenChk.academicYearId || null))) {
+        return { data: null, error: { message: `Merge blocked: enrollment histories are contradictory (${canOpenChk.className} vs ${dupOpenChk.className} / year ${canOpenChk.academicYearId || 'null'} vs ${dupOpenChk.academicYearId || 'null'}). ENROLLMENT_CONFLICT` } };
+      }
       const canExams = mockTables.exams.filter((e: any) => e.studentId === canId);
       const dupExams = mockTables.exams.filter((e: any) => e.studentId === dupId);
       let examConflicts = 0;
@@ -1229,11 +1259,11 @@ function createMockSupabase(): SupabaseClient {
         can.govId = dup.govId;
         dup.govId = null as any;
       }
-      // Transfer enrollments: consolidate duplicate open if same class
+      // Transfer enrollments: consolidate duplicate open only if same class AND same academicYearId
       const canOpen = mockTables.student_enrollments.find((e: any) => e.studentId === canId && e.effectiveTo == null);
       const dupOpen = mockTables.student_enrollments.find((e: any) => e.studentId === dupId && e.effectiveTo == null);
       if (dupOpen) {
-        if (canOpen && canOpen.className === dupOpen.className) {
+        if (canOpen && canOpen.className === dupOpen.className && (canOpen.academicYearId || null) === (dupOpen.academicYearId || null)) {
           mockTables.student_enrollments = mockTables.student_enrollments.filter((e: any) => e.id !== dupOpen.id);
         } else {
           dupOpen.studentId = canId;
@@ -1261,6 +1291,136 @@ function createMockSupabase(): SupabaseClient {
       mockTables.student_merge_audits.push(audit);
       mockTables.audit_logs.push({ id: mockTables.audit_logs.length + 1, action: 'students.merge', details: { auditId, canonicalId: canId, duplicateId: dupId, reason }, createdAt: new Date().toISOString() });
       return { data: { auditId, canonicalId: canId, duplicateId: dupId, before, after, enrollmentAction, createdAt: new Date().toISOString() }, error: null };
+    }
+
+    // ── Student creation / import — Axmed-type duplicate prevention (mock) ──
+    const normalizeName = (n: string) => (n || '').trim().toLowerCase().replace(/\s+/g, ' ').replace(/[^\p{L}\p{N}\s]/gu, '').trim();
+    const findStrongDuplicate = (name: string, cls: string, parentId: string | null | undefined, govId: string | null | undefined, parentPhone: string | null | undefined) => {
+      const inGov = govKey(govId);
+      const inParent = !!parentId;
+      for (const s of mockTables.students as any[]) {
+        const norm = normalizeName(s.name);
+        if (norm !== normalizeName(name) || s.className !== cls) continue;
+        const candGov = govKey(s.govId);
+        const candParent = !!s.parentId;
+        const sameGov = candGov !== '' && inGov !== '' && candGov === inGov;
+        const conflictingGov = candGov !== '' && inGov !== '' && candGov !== inGov;
+        if (sameGov) return s.id;
+        if (conflictingGov && candParent && inParent) continue; // genuine distinct, allow
+        if (candParent !== inParent) {
+          if (candParent && candGov !== '' && !inParent) return s.id;
+          if (inParent && inGov !== '' && !candParent) return s.id;
+        }
+      }
+      return null;
+    };
+    if (fn === 'create_student') {
+      const p_name = params?.p_name ?? '';
+      const p_class = params?.p_class ?? '';
+      const p_parent_id = params?.p_parent_id ?? null;
+      const p_gov_id = params?.p_gov_id ?? null;
+      const p_parent_phone = params?.p_parent_phone ?? null;
+      if (!p_name?.trim() || !p_class?.trim()) return { data: null, error: { message: 'Student name is required.' } };
+      const gov = govKey(p_gov_id);
+      if (gov !== '' && mockTables.students.some((s:any) => govKey(s.govId) === gov)) {
+        return { data: null, error: { message: `Gov ID ${gov} is already assigned to another student.` } };
+      }
+      const dup = findStrongDuplicate(p_name, p_class, p_parent_id, p_gov_id, p_parent_phone);
+      if (dup) {
+        return { data: null, error: { message: `Possible duplicate detected: same name/class with strong identity (parent vs unassigned + Gov ID). Existing student ${dup} — manual review required via Duplicate Students page.` } };
+      }
+      const newId = `student-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+      const newStudent: any = { id: newId, name: p_name.trim(), className: p_class.trim(), parentId: p_parent_id || null, govId: p_gov_id?.trim() ? p_gov_id.trim() : null, parentPhone: p_parent_phone ? String(p_parent_phone).trim() : null, createdAt: new Date().toISOString(), transport: null, familyId: null };
+      mockTables.students.push(newStudent);
+      const ay = params?.p_academic_year_id || 'ay-2026';
+      mockTables.student_enrollments.push({ id: `enr-${newId}-open`, studentId: newId, className: newStudent.className, academicYearId: ay, effectiveFrom: new Date().toISOString().slice(0,10), effectiveTo: null, reason: 'import', sourceRef: 'create_student' });
+      return { data: { id: newId, name: newStudent.name, className: newStudent.className }, error: null };
+    }
+    if (fn === 'bulk_create_students') {
+      const rows = params?.p_students ?? [];
+      if (!Array.isArray(rows)) return { data: null, error: { message: 'Payload must be a JSON array.' } };
+      const seenGov = new Set<string>();
+      for (const r of rows) {
+        const name = r.name ?? r.studentName ?? '';
+        const cls = r.className ?? r.class ?? '';
+        const gov = govKey(r.govId);
+        const parentId = r.parentId ?? null;
+        const phone = r.parentPhone ?? null;
+        if (!name?.trim() || !cls?.trim()) return { data: null, error: { message: 'Every new student requires a name and a class.' } };
+        if (gov !== '') {
+          if (seenGov.has(gov) || mockTables.students.some((s:any) => govKey(s.govId) === gov)) {
+            return { data: null, error: { message: `Duplicate Gov ID ${gov} in bulk create.` } };
+          }
+          seenGov.add(gov);
+        }
+        const dup = findStrongDuplicate(name, cls, parentId, r.govId, phone);
+        if (dup) return { data: null, error: { message: `Possible duplicate in bulk create: ${name} / ${cls} matches existing student ${dup} (parent vs unassigned + Gov). Manual review required.` } };
+      }
+      // All clear — create
+      for (const r of rows) {
+        const newId = `student-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+        const gov = r.govId?.trim() ? r.govId.trim() : null;
+        const newStudent: any = { id: newId, name: r.name.trim(), className: r.className.trim(), parentId: r.parentId || null, govId: gov, parentPhone: r.parentPhone ? String(r.parentPhone).trim() : null, createdAt: new Date().toISOString(), transport: null, familyId: null };
+        mockTables.students.push(newStudent);
+        mockTables.student_enrollments.push({ id: `enr-${newId}-open`, studentId: newId, className: newStudent.className, academicYearId: 'ay-2026', effectiveFrom: new Date().toISOString().slice(0,10), effectiveTo: null, reason: 'import', sourceRef: 'bulk_create' });
+      }
+      return { data: { createdCount: rows.length }, error: null };
+    }
+    if (fn === 'apply_student_class_import') {
+      const p_changes = params?.p_changes ?? [];
+      const p_new_students = params?.p_new_students ?? [];
+      const p_academic_year_id = params?.p_academic_year_id ?? 'ay-2026';
+      // Handle stable ID class changes
+      for (const ch of p_changes) {
+        const sid = ch.studentId ?? ch.student_id;
+        const toClass = ch.toClass ?? ch.to_class;
+        if (!sid || !toClass) return { data: null, error: { message: 'A class change is missing its student ID.' } };
+        const stu = mockTables.students.find((s:any) => s.id === sid);
+        if (!stu) return { data: null, error: { message: `Student ID "${sid}" does not exist.` } };
+        if (stu.className !== toClass) {
+          stu.className = toClass;
+          // update or create enrollment open
+          const enr = mockTables.student_enrollments.find((e:any) => e.studentId === sid && e.effectiveTo == null);
+          if (enr) { enr.className = toClass; enr.academicYearId = p_academic_year_id; }
+          else mockTables.student_enrollments.push({ id: `enr-${sid}-open`, studentId: sid, className: toClass, academicYearId: p_academic_year_id, effectiveFrom: new Date().toISOString().slice(0,10), effectiveTo: null, reason: 'transfer', sourceRef: 'import' });
+        }
+      }
+      // Handle new students with prevention
+      const seenIds = new Set<string>();
+      for (const ch of p_changes) seenIds.add(ch.studentId);
+      const seenGov2 = new Set<string>();
+      for (const ns of p_new_students) {
+        const nid = ns.id ?? ns.studentId ?? '';
+        const name = ns.name ?? '';
+        const cls = ns.className ?? ns.class ?? '';
+        const gov = govKey(ns.govId);
+        if (nid && seenIds.has(nid)) return { data: null, error: { message: `Student ID "${nid}" appears more than once in the import.` } };
+        if (nid && mockTables.students.some((s:any) => s.id === nid)) return { data: null, error: { message: `Student ID "${nid}" already exists — a duplicate student was not created. Use class_change for existing Student ID.` } };
+        if (!name?.trim()) return { data: null, error: { message: 'Student name is required for a new student.' } };
+        if (gov !== '') {
+          if (seenGov2.has(gov) || mockTables.students.some((s:any) => govKey(s.govId) === gov)) return { data: null, error: { message: `Gov ID ${gov} is already assigned — duplicate student not created.` } };
+          seenGov2.add(gov);
+        }
+        if (nid) seenIds.add(nid);
+        const dup = findStrongDuplicate(name, cls, ns.parentId ?? null, ns.govId ?? null, ns.parentPhone ?? null);
+        if (dup) return { data: null, error: { message: `Possible duplicate in import: ${name} / ${cls} matches existing student ${dup} (strong identity: parent vs unassigned + Gov). Manual review required via Duplicate Students.` } };
+      }
+      // All checks passed — create new
+      const created: any[] = [];
+      for (const ns of p_new_students) {
+        const nid = ns.id && String(ns.id).trim() ? String(ns.id).trim() : `student-${Date.now()}-${Math.random().toString(36).slice(2,6)}`;
+        const gov = ns.govId?.trim() ? ns.govId.trim() : null;
+        const newStudent: any = { id: nid, name: ns.name.trim(), className: ns.className.trim(), parentId: ns.parentId || null, govId: gov, parentPhone: ns.parentPhone ? String(ns.parentPhone).trim() : null, createdAt: new Date().toISOString(), transport: null, familyId: null };
+        mockTables.students.push(newStudent);
+        mockTables.student_enrollments.push({ id: `enr-${nid}-open`, studentId: nid, className: newStudent.className, academicYearId: p_academic_year_id, effectiveFrom: new Date().toISOString().slice(0,10), effectiveTo: null, reason: 'import', sourceRef: 'apply_import' });
+        created.push({ studentId: nid, name: newStudent.name, className: newStudent.className });
+      }
+      return { data: { importRef: params?.p_import_ref || `class-import-${Date.now()}`, updatedCount: p_changes.length, createdCount: created.length, skippedCount: 0, changes: p_changes.map((c:any)=>({ studentId: c.studentId, name: mockTables.students.find((s:any)=>s.id===c.studentId)?.name || '', fromClass: '', toClass: c.toClass })), created }, error: null };
+    }
+    if (fn === 'check_class_import_payload' || fn === 'resolve_class_import_rows') {
+      // For preview, return ok (real check would be similar but we simplify)
+      if (fn === 'check_class_import_payload') return { data: { ok: true, problemCount: 0, problems: [] }, error: null };
+      if (fn === 'resolve_class_import_rows') return { data: [], error: null };
     }
 
     // For class_students_for_term etc fallback

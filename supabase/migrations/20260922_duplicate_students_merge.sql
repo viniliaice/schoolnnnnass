@@ -52,9 +52,17 @@ CREATE POLICY "Admins can read merge audits"
 -- Groups students by normalized name + current class. Candidate only, not
 -- definitive identity. Used by the UI for discovery; the preview/merge RPCs
 -- enforce strong-identity checks.
+-- SECURITY: admin-only. Frontend route is admin-only, but RPC must enforce
+-- independently (anon and non-admin must not enumerate candidates).
 CREATE OR REPLACE FUNCTION public.get_duplicate_candidates()
 RETURNS TABLE(group_key TEXT, student_ids TEXT[], class_name TEXT, member_count BIGINT)
-LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
+LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF public.current_profile_role() IS NULL OR public.current_profile_role() <> 'admin' THEN
+    RAISE EXCEPTION 'Only administrators may view duplicate candidates.'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+  RETURN QUERY
   SELECT
     public.name_match_key(s.name) || '|' || s."className" AS group_key,
     array_agg(s.id ORDER BY s."createdAt") AS student_ids,
@@ -62,7 +70,8 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public AS $$
     count(*)::BIGINT AS member_count
   FROM public.students s
   GROUP BY public.name_match_key(s.name), s."className"
-  HAVING count(*) > 1
+  HAVING count(*) > 1;
+END;
 $$;
 
 REVOKE ALL ON FUNCTION public.get_duplicate_candidates() FROM PUBLIC;
@@ -91,6 +100,7 @@ DECLARE
   v_rep_can INT; v_rep_dup INT;
   v_enr_can_open RECORD; v_enr_dup_open RECORD;
   v_enr_can_hist INT; v_enr_dup_hist INT;
+  v_open_can_cnt INT; v_open_dup_cnt INT;
   v_blocked TEXT[] := ARRAY[]::TEXT[];
   v_can_merge BOOLEAN := true;
   v_risk TEXT := 'low';
@@ -143,8 +153,20 @@ BEGIN
 
   SELECT * INTO v_enr_can_open FROM public.student_enrollments WHERE "studentId" = p_canonical_id AND "effectiveTo" IS NULL LIMIT 1;
   SELECT * INTO v_enr_dup_open FROM public.student_enrollments WHERE "studentId" = p_duplicate_id AND "effectiveTo" IS NULL LIMIT 1;
+  SELECT count(*) INTO v_open_can_cnt FROM public.student_enrollments WHERE "studentId" = p_canonical_id AND "effectiveTo" IS NULL;
+  SELECT count(*) INTO v_open_dup_cnt FROM public.student_enrollments WHERE "studentId" = p_duplicate_id AND "effectiveTo" IS NULL;
   SELECT count(*) INTO v_enr_can_hist FROM public.student_enrollments WHERE "studentId" = p_canonical_id AND "effectiveTo" IS NOT NULL;
   SELECT count(*) INTO v_enr_dup_hist FROM public.student_enrollments WHERE "studentId" = p_duplicate_id AND "effectiveTo" IS NOT NULL;
+
+  -- Enrollment safety: multiple open enrollments → BLOCKED
+  IF v_open_can_cnt > 1 OR v_open_dup_cnt > 1 THEN
+    v_blocked := array_append(v_blocked, 'enrollment_conflict');
+    v_can_merge := false;
+    -- also flag specific reason for UI
+    IF v_open_can_cnt > 1 OR v_open_dup_cnt > 1 THEN
+      v_blocked := array_append(v_blocked, 'multiple_open_enrollments');
+    END IF;
+  END IF;
 
   -- Conflict detection: exams (bulk identity)
   SELECT count(*) INTO v_exams_conflicts
@@ -177,11 +199,14 @@ BEGIN
     AND d."studentId" = p_duplicate_id
     AND (d."createdAt" AT TIME ZONE 'UTC')::date = (c."createdAt" AT TIME ZONE 'UTC')::date;
 
-  -- Enrollment conflict: both open but different class
-  IF v_enr_can_open."className" IS NOT NULL AND v_enr_dup_open."className" IS NOT NULL
-     AND v_enr_can_open."className" <> v_enr_dup_open."className" THEN
-    v_blocked := array_append(v_blocked, 'enrollment_conflict');
-    v_can_merge := false;
+  -- Enrollment conflict: both open but different class OR different academicYear
+  -- Safety-first: consolidate ONLY when same className AND same academicYearId
+  IF v_enr_can_open."className" IS NOT NULL AND v_enr_dup_open."className" IS NOT NULL THEN
+    IF v_enr_can_open."className" <> v_enr_dup_open."className"
+       OR v_enr_can_open."academicYearId" IS DISTINCT FROM v_enr_dup_open."academicYearId" THEN
+      v_blocked := array_append(v_blocked, 'enrollment_conflict');
+      v_can_merge := false;
+    END IF;
   END IF;
 
   IF v_conflicting_gov THEN
@@ -243,11 +268,11 @@ BEGIN
     'enrollment', jsonb_build_object(
       'canonicalOpen', CASE WHEN v_enr_can_open.id IS NOT NULL THEN jsonb_build_object('className', v_enr_can_open."className", 'academicYearId', v_enr_can_open."academicYearId") ELSE NULL END,
       'duplicateOpen', CASE WHEN v_enr_dup_open.id IS NOT NULL THEN jsonb_build_object('className', v_enr_dup_open."className", 'academicYearId', v_enr_dup_open."academicYearId") ELSE NULL END,
-      'action', CASE WHEN v_enr_dup_open.id IS NOT NULL AND v_enr_can_open.id IS NOT NULL AND v_enr_can_open."className" = v_enr_dup_open."className" THEN 'consolidate'
+      'action', CASE WHEN v_enr_dup_open.id IS NOT NULL AND v_enr_can_open.id IS NOT NULL AND v_enr_can_open."className" = v_enr_dup_open."className" AND v_enr_can_open."academicYearId" IS NOT DISTINCT FROM v_enr_dup_open."academicYearId" THEN 'consolidate'
                     WHEN v_enr_dup_open.id IS NOT NULL AND v_enr_can_open.id IS NULL THEN 'transfer'
                     WHEN v_enr_dup_open.id IS NULL THEN 'preserve_history'
                     ELSE 'blocked' END,
-      'willConsolidate', (v_enr_dup_open.id IS NOT NULL AND v_enr_can_open.id IS NOT NULL AND v_enr_can_open."className" = v_enr_dup_open."className"),
+      'willConsolidate', (v_enr_dup_open.id IS NOT NULL AND v_enr_can_open.id IS NOT NULL AND v_enr_can_open."className" = v_enr_dup_open."className" AND v_enr_can_open."academicYearId" IS NOT DISTINCT FROM v_enr_dup_open."academicYearId"),
       'canMerge', v_can_merge
     ),
     'conflicts', jsonb_build_object('examConflicts', v_exams_conflicts, 'attendanceConflicts', v_att_conflicts, 'quizConflicts', v_quiz_conflicts, 'releaseConflicts', v_rel_conflicts, 'govConflict', v_conflicting_gov, 'bothHaveParents', (v_parent_can AND v_parent_dup), 'sameGov', v_same_gov),
@@ -295,6 +320,7 @@ DECLARE
   v_hist_can INT; v_hist_dup INT;
   v_before_counts JSONB;
   v_count INT;
+  v_open_can_cnt INT; v_open_dup_cnt INT;
 BEGIN
   IF v_role IS NULL OR v_role <> 'admin' THEN
     RAISE EXCEPTION 'Only administrators may merge students.'
@@ -381,12 +407,21 @@ BEGIN
       USING ERRCODE = 'integrity_constraint_violation';
   END IF;
 
-  -- Enrollment conflict check
+  -- Enrollment conflict check — academic-year safety + multiple opens
   SELECT * INTO v_open_can FROM public.student_enrollments WHERE "studentId" = p_canonical_id AND "effectiveTo" IS NULL LIMIT 1;
   SELECT * INTO v_open_dup FROM public.student_enrollments WHERE "studentId" = p_duplicate_id AND "effectiveTo" IS NULL LIMIT 1;
-  IF v_open_can."className" IS NOT NULL AND v_open_dup."className" IS NOT NULL AND v_open_can."className" <> v_open_dup."className" THEN
-    RAISE EXCEPTION 'Merge blocked: enrollment histories are contradictory (% vs %).', v_open_can."className", v_open_dup."className"
+  SELECT count(*) INTO v_open_can_cnt FROM public.student_enrollments WHERE "studentId" = p_canonical_id AND "effectiveTo" IS NULL;
+  SELECT count(*) INTO v_open_dup_cnt FROM public.student_enrollments WHERE "studentId" = p_duplicate_id AND "effectiveTo" IS NULL;
+  IF v_open_can_cnt > 1 OR v_open_dup_cnt > 1 THEN
+    RAISE EXCEPTION 'Merge blocked: multiple open enrollments detected (canonical % open, duplicate % open). Manual review required.', v_open_can_cnt, v_open_dup_cnt
       USING ERRCODE = 'integrity_constraint_violation';
+  END IF;
+  IF v_open_can."className" IS NOT NULL AND v_open_dup."className" IS NOT NULL THEN
+    IF v_open_can."className" <> v_open_dup."className"
+       OR v_open_can."academicYearId" IS DISTINCT FROM v_open_dup."academicYearId" THEN
+      RAISE EXCEPTION 'Merge blocked: enrollment histories are contradictory (% vs % / year % vs %). ENROLLMENT_CONFLICT.', v_open_can."className", v_open_dup."className", COALESCE(v_open_can."academicYearId",'null'), COALESCE(v_open_dup."academicYearId",'null')
+        USING ERRCODE = 'integrity_constraint_violation';
+    END IF;
   END IF;
   SELECT count(*) INTO v_hist_can FROM public.student_enrollments WHERE "studentId" = p_canonical_id AND "effectiveTo" IS NOT NULL;
   SELECT count(*) INTO v_hist_dup FROM public.student_enrollments WHERE "studentId" = p_duplicate_id AND "effectiveTo" IS NOT NULL;
@@ -407,11 +442,11 @@ BEGIN
   v_enroll_action := jsonb_build_object(
     'canonicalOpen', CASE WHEN v_open_can.id IS NOT NULL THEN jsonb_build_object('className', v_open_can."className", 'academicYearId', v_open_can."academicYearId") ELSE NULL END,
     'duplicateOpen', CASE WHEN v_open_dup.id IS NOT NULL THEN jsonb_build_object('className', v_open_dup."className", 'academicYearId', v_open_dup."academicYearId") ELSE NULL END,
-    'action', CASE WHEN v_open_dup.id IS NOT NULL AND v_open_can.id IS NOT NULL AND v_open_can."className" = v_open_dup."className" THEN 'consolidate'
+    'action', CASE WHEN v_open_dup.id IS NOT NULL AND v_open_can.id IS NOT NULL AND v_open_can."className" = v_open_dup."className" AND v_open_can."academicYearId" IS NOT DISTINCT FROM v_open_dup."academicYearId" THEN 'consolidate'
                  WHEN v_open_dup.id IS NOT NULL AND v_open_can.id IS NULL THEN 'transfer'
                  WHEN v_open_dup.id IS NULL THEN 'preserve_history'
                  ELSE 'blocked' END,
-    'willConsolidate', (v_open_dup.id IS NOT NULL AND v_open_can.id IS NOT NULL AND v_open_can."className" = v_open_dup."className")
+    'willConsolidate', (v_open_dup.id IS NOT NULL AND v_open_can.id IS NOT NULL AND v_open_can."className" = v_open_dup."className" AND v_open_can."academicYearId" IS NOT DISTINCT FROM v_open_dup."academicYearId")
   );
 
   -- Preserve Gov ID if canonical blank and duplicate has one (avoid unique violation by nulling duplicate first)
@@ -422,8 +457,9 @@ BEGIN
 
   -- ── Enrollment consolidation ──────────────────────────────────────────
   -- Delete duplicate open enrollment (consolidate), then transfer historical
+  -- Consolidate ONLY when same className AND same academicYearId
   IF v_open_dup.id IS NOT NULL THEN
-    IF v_open_can.id IS NOT NULL AND v_open_can."className" = v_open_dup."className" THEN
+    IF v_open_can.id IS NOT NULL AND v_open_can."className" = v_open_dup."className" AND v_open_can."academicYearId" IS NOT DISTINCT FROM v_open_dup."academicYearId" THEN
       DELETE FROM public.student_enrollments WHERE "studentId" = p_duplicate_id AND "effectiveTo" IS NULL;
     ELSE
       -- If canonical has no open (should not happen for duplicate group) we can transfer open
