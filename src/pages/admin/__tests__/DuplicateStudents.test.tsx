@@ -5,6 +5,7 @@ import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { ToastProvider } from '../../../context/ToastContext';
+import { I18nProvider } from '../../../lib/i18n/AppLanguageContext';
 import { DuplicateStudents } from '../DuplicateStudents';
 
 async function renderPage(): Promise<{ container: HTMLDivElement; unmount: () => void }> {
@@ -15,9 +16,11 @@ async function renderPage(): Promise<{ container: HTMLDivElement; unmount: () =>
   await act(async () => {
     root.render(
       <QueryClientProvider client={qc}>
-        <ToastProvider>
-          <DuplicateStudents />
-        </ToastProvider>
+        <I18nProvider>
+          <ToastProvider>
+            <DuplicateStudents />
+          </ToastProvider>
+        </I18nProvider>
       </QueryClientProvider>
     );
   });
