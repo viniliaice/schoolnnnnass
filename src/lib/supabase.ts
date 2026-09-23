@@ -361,29 +361,53 @@ const demoLessonPlanPeriods: any[] = demoLessonPlans.flatMap((plan: any) => {
     Science: 'Describe how a habitat meets the needs of living things.',
     Private: 'This draft must never appear in the parent view.',
   };
-  return ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday'].map((day, index) => ({
-    id: `period-${plan.id}-${day}-1`,
-    plan_id: plan.id,
-    day,
-    period_number: 1,
-    class_name: plan.class_name,
-    subject: parentSeed ? previewSubject : 'Mathematics',
-    is_free: false,
-    topic: parentSeed ? topicBySubject[previewSubject] || `${previewSubject} Learning` : `${plan.week_label} — ${day} topic`,
-    objective: parentSeed ? objectiveBySubject[previewSubject] || 'Build confidence with this week’s topic.' : 'Students explain the concept in their own words.',
-    activities: parentSeed ? 'Read examples together, discuss key ideas, and complete guided practice.' : '1. Warm-up (10min) [] @Board | 2. Guided practice (25min) [] @Desks',
-    slide_number: null,
-    details: parentSeed ? [
-      { activity: 'Review examples together', time: '10min', resource: 'Student book', place: '' },
-      { activity: 'Discuss key ideas and complete guided practice', time: '25min', resource: 'Practice sheet', place: 'https://example.com/mbk-practice' },
-    ] : [
-      { activity: 'Warm-up', time: '10min', resource: 'Board', place: 'Desks' },
-      { activity: 'Guided practice', time: '25min', resource: 'Workbook', place: 'Desks' },
-    ],
-    sort_order: index,
-    created_at: plan.created_at,
-    updated_at: plan.created_at,
-  }));
+  // A real timetable runs `period_count` periods a day and some of those slots
+  // are officially Free (see seed-lesson-plans.mjs). The preview mirrors that
+  // shape so the day summary reports the same numbers production would.
+  const freeSlot: Record<string, number | null> = {
+    Saturday: 4, Sunday: 3, Monday: 4, Tuesday: 4, Wednesday: null,
+  };
+  return ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday'].flatMap((day, dayIndex) =>
+    Array.from({ length: plan.period_count }, (_, p) => {
+      const periodNumber = p + 1;
+      const isFree = freeSlot[day] === periodNumber;
+      // One genuinely unfinished period, so the preview shows the maths is
+      // real rather than pinned to 100%.
+      const isUnfilled = plan.week_label === '2026-W15' && day === 'Wednesday' && periodNumber === 5;
+      const hasPlan = !isFree && !isUnfilled;
+      return {
+        id: `period-${plan.id}-${day}-${periodNumber}`,
+        plan_id: plan.id,
+        day,
+        period_number: periodNumber,
+        class_name: plan.class_name,
+        subject: hasPlan ? (parentSeed ? previewSubject : 'Mathematics') : null,
+        is_free: isFree,
+        topic: hasPlan
+          ? (parentSeed ? topicBySubject[previewSubject] || `${previewSubject} Learning` : `${plan.week_label} — ${day} P${periodNumber}`)
+          : '',
+        objective: hasPlan
+          ? (parentSeed ? objectiveBySubject[previewSubject] || 'Build confidence with this week’s topic.' : 'Students explain the concept in their own words.')
+          : null,
+        activities: hasPlan
+          ? (parentSeed ? 'Read examples together, discuss key ideas, and complete guided practice.' : '1. Warm-up (10min) [] @Board | 2. Guided practice (25min) [] @Desks')
+          : '',
+        slide_number: null,
+        details: hasPlan
+          ? (parentSeed ? [
+            { activity: 'Review examples together', time: '10min', resource: 'Student book', place: '' },
+            { activity: 'Discuss key ideas and complete guided practice', time: '25min', resource: 'Practice sheet', place: 'https://example.com/mbk-practice' },
+          ] : [
+            { activity: 'Warm-up', time: '10min', resource: 'Board', place: 'Desks' },
+            { activity: 'Guided practice', time: '25min', resource: 'Workbook', place: 'Desks' },
+          ])
+          : [],
+        sort_order: dayIndex * plan.period_count + p,
+        created_at: plan.created_at,
+        updated_at: plan.created_at,
+      };
+    }),
+  );
 });
 
 // Demo approved exam results for the parent preview (parent-1's children).
