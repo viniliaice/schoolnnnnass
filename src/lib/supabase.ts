@@ -275,8 +275,32 @@ const demoLessonPlanTeachers = [
   { id: 'teacher-3', name: 'Ms. Hodan' },
 ];
 
+/**
+ * Preview-only: the school's real timetable shape, by grade group.
+ *
+ *   KG / Foundation -> 4 periods a day (3 planned + 1 free)
+ *   Grades 1-6      -> 5 periods a day (4 planned + 1 free)
+ *   Grades 7-12     -> 6 periods a day (5 planned + 1 free, or 6 planned + 0 free)
+ *
+ * Production takes the count from the teacher's own "periods per day" choice
+ * on the plan, so this mapping only decides what the mock seed generates.
+ */
+function demoPeriodCountForClass(className: string): number {
+  if (/kg|foundation|prep/i.test(className)) return 4;
+  const grade = Number((String(className).match(/\d+/) ?? [])[0]);
+  if (Number.isFinite(grade) && grade >= 7 && grade <= 12) return 6;
+  return 5;
+}
+
+/** Which slot each day is officially Free, keyed by periods-per-day. */
+const DEMO_FREE_SLOT: Record<number, Record<string, number | null>> = {
+  4: { Saturday: 4, Sunday: 4, Monday: 4, Tuesday: 4, Wednesday: 4 },
+  5: { Saturday: 4, Sunday: 3, Monday: 4, Tuesday: 4, Wednesday: null },
+  6: { Saturday: 6, Sunday: 4, Monday: null, Tuesday: 5, Wednesday: null },
+};
+
 const demoLessonPlans: any[] = (() => {
-  const classes = ['Grade 1-A', 'Grade 2-C', 'Grade 3-B', 'Foundation-KG'];
+  const classes = ['Grade 1-A', 'Grade 2-C', 'Grade 3-B', 'Foundation-KG', 'Grade 7-A', 'Grade 10-B'];
   // Oldest week first. 2026-W04..W07 mirror the real submissions the supervisor
   // complained about; 2026-W15 is "this week" for the demo academic year.
   const weeks: Array<{ label: string; titles: string[]; statuses: string[] }> = [
@@ -301,9 +325,12 @@ const demoLessonPlans: any[] = (() => {
       statuses: ['in_review', 'in_review', 'approved', 'approved', 'rejected', 'submitted', 'in_review', 'approved'],
     },
     {
+      // One plan per class, so the current week exercises every grade group
+      // (KG 4/day, Grades 1-6 5/day, Grades 7-12 6/day). Indices 0-2 keep their
+      // class, teacher and status — only the extra 3 plans are new.
       label: '2026-W15',
-      titles: ['Week 2026-W15', 'Week 2026-W15', 'Week 2026-W15'],
-      statuses: ['submitted', 'in_review', 'submitted'],
+      titles: ['Week 2026-W15', 'Week 2026-W15', 'Week 2026-W15', 'Week 2026-W15', 'Week 2026-W15', 'Week 2026-W15'],
+      statuses: ['submitted', 'in_review', 'submitted', 'in_review', 'submitted', 'in_review'],
     },
     // Isolated preview seed for Parent → This Week’s Learning. The current
     // academic-year week on 15 Sep 2026 is W16. Approved rows are visible to
@@ -329,7 +356,7 @@ const demoLessonPlans: any[] = (() => {
         week_label: label,
         title: `${titles[index]} - ${className}`,
         status,
-        period_count: 5,
+        period_count: demoPeriodCountForClass(className),
         previous_score: null,
         previous_reviewed_at: null,
         created_at: stamp,
@@ -361,29 +388,54 @@ const demoLessonPlanPeriods: any[] = demoLessonPlans.flatMap((plan: any) => {
     Science: 'Describe how a habitat meets the needs of living things.',
     Private: 'This draft must never appear in the parent view.',
   };
-  return ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday'].map((day, index) => ({
-    id: `period-${plan.id}-${day}-1`,
-    plan_id: plan.id,
-    day,
-    period_number: 1,
-    class_name: plan.class_name,
-    subject: parentSeed ? previewSubject : 'Mathematics',
-    is_free: false,
-    topic: parentSeed ? topicBySubject[previewSubject] || `${previewSubject} Learning` : `${plan.week_label} — ${day} topic`,
-    objective: parentSeed ? objectiveBySubject[previewSubject] || 'Build confidence with this week’s topic.' : 'Students explain the concept in their own words.',
-    activities: parentSeed ? 'Read examples together, discuss key ideas, and complete guided practice.' : '1. Warm-up (10min) [] @Board | 2. Guided practice (25min) [] @Desks',
-    slide_number: null,
-    details: parentSeed ? [
-      { activity: 'Review examples together', time: '10min', resource: 'Student book', place: '' },
-      { activity: 'Discuss key ideas and complete guided practice', time: '25min', resource: 'Practice sheet', place: 'https://example.com/mbk-practice' },
-    ] : [
-      { activity: 'Warm-up', time: '10min', resource: 'Board', place: 'Desks' },
-      { activity: 'Guided practice', time: '25min', resource: 'Workbook', place: 'Desks' },
-    ],
-    sort_order: index,
-    created_at: plan.created_at,
-    updated_at: plan.created_at,
-  }));
+  // A real timetable runs `period_count` periods a day and some of those slots
+  // are officially Free (see seed-lesson-plans.mjs). The preview mirrors that
+  // shape so the day summary reports the same numbers production would.
+  const freeSlot = DEMO_FREE_SLOT[plan.period_count] ?? DEMO_FREE_SLOT[5];
+  return ['Saturday', 'Sunday', 'Monday', 'Tuesday', 'Wednesday'].flatMap((day, dayIndex) =>
+    Array.from({ length: plan.period_count }, (_, p) => {
+      const periodNumber = p + 1;
+      const isFree = freeSlot[day] === periodNumber;
+      // One genuinely unfinished period in the current week, left blank on
+      // the LAST REQUIRED slot of Wednesday so every grade group shows a
+      // partial day and the summary is clearly not pinned to 100%.
+      const freeOnDay = freeSlot[day] ?? null;
+      const lastRequired = freeOnDay === plan.period_count ? plan.period_count - 1 : plan.period_count;
+      const isUnfilled = plan.week_label === '2026-W15' && day === 'Wednesday' && periodNumber === lastRequired;
+      const hasPlan = !isFree && !isUnfilled;
+      return {
+        id: `period-${plan.id}-${day}-${periodNumber}`,
+        plan_id: plan.id,
+        day,
+        period_number: periodNumber,
+        class_name: plan.class_name,
+        subject: hasPlan ? (parentSeed ? previewSubject : 'Mathematics') : null,
+        is_free: isFree,
+        topic: hasPlan
+          ? (parentSeed ? topicBySubject[previewSubject] || `${previewSubject} Learning` : `${plan.week_label} — ${day} P${periodNumber}`)
+          : '',
+        objective: hasPlan
+          ? (parentSeed ? objectiveBySubject[previewSubject] || 'Build confidence with this week’s topic.' : 'Students explain the concept in their own words.')
+          : null,
+        activities: hasPlan
+          ? (parentSeed ? 'Read examples together, discuss key ideas, and complete guided practice.' : '1. Warm-up (10min) [] @Board | 2. Guided practice (25min) [] @Desks')
+          : '',
+        slide_number: null,
+        details: hasPlan
+          ? (parentSeed ? [
+            { activity: 'Review examples together', time: '10min', resource: 'Student book', place: '' },
+            { activity: 'Discuss key ideas and complete guided practice', time: '25min', resource: 'Practice sheet', place: 'https://example.com/mbk-practice' },
+          ] : [
+            { activity: 'Warm-up', time: '10min', resource: 'Board', place: 'Desks' },
+            { activity: 'Guided practice', time: '25min', resource: 'Workbook', place: 'Desks' },
+          ])
+          : [],
+        sort_order: dayIndex * plan.period_count + p,
+        created_at: plan.created_at,
+        updated_at: plan.created_at,
+      };
+    }),
+  );
 });
 
 // Demo approved exam results for the parent preview (parent-1's children).

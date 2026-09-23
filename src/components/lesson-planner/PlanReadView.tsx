@@ -174,11 +174,24 @@ export function PlanReadView({
   return (
     <div className="space-y-4">
       {DAYS_OF_WEEK.map((day, di) => {
+        // Every timetable slot gets a row, so a period the teacher never
+        // saved is rendered (and counted) as a required period with no plan
+        // instead of silently becoming a "free" period.
         const dayPeriods = Array.from({ length: periodCount }, (_, pi) =>
-          periods.find((p) => p.day === day && p.period_number === pi + 1)
+          periods.find((p) => p.day === day && p.period_number === pi + 1) ?? {
+            day,
+            period_number: pi + 1,
+            subject: '',
+            className: '',
+            isFree: false,
+            topic: '',
+            objective: '',
+            slide_number: '',
+            details: [] as PeriodActivity[],
+          }
         );
         const summary = summarizeDay(
-          dayPeriods.map((period) => ({ is_free: !period || !!period.isFree, topic: period?.topic ?? '' })),
+          dayPeriods.map((period) => ({ is_free: period.isFree, subject: period.subject, topic: period.topic })),
           periodCount
         );
         const isExpanded = expandedDays[day] ?? !defaultCollapsed;
@@ -232,7 +245,7 @@ export function PlanReadView({
             {isExpanded && (
               <div className="divide-y divide-slate-100">
                 {dayPeriods.map((cell, pi) => {
-                  const isFree = !cell || cell.isFree || cell.subject === '__FREE__';
+                  const isFree = cell.isFree || cell.subject === '__FREE__';
                   return (
                     <div key={pi} className="avoid-break flex gap-3 px-4 py-4 sm:gap-4 sm:px-5">
                       <div className="shrink-0 w-14">

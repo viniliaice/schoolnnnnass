@@ -311,7 +311,10 @@ function DaySection({ day, periods, periodCount, unitPlans, subjects, periodAiRe
       period_number: pi + 1,
       class_name: null,
       subject: null,
-      is_free: true,
+      // A slot with no saved row is a period that still needs a plan — NOT a
+      // free period. Only an explicit `is_free` flag (or the `__FREE__`
+      // subject) exempts a period from the completion denominator.
+      is_free: false,
       topic: '',
       objective: null,
       activities: '',
