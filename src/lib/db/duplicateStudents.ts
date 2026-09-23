@@ -658,3 +658,266 @@ export async function verifyMerge(canonicalId: string, duplicateId: string): Pro
     duplicateHasNoChildren,
   };
 }
+
+// ── SAFE BATCH MERGE ("Merge All Safe Duplicates") ─────────────────────────
+//
+// Client wrappers ONLY. Every eligibility decision — which pair is safe, which
+// record is the keeper, which fields survive, when to refuse — is made by the
+// SECURITY DEFINER RPCs in supabase/migrations/20260925_safe_duplicate_batch.sql
+// and re-made at execution time. Nothing in this file computes, filters, or
+// overrides that verdict; the functions below transport requests and normalize
+// the server's own JSON for rendering.
+
+export type SafeBatchSeverity = 'blocked' | 'review';
+
+export interface SafeBatchChunkConfig {
+  default: number;
+  min: number;
+  max: number;
+  atomicPerChunk: boolean;
+}
+
+export interface SafeBatchPolicy {
+  policyId: string;
+  version: number;
+  nameEn: string;
+  nameAr: string;
+  keeperRuleEn: string;
+  keeperRuleAr: string;
+  keeperRule?: string;
+  confirmPhrase: string;
+  chunkSize: SafeBatchChunkConfig;
+  requiredConditions?: string[];
+  fieldResolutions?: Record<string, string>;
+  exclusionCodes?: Record<string, string>;
+  exclusionDescriptions?: Record<string, string>;
+  blockedCodes?: string[];
+  reuses?: string[];
+  invariants: string[];
+}
+
+export interface SafeBatchStudentSide {
+  id: string;
+  name: string | null;
+  className: string | null;
+  govId: string | null;
+  parentId: string | null;
+  parentName: string | null;
+  parentPhone: string | null;
+  transport: string | null;
+  familyId: string | null;
+  createdAt: string | null;
+}
+
+export interface SafeBatchHistoryCounts {
+  exams: { keeper: number; removed: number; conflicts: number };
+  attendance: { keeper: number; removed: number; conflicts: number };
+  homework: { keeper: number; removed: number };
+  promotions: { keeper: number; removed: number };
+  quizAttempts: { keeper: number; removed: number; conflicts: number };
+  authorizedPickups: { keeper: number; removed: number };
+  releaseLogs: { keeper: number; removed: number; conflicts: number };
+  reportComments: { keeper: number; removed: number; conflicts: number };
+  enrollments: { keeperOpen: number; removedOpen: number; keeperHistory: number; removedHistory: number };
+  unhandledChildRows?: number;
+  unhandledChildTables?: string[];
+}
+
+export interface SafeBatchPairEvaluation {
+  pairKey: string;
+  groupKey: string;
+  groupSize: number;
+  keeperId: string;
+  removedId: string;
+  studentName: string | null;
+  className: string | null;
+  eligible: boolean;
+  severity: SafeBatchSeverity | null;
+  exclusionCodes: string[];
+  eligibilityCodes: string[];
+  keeperIsParentAssigned: boolean;
+  keeper: SafeBatchStudentSide;
+  removed: SafeBatchStudentSide;
+  parentName?: string | null;
+  resolution: {
+    summary: { govId: string; parentPhone: string; transport: string; enrollment: string };
+    mergeResolution: MergeResolution;
+  };
+  enrollmentAction: 'consolidate' | 'transfer' | 'preserve_history' | null;
+  history: SafeBatchHistoryCounts;
+  fingerprint: string | null;
+  evaluatedAt: string;
+}
+
+export interface SafeBatchExcludedRow {
+  pairKey: string;
+  keeperId: string;
+  removedId: string;
+  studentName: string | null;
+  className: string | null;
+  severity: SafeBatchSeverity;
+  exclusionCodes: string[];
+  exclusionReasons?: string[];
+  reason?: string;
+  codes?: string[];
+  keeper?: SafeBatchStudentSide;
+  removed?: SafeBatchStudentSide;
+}
+
+export interface SafeBatchSummary {
+  candidatePairs: number;
+  safeCount: number;
+  excludedCount: number;
+  blockedCount: number;
+  needsReviewCount: number;
+  studentsToMerge: number;
+  recordsToRemove: number;
+  studentIdsPreserved: number;
+}
+
+export interface SafeBatchReport {
+  policy: SafeBatchPolicy;
+  summary: SafeBatchSummary;
+  exclusionReasons: Record<string, number>;
+  rows: SafeBatchPairEvaluation[];
+  excludedRows: SafeBatchExcludedRow[];
+  paging: { limit: number; offset: number; includeExcluded: boolean };
+  generatedAt: string;
+  timings: { evaluateMs?: number; previewMs?: number };
+}
+
+export interface SafeBatchConfirmation {
+  id: string;
+  textEn: string;
+  textAr: string;
+}
+
+export interface SafeBatchPreview extends SafeBatchReport {
+  dryRun: boolean;
+  writesPerformed: number;
+  batchId: string;
+  previewToken: string;
+  ready: { studentsToMerge: number; recordsToBeRemoved: number; studentIdsPreserved: number };
+  chunkPlan: { chunkSize: number; chunks: number; atomicPerChunk: boolean; strategy?: string };
+  confirmations?: SafeBatchConfirmation[];
+  assertions: Record<string, boolean>;
+  confirmPhrase: string;
+}
+
+/** The advisory reviewed list the UI sends back. It can only NARROW the batch:
+ *  the server recomputes eligibility and refuses anything it does not consider
+ *  safe, including pairs the client invents. */
+export interface SafeBatchReviewedPair {
+  keeperId: string;
+  removedId: string;
+  fingerprint?: string | null;
+  pairKey?: string;
+}
+
+export interface SafeBatchMergedEntry {
+  pairKey: string;
+  keeperId: string;
+  removedId: string;
+  studentName: string | null;
+  className: string | null;
+  auditId: string | null;
+  preservedStudentId: string;
+  removedStudentId: string;
+  enrollmentAction: Record<string, unknown> | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+}
+
+export interface SafeBatchSkippedEntry {
+  pairKey: string;
+  keeperId?: string;
+  removedId?: string;
+  studentName?: string | null;
+  className?: string | null;
+  reason: string;
+  codes: string[];
+}
+
+export interface SafeBatchBlockedEntry extends SafeBatchSkippedEntry {
+  severity?: SafeBatchSeverity | null;
+  exclusionCodes?: string[];
+}
+
+export interface SafeBatchChunkResult {
+  batchId: string;
+  adminId: string;
+  policy: string;
+  policyDetail?: SafeBatchPolicy;
+  chunkSize: number;
+  atomicChunk: boolean;
+  committed: boolean;
+  merged: SafeBatchMergedEntry[];
+  skipped: SafeBatchSkippedEntry[];
+  blocked: SafeBatchBlockedEntry[];
+  failed: unknown[];
+  totals: {
+    eligibleAtStart: number;
+    examined: number;
+    merged: number;
+    skipped: number;
+    blocked: number;
+    failed: number;
+    remaining: number;
+  };
+  invariants?: string[];
+  durationMs: number;
+  startedAt?: string;
+  completedAt?: string;
+}
+
+export async function getSafeDuplicateBatch(options?: {
+  limit?: number;
+  offset?: number;
+  includeExcluded?: boolean;
+}): Promise<SafeBatchReport> {
+  const { data, error } = await supabase.rpc('get_safe_duplicate_batch', {
+    p_limit: options?.limit ?? 200,
+    p_offset: options?.offset ?? 0,
+    p_include_excluded: options?.includeExcluded ?? true,
+  });
+  if (error) throw new Error(error.message);
+  return data as unknown as SafeBatchReport;
+}
+
+export async function previewSafeDuplicateBatch(limit = 500): Promise<SafeBatchPreview> {
+  const { data, error } = await supabase.rpc('preview_safe_duplicate_batch', { p_limit: limit });
+  if (error) throw new Error(error.message);
+  return data as unknown as SafeBatchPreview;
+}
+
+/** Maps the server's own preview rows into the advisory list it accepts back.
+ *  Pure transport — the fingerprint is what the administrator actually saw. */
+export function reviewedPairsFromPreview(preview: SafeBatchPreview | null): SafeBatchReviewedPair[] {
+  if (!preview || !Array.isArray(preview.rows)) return [];
+  return preview.rows.map((row) => ({
+    keeperId: row.keeperId,
+    removedId: row.removedId,
+    fingerprint: row.fingerprint ?? null,
+    pairKey: row.pairKey,
+  }));
+}
+
+/** Runs ONE chunk. The server recomputes eligibility, locks, revalidates the
+ *  fingerprint, merges through the individual merge RPC and audits each pair. */
+export async function runSafeDuplicateBatchChunk(args: {
+  reviewedPairs: SafeBatchReviewedPair[];
+  chunkSize?: number;
+  confirmPhrase: string;
+  reason?: string | null;
+  batchId?: string | null;
+}): Promise<SafeBatchChunkResult> {
+  const { data, error } = await supabase.rpc('merge_safe_duplicate_batch', {
+    p_pairs: args.reviewedPairs as unknown as Record<string, unknown>[],
+    p_chunk_size: args.chunkSize ?? 25,
+    p_confirm_phrase: args.confirmPhrase,
+    p_reason: args.reason ?? null,
+    p_batch_id: args.batchId ?? null,
+  });
+  if (error) throw new Error(error.message);
+  return data as unknown as SafeBatchChunkResult;
+}

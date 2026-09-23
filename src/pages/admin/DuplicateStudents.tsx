@@ -26,6 +26,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
+import { SafeBatchMergePanel } from './SafeBatchMergePanel';
 import {
   getDuplicateGroups,
   evaluatePair,
@@ -1028,6 +1029,11 @@ export function DuplicateStudents() {
 
       {error && <div className="rounded-xl bg-red-50 border border-red-200 p-4 text-sm text-red-700">{error}</div>}
 
+      {/* Server-decided batch: dry-run preview → confirmations + typed phrase →
+          chunked atomic merges, each one audited per student. The individual
+          guided review below is unchanged. */}
+      <SafeBatchMergePanel onBatchSettled={async () => { await load(); }} />
+
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <SummaryCard label="Potential Duplicates" value={summary.totalGroups} accent="bg-indigo-50 text-indigo-600" icon={UsersRound} />
         <SummaryCard label="Ready to Review" value={summary.ready} accent="bg-sky-50 text-sky-600" icon={Eye} />
@@ -1113,7 +1119,8 @@ export function DuplicateStudents() {
         <p className="font-bold flex items-center gap-1"><ShieldCheck className="w-4 h-4" /> Safety guarantees</p>
         <ul className="list-disc pl-5 mt-1 space-y-1">
           <li>No <span className="font-mono">DELETE FROM students</span> runs from the UI — only transaction-safe merge RPC.</li>
-          <li>No <span className="font-semibold">Merge All / Delete All Duplicates / Auto Clean</span> button exists. Every duplicate is reviewed individually.</li>
+          <li>No <span className="font-semibold">Merge All / Delete All Duplicates / Auto Clean</span> shortcut exists. The only batch action is <span className="font-semibold">Merge All Safe Duplicates</span>, which the database restricts to pairs that pass every safe-batch rule; every other duplicate is reviewed individually.</li>
+          <li>The batch is a <span className="font-semibold">dry-run preview first</span>, then three confirmations plus a typed phrase, then chunked atomic merges with a per-student audit.</li>
           <li>Dry-run preview makes zero writes.</li>
           <li>Exam and Gov ID conflicts block the merge.</li>
         </ul>

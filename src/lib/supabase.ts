@@ -752,6 +752,7 @@ function createMockSupabase(): SupabaseClient {
     release_log: [],
     student_merge_audits: [...demoMergeAudits],
     audit_logs: [],
+    student_merge_batches: [],
   };
 
   // Helper to build a query chain that mimics supabase-js
@@ -1892,6 +1893,568 @@ function createMockSupabase(): SupabaseClient {
         for (const k of Object.keys(mockTables)) mockTables[k] = backup[k];
         return { data: null, error: { message: e.message || 'Merge failed' } };
       }
+    }
+
+    // ── SAFE DUPLICATE BATCH ────────────────────────────────────────────────
+    // Mock of supabase/migrations/20260925_safe_duplicate_batch.sql so the
+    // Admin → Duplicate Students page can exercise the batch flow without a
+    // database. Eligibility is decided HERE (the mock server), never in the
+    // client wrappers: exactly like production, where only the SECURITY DEFINER
+    // RPCs decide. The rules mirror the SQL function _safe_batch_evaluate_pair.
+    if (fn === 'get_safe_duplicate_batch' || fn === 'preview_safe_duplicate_batch' || fn === 'merge_safe_duplicate_batch') {
+      if (isAnon || !isAdmin) {
+        return { data: null, error: { message: 'Only administrators may run the safe duplicate batch merge.', code: '42501' } };
+      }
+
+      const batchPolicy = {
+        policyId: 'safe_batch_parent_assigned_keeper',
+        version: 1,
+        nameEn: 'Merge All Safe Duplicates',
+        nameAr: 'دمج جميع سجلات الطلاب الآمنة المكررة',
+        keeperRuleEn: 'The parent-assigned record will be kept. The unassigned duplicate will be merged into it.',
+        keeperRuleAr: 'يُحتفظ بالسجل الذي لديه ولي أمر معيّن، ويُدمج فيه السجل المكرر غير المعیَّن.',
+        confirmPhrase: 'MERGE SAFE DUPLICATES',
+        chunkSize: { default: 25, min: 1, max: 50, atomicPerChunk: true },
+        exclusionDescriptions: {
+          group_has_more_than_two_records: 'More than two records share this name and class — ambiguous, individual review',
+          student_missing: 'One of the two records no longer exists',
+          name_conflict: 'Normalized names differ',
+          name_blank: 'Name is blank',
+          class_conflict: 'Current class differs — class changes must preserve the stable Student ID',
+          class_blank: 'Class is blank',
+          both_parents_assigned: 'Parent conflict — both records have a parent assigned',
+          parent_conflict: 'Parent conflict — both records point at different parents',
+          both_parents_unassigned: 'Neither record has a parent assigned — no keeper under the batch rule',
+          parent_profile_missing: 'The assigned parent profile does not exist',
+          student_marked_left: 'One record is marked LEFT — ambiguous enrollment state',
+          gov_id_conflict: 'Gov ID conflict — two different Government IDs',
+          gov_id_belongs_to_third_student: 'Gov ID could belong to a third student',
+          parent_phone_conflict: 'Parent phone conflict',
+          parent_phone_only_on_unassigned: 'Only the unassigned record has a parent phone — not authoritative for the batch',
+          transport_conflict: 'Transport conflict',
+          transport_only_on_unassigned: 'Only the unassigned record has a transport value — not authoritative for the batch',
+          family_id_conflict: 'Family ID conflict',
+          family_id_only_on_unassigned: 'Only the unassigned record has a family ID',
+          multiple_open_enrollments: 'Ambiguous enrollment state — more than one open enrollment',
+          no_open_enrollment: 'Ambiguous enrollment state — no open enrollment to keep',
+          enrollment_class_conflict: 'Enrollment class differs from the current class',
+          enrollment_year_conflict: 'Enrollment academic year differs',
+          exam_conflict: 'Exam identity conflict — an administrator must choose which result survives',
+          attendance_conflict: 'Attendance date conflict — an administrator must choose',
+          quiz_conflict: 'Quiz attempt conflict — an administrator must choose',
+          release_conflict: 'Release log conflict (same UTC day) — an administrator must choose',
+          report_comment_conflict: 'Report comment conflict (same term) — an administrator must choose',
+          unhandled_child_dependency: 'The duplicate has rows in a student relationship the merge logic does not move',
+          candidate_changed_since_preview: 'Candidate changed since preview',
+          candidate_changed_during_batch: 'Candidate changed while the batch was running',
+          already_resolved: 'Already resolved (another administrator merged it, or the record is gone)',
+          not_eligible_server_side: 'Not eligible on the server — a client list can never authorize a merge',
+          not_a_candidate: 'Not a duplicate candidate at all',
+        } as Record<string, string>,
+        blockedCodes: [
+          'gov_id_conflict', 'gov_id_belongs_to_third_student', 'both_parents_assigned', 'parent_conflict',
+          'parent_phone_conflict', 'transport_conflict', 'family_id_conflict', 'student_missing',
+          'parent_profile_missing', 'multiple_open_enrollments', 'enrollment_class_conflict',
+          'enrollment_year_conflict', 'exam_conflict', 'attendance_conflict', 'quiz_conflict',
+          'release_conflict', 'report_comment_conflict', 'unhandled_child_dependency', 'name_conflict',
+          'class_conflict', 'not_eligible_server_side',
+        ],
+        invariants: [
+          'keeper: exactly 1 open enrollment after the merge',
+          'removed record: 0 open enrollments and 0 remaining rows before deletion',
+          'removed record: deleted only after zero-dependency verification',
+          'kept Student ID: unchanged and preserved',
+        ],
+      };
+
+      const bNameKey = (v: any) => (v ?? '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
+      const bPhoneKey = (v: any) => (v ?? '').toString().replace(/\D/g, '').replace(/^252(\d{9})$/, '$1');
+      const bFamKey = (v: any) => (v ?? '').toString().replace(/\D/g, '');
+      const bBlank = (v: any) => v === null || v === undefined || String(v).trim() === '';
+      const bRows = (table: string, id: string) => (mockTables[table] || []).filter((r: any) => r.studentId === id);
+      const bOpen = (id: string) => bRows('student_enrollments', id).filter((e: any) => e.effectiveTo == null);
+      const bHistory = (id: string) => bRows('student_enrollments', id).filter((e: any) => e.effectiveTo != null).length;
+      const bProfile = (id: any) => (mockTables.profiles || []).find((p: any) => p.id === id) || null;
+      const bHash = (input: string) => {
+        let h = 0x811c9dc5;
+        for (let i = 0; i < input.length; i++) { h ^= input.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+        return ('00000000' + (h >>> 0).toString(16)).slice(-8) + ('00000000' + (Math.imul(h ^ input.length, 0x85ebca6b) >>> 0).toString(16)).slice(-8);
+      };
+
+      const kIdSafe = (s: any) => String(s?.id ?? '?');
+
+      const evaluateSafePair = (aIn: any, bIn: any, groupSize: number, deep: boolean) => {
+        const codes: string[] = [];
+        const okCodes: string[] = [];
+        let blocked = false;
+        const addBlocked = (c: string) => { codes.push(c); blocked = true; };
+        const addReview = (c: string) => { codes.push(c); };
+
+        // Keeper: THE parent-assigned record (never chosen by age or caller label)
+        const aHas = !bBlank(aIn?.parentId);
+        const bHas = !bBlank(bIn?.parentId);
+        let keeper: any; let removed: any;
+        if (aHas && !bHas) { keeper = aIn; removed = bIn; }
+        else if (bHas && !aHas) { keeper = bIn; removed = aIn; }
+        else {
+          const ta = String(aIn?.createdAt ?? ''); const tb = String(bIn?.createdAt ?? '');
+          if (ta === tb) { keeper = String(aIn?.id) < String(bIn?.id) ? aIn : bIn; removed = keeper === aIn ? bIn : aIn; }
+          else if (ta < tb) { keeper = aIn; removed = bIn; }
+          else { keeper = bIn; removed = aIn; }
+        }
+        const className = keeper?.className ?? null;
+
+        if (groupSize > 2) addReview('group_has_more_than_two_records');
+        else okCodes.push('candidate_group_has_exactly_two_records');
+
+        if (bBlank(keeper?.name)) addBlocked('name_blank');
+        else if (bNameKey(keeper?.name) !== bNameKey(removed?.name)) addBlocked('name_conflict');
+        else okCodes.push('same_normalized_name');
+
+        if (bBlank(keeper?.className) || bBlank(removed?.className)) addBlocked('class_blank');
+        else if (keeper?.className !== removed?.className) addBlocked('class_conflict');
+        else okCodes.push('same_current_class');
+
+        if (!bBlank(keeper?.parentId) && !bBlank(removed?.parentId)) {
+          addBlocked('both_parents_assigned');
+          if (String(keeper.parentId) !== String(removed.parentId)) codes.push('parent_conflict');
+        } else if (bBlank(keeper?.parentId) && bBlank(removed?.parentId)) {
+          addReview('both_parents_unassigned');
+        } else {
+          okCodes.push('exactly_one_parent_assigned', 'keeper_is_parent_assigned');
+        }
+
+        if (String(keeper?.transport ?? '').trim().toUpperCase() === 'LEFT' || String(removed?.transport ?? '').trim().toUpperCase() === 'LEFT') {
+          addReview('student_marked_left');
+        }
+
+        // Gov ID: blank vs X keeps X, identical is safe, X vs Y is a conflict,
+        // and a Gov ID owned by a THIRD student is a conflict.
+        const gkK = govKey(keeper?.govId); const gkR = govKey(removed?.govId);
+        let govChoice = 'canonical';
+        if (gkK !== '' && gkR !== '' && gkK === gkR) { okCodes.push('same_gov_id'); govChoice = 'canonical'; }
+        else if (gkK !== '' && gkR !== '') addBlocked('gov_id_conflict');
+        else if (gkK !== '') { okCodes.push('gov_id_keeper_only'); govChoice = 'canonical'; }
+        else if (gkR !== '') { okCodes.push('gov_id_from_removed_preserved'); govChoice = 'duplicate'; }
+        else { okCodes.push('no_gov_id'); govChoice = 'canonical'; }
+        if (gkK !== '' || gkR !== '') {
+          const wanted = gkK > gkR ? gkK : gkR;
+          const third = (mockTables.students as any[]).some((s: any) => s.id !== keeper?.id && s.id !== removed?.id && govKey(s.govId) !== '' && govKey(s.govId) === wanted);
+          if (third) addBlocked('gov_id_belongs_to_third_student');
+        }
+
+        // Parent phone: never silently discard a conflicting number.
+        const phK = bPhoneKey(keeper?.parentPhone); const phR = bPhoneKey(removed?.parentPhone);
+        if (phK !== '' && phR !== '' && phK === phR) okCodes.push('same_parent_phone');
+        else if (phK !== '' && phR !== '') addBlocked('parent_phone_conflict');
+        else if (phK !== '') okCodes.push('parent_phone_keeper_only');
+        else if (phR !== '') addReview('parent_phone_only_on_unassigned');
+        else okCodes.push('no_parent_phone');
+
+        const trK = String(keeper?.transport ?? '').trim(); const trR = String(removed?.transport ?? '').trim();
+        if (trK !== '' && trR !== '' && trK === trR) okCodes.push('same_transport');
+        else if (trK !== '' && trR !== '') addBlocked('transport_conflict');
+        else if (trK !== '') okCodes.push('transport_keeper_only');
+        else if (trR !== '') addReview('transport_only_on_unassigned');
+        else okCodes.push('no_transport');
+
+        const famK = bFamKey(keeper?.familyId); const famR = bFamKey(removed?.familyId);
+        if (famK !== '' && famR !== '' && famK === famR) okCodes.push('same_family_id');
+        else if (famK !== '' && famR !== '') addBlocked('family_id_conflict');
+        else if (famK !== '') okCodes.push('family_id_keeper_only');
+        else if (famR !== '') addReview('family_id_only_on_unassigned');
+        else okCodes.push('no_family_id');
+
+        if (!bBlank(keeper?.parentId)) {
+          if (!bProfile(keeper.parentId)) addBlocked('parent_profile_missing');
+          else okCodes.push('parent_profile_exists');
+        }
+
+        let enrollAction: string | null = null;
+        let enrollKeep = 'canonical';
+        const history: Record<string, any> = {};
+        let fingerprint: string | null = null;
+
+        if (deep && codes.length === 0) {
+          const openK = bOpen(String(keeper?.id)); const openR = bOpen(String(removed?.id));
+          const enrK = openK[0] || null; const enrR = openR[0] || null;
+          if (openK.length > 1 || openR.length > 1) addBlocked('multiple_open_enrollments');
+          else if (openK.length === 0 && openR.length === 0) addReview('no_open_enrollment');
+          else if (openK.length === 0 && openR.length === 1) {
+            enrollAction = 'transfer'; enrollKeep = 'duplicate';
+            if (enrR?.className !== keeper?.className) { addBlocked('enrollment_class_conflict'); enrollAction = null; }
+            else okCodes.push('enrollment_transfer');
+          } else if (openR.length === 0) {
+            enrollAction = 'preserve_history';
+            if (enrK?.className !== keeper?.className) { addBlocked('enrollment_class_conflict'); enrollAction = null; }
+            else okCodes.push('enrollment_preserve_history');
+          } else if (enrK?.className !== enrR?.className) addBlocked('enrollment_class_conflict');
+          else if ((enrK?.academicYearId ?? null) !== (enrR?.academicYearId ?? null)) addBlocked('enrollment_year_conflict');
+          else if (enrK?.className !== keeper?.className) addBlocked('enrollment_class_conflict');
+          else { enrollAction = 'consolidate'; okCodes.push('enrollment_consolidate'); }
+
+          const kId = String(keeper?.id); const rId = String(removed?.id);
+          const examK = bRows('exams', kId); const examR = bRows('exams', rId);
+          const attK = bRows('attendance', kId); const attR = bRows('attendance', rId);
+          const quizK = bRows('quiz_attempts', kId); const quizR = bRows('quiz_attempts', rId);
+          const relK = bRows('release_log', kId); const relR = bRows('release_log', rId);
+          const repK = bRows('report_comments', kId); const repR = bRows('report_comments', rId);
+          const examConf = examR.filter((d: any) => examK.some((c: any) => (c.subjectId ?? null) === (d.subjectId ?? null) && c.examType === d.examType && (c.assessmentLabel ?? null) === (d.assessmentLabel ?? null) && (c.termId ?? null) === (d.termId ?? null))).length;
+          const attConf = attR.filter((d: any) => attK.some((c: any) => String(c.date).slice(0, 10) === String(d.date).slice(0, 10))).length;
+          const quizConf = quizR.filter((d: any) => quizK.some((c: any) => c.quizId === d.quizId)).length;
+          const relConf = relR.filter((d: any) => relK.some((c: any) => String(c.createdAt ?? '').slice(0, 10) === String(d.createdAt ?? '').slice(0, 10))).length;
+          const repConf = repR.filter((d: any) => repK.some((c: any) => c.termId === d.termId)).length;
+          if (examConf > 0) addBlocked('exam_conflict');
+          if (attConf > 0) addBlocked('attendance_conflict');
+          if (quizConf > 0) addBlocked('quiz_conflict');
+          if (relConf > 0) addBlocked('release_conflict');
+          if (repConf > 0) addBlocked('report_comment_conflict');
+          if (codes.length === 0) okCodes.push('no_history_conflicts', 'history_transfer_safe');
+
+          history.exams = { keeper: examK.length, removed: examR.length, conflicts: examConf };
+          history.attendance = { keeper: attK.length, removed: attR.length, conflicts: attConf };
+          history.homework = { keeper: bRows('homework', kId).length, removed: bRows('homework', rId).length };
+          history.promotions = { keeper: bRows('student_promotions', kId).length, removed: bRows('student_promotions', rId).length };
+          history.quizAttempts = { keeper: quizK.length, removed: quizR.length, conflicts: quizConf };
+          history.authorizedPickups = { keeper: bRows('authorized_pickup_students', kId).length, removed: bRows('authorized_pickup_students', rId).length };
+          history.releaseLogs = { keeper: relK.length, removed: relR.length, conflicts: relConf };
+          history.reportComments = { keeper: repK.length, removed: repR.length, conflicts: repConf };
+          history.enrollments = { keeperOpen: openK.length, removedOpen: openR.length, keeperHistory: bHistory(kId), removedHistory: bHistory(rId) };
+          history.unhandledChildRows = 0;
+          history.unhandledChildTables = [];
+
+          if (codes.length === 0) {
+            fingerprint = bHash([
+              kId, rId, keeper?.name ?? '', removed?.name ?? '', keeper?.className ?? '', removed?.className ?? '',
+              keeper?.govId ?? '', removed?.govId ?? '', keeper?.parentId ?? '', removed?.parentId ?? '',
+              keeper?.parentPhone ?? '', removed?.parentPhone ?? '', keeper?.transport ?? '', removed?.transport ?? '',
+              keeper?.familyId ?? '', removed?.familyId ?? '', String(groupSize),
+              String(openK.length), String(openR.length), String(bHistory(kId)), String(bHistory(rId)),
+              enrK?.id ?? '', enrR?.id ?? '', enrK?.className ?? '', enrR?.className ?? '',
+              enrK?.academicYearId ?? '', enrR?.academicYearId ?? '',
+              JSON.stringify(history), enrollAction ?? '', govChoice, 'canonical', 'canonical',
+            ].join('|'));
+          }
+        }
+
+        const eligible = deep && codes.length === 0;
+        const side = (s: any) => ({
+          id: s?.id ?? null, name: s?.name ?? null, className: s?.className ?? null,
+          govId: s?.govId ?? null, parentId: s?.parentId ?? null,
+          parentName: bProfile(s?.parentId)?.name ?? null,
+          parentPhone: s?.parentPhone ?? null, transport: s?.transport ?? null,
+          familyId: s?.familyId ?? null, createdAt: s?.createdAt ?? null,
+        });
+
+        return {
+          pairKey: `${kIdSafe(keeper)}>${kIdSafe(removed)}`,
+          groupKey: `${bNameKey(keeper?.name)}|${className ?? ''}`,
+          groupSize,
+          keeperId: kIdSafe(keeper),
+          removedId: kIdSafe(removed),
+          studentName: keeper?.name ?? null,
+          className,
+          eligible,
+          severity: eligible ? null : (blocked ? 'blocked' : 'review'),
+          exclusionCodes: codes,
+          eligibilityCodes: okCodes,
+          keeperIsParentAssigned: !bBlank(keeper?.parentId),
+          keeper: side(keeper),
+          removed: side(removed),
+          parentName: bProfile(keeper?.parentId)?.name ?? null,
+          resolution: {
+            summary: { govId: govChoice, parentPhone: 'canonical', transport: 'canonical', enrollment: enrollAction ?? 'none' },
+            mergeResolution: {
+              profile_resolution: {
+                name: 'canonical', class_name: 'canonical', gov_id: govChoice,
+                parent_id: 'canonical', parent_phone: 'canonical', transport: 'canonical',
+              },
+              exam_resolution: [], attendance_resolution: [], quiz_resolution: [],
+              release_resolution: [], report_comment_resolution: [],
+              enrollment_resolution: enrollAction ? { action: enrollAction, keep: enrollKeep } : null,
+            },
+          },
+          enrollmentAction: enrollAction,
+          history,
+          fingerprint,
+          evaluatedAt: new Date().toISOString(),
+        };
+      };
+
+      const batchCandidatePairs = (deep: boolean) => {
+        const groups = new Map<string, any[]>();
+        for (const s of mockTables.students as any[]) {
+          const key = `${bNameKey(s.name)}|${s.className ?? ''}`;
+          const arr = groups.get(key) || [];
+          arr.push(s);
+          groups.set(key, arr);
+        }
+        const eligible: any[] = [];
+        const excluded: any[] = [];
+        const reasons: Record<string, number> = {};
+        for (const members of groups.values()) {
+          if (members.length < 2) continue;
+          const sorted = [...members].sort((x, y) => String(x.createdAt ?? '').localeCompare(String(y.createdAt ?? '')) || String(x.id).localeCompare(String(y.id)));
+          for (let i = 0; i < sorted.length; i++) {
+            for (let j = i + 1; j < sorted.length; j++) {
+              const ev = evaluateSafePair(sorted[i], sorted[j], members.length, deep);
+              if (ev.eligible) eligible.push(ev);
+              else {
+                excluded.push(ev);
+                for (const c of ev.exclusionCodes) reasons[c] = (reasons[c] || 0) + 1;
+              }
+            }
+          }
+        }
+        const order = (x: any, y: any) => String(x.className ?? '').localeCompare(String(y.className ?? '')) || String(x.studentName ?? '').localeCompare(String(y.studentName ?? '')) || String(x.keeper?.createdAt ?? '').localeCompare(String(y.keeper?.createdAt ?? '')) || String(x.pairKey).localeCompare(String(y.pairKey));
+        eligible.sort(order);
+        excluded.sort(order);
+        return { eligible, excluded, reasons, candidatePairs: eligible.length + excluded.length };
+      };
+
+      const buildSummary = (r: { eligible: any[]; excluded: any[]; candidatePairs: number }) => ({
+        candidatePairs: r.candidatePairs,
+        safeCount: r.eligible.length,
+        excludedCount: r.excluded.length,
+        blockedCount: r.excluded.filter((e) => e.severity === 'blocked').length,
+        needsReviewCount: r.excluded.filter((e) => e.severity === 'review').length,
+        studentsToMerge: r.eligible.length,
+        recordsToRemove: r.eligible.length,
+        studentIdsPreserved: r.eligible.length,
+      });
+
+      if (fn === 'merge_safe_duplicate_batch') {
+        const phrase = (params?.p_confirm_phrase ?? params?.p_confirmPhrase ?? '').toString().trim().toUpperCase();
+        if (phrase !== batchPolicy.confirmPhrase) {
+          return { data: null, error: { message: 'Batch confirmation phrase required: type MERGE SAFE DUPLICATES to run the safe batch merge.', code: '22023' } };
+        }
+        const batchIdIn = params?.p_batch_id ?? params?.p_batchId ?? null;
+        if (batchIdIn && String(batchIdIn).length > 100) {
+          return { data: null, error: { message: 'Batch id must be 100 characters or fewer.', code: '22023' } };
+        }
+        const requested = params?.p_pairs ?? params?.p_pairs ?? null;
+        let reqKeys: string[] | null = null;
+        let reqFps: (string | null)[] = [];
+        if (requested !== null && requested !== undefined) {
+          if (!Array.isArray(requested)) return { data: null, error: { message: 'p_pairs must be a JSON array of reviewed pairs.', code: '22023' } };
+          if (requested.length > 5000) return { data: null, error: { message: 'Too many pairs in one batch request (max 5000).', code: '54000' } };
+          const malformed = requested.some((x: any) => !x || typeof x !== 'object' || bBlank(x.keeperId) || bBlank(x.removedId));
+          if (malformed) {
+            return { data: null, error: { message: 'Every reviewed pair must provide both keeperId and removedId. The safe batch never accepts a bare student id or a delete request.', code: '22023' } };
+          }
+          reqKeys = requested.map((x: any) => `${String(x.keeperId).trim()}>${String(x.removedId).trim()}`);
+          reqFps = requested.map((x: any) => (bBlank(x.fingerprint) ? null : String(x.fingerprint).trim()));
+        }
+        const chunkSize = Math.min(50, Math.max(1, Number(params?.p_chunk_size ?? params?.p_chunkSize ?? 25) || 25));
+        const reason = bBlank(params?.p_reason) ? null : String(params.p_reason).trim();
+        const batchId = batchIdIn ? String(batchIdIn) : `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const started = Date.now();
+
+        const scan = batchCandidatePairs(true);
+        const eligible = scan.eligible;
+        const filtered = reqKeys ? eligible.filter((e) => reqKeys!.includes(e.pairKey)) : eligible;
+        const ineligibleByKey = new Map<string, any>(scan.excluded.map((e) => [e.pairKey, e]));
+
+        const snapshot = JSON.parse(JSON.stringify(mockTables));
+        const merged: any[] = [];
+        const skipped: any[] = [];
+        const blockedList: any[] = [];
+        const seen = new Set<string>();
+        let examined = 0;
+
+        for (const ev of filtered) {
+          if (merged.length >= chunkSize) break;
+          seen.add(ev.pairKey);
+          examined += 1;
+          const idx = reqKeys ? reqKeys.indexOf(ev.pairKey) : -1;
+          const reviewedFp = idx >= 0 ? reqFps[idx] : null;
+          if (reviewedFp && ev.fingerprint && reviewedFp !== ev.fingerprint) {
+            skipped.push({ pairKey: ev.pairKey, keeperId: ev.keeperId, removedId: ev.removedId, studentName: ev.studentName, className: ev.className, reason: 'candidate_changed_since_preview', codes: ['candidate_changed_since_preview'] });
+            continue;
+          }
+          if (!findStudent(ev.keeperId) || !findStudent(ev.removedId)) {
+            skipped.push({ pairKey: ev.pairKey, keeperId: ev.keeperId, removedId: ev.removedId, reason: 'already_resolved', codes: ['already_resolved'] });
+            continue;
+          }
+          const keeperGov = findStudent(ev.keeperId).govId;
+          const keeperPhone = findStudent(ev.keeperId).parentPhone;
+          // Recursive dispatch into the individual (guided) merge handler: the
+          // batch reuses the exact same validation, transfer, verification,
+          // audit and delete logic — it never re-implements a merge.
+          const callResolved = mockRpc as (name: string, args?: any) => Promise<{ data: any; error: any }>;
+          const inner = await callResolved('merge_duplicate_students_resolved', {
+            p_canonical_id: ev.keeperId,
+            p_duplicate_id: ev.removedId,
+            p_resolution: ev.resolution.mergeResolution,
+            p_reason: `Safe batch merge (${batchId}): kept the parent-assigned record ${ev.keeperId}, merged the unassigned duplicate ${ev.removedId}. Policy: ${batchPolicy.policyId}${reason ? `. Administrator note: ${reason}` : ''}`,
+          });
+          if (inner.error) {
+            for (const k of Object.keys(mockTables)) mockTables[k] = snapshot[k];
+            return {
+              data: null,
+              error: {
+                message: `SAFE BATCH CHUNK ABORTED on pair ${ev.keeperId} -> ${ev.removedId} (${ev.studentName ?? ''}): ${inner.error.message}. The entire chunk rolled back; no student was modified by this chunk.`,
+                code: '23000',
+              },
+            };
+          }
+          // The batch never rewrites a keeper value it promised to keep.
+          const keeperRow = findStudent(ev.keeperId);
+          if (keeperRow) { keeperRow.govId = keeperGov; keeperRow.parentPhone = keeperPhone; }
+          const auditId = (inner.data as any)?.auditId ?? null;
+          const auditRow = (mockTables.student_merge_audits as any[]).find((a: any) => a.id === auditId);
+          if (auditRow) {
+            auditRow.batch_id = batchId;
+            auditRow.batch_policy = batchPolicy.policyId;
+            auditRow.batch_size = chunkSize;
+            auditRow.merge_kind = 'safe_batch';
+          }
+          merged.push({
+            pairKey: ev.pairKey, keeperId: ev.keeperId, removedId: ev.removedId,
+            studentName: ev.studentName, className: ev.className, auditId,
+            preservedStudentId: ev.keeperId, removedStudentId: ev.removedId,
+            enrollmentAction: (inner.data as any)?.enrollmentAction ?? null,
+            before: (inner.data as any)?.before ?? null,
+            after: (inner.data as any)?.after ?? null,
+          });
+        }
+
+        // Report requested pairs the mock server refuses to merge.
+        if (reqKeys) {
+          for (let i = 0; i < reqKeys.length; i++) {
+            const key = reqKeys[i];
+            if (seen.has(key)) continue;
+            if (eligible.some((e) => e.pairKey === key)) continue; // queued for a later chunk
+            const [idA, idB] = key.split('>');
+            const alreadyMerged = (mockTables.student_merge_audits as any[]).some((a: any) => a.batch_id === batchId && ((a.canonical_id === idA && a.duplicate_id === idB) || (a.canonical_id === idB && a.duplicate_id === idA)));
+            if (alreadyMerged) continue;
+            const rejected = ineligibleByKey.get(key);
+            if (rejected) {
+              blockedList.push({ ...rejected, reason: 'not_eligible_server_side', codes: [...rejected.exclusionCodes, 'not_eligible_server_side'] });
+            } else if (findStudent(idA) && !findStudent(idB)) {
+              skipped.push({ pairKey: key, keeperId: idA, removedId: idB, reason: 'already_resolved', codes: ['already_resolved'] });
+            } else {
+              blockedList.push({ pairKey: key, keeperId: idA, removedId: idB, reason: 'not_a_candidate', codes: ['not_a_candidate'] });
+            }
+          }
+        }
+
+        const remainingEligible = Math.max(0, filtered.length - examined);
+        const batchRow = (mockTables.student_merge_batches as any[]).find((b: any) => b.id === batchId);
+        const chunkResult = { chunkSize, merged, skipped, blocked: blockedList, startedAt: new Date(started).toISOString(), completedAt: new Date().toISOString() };
+        if (batchRow) {
+          batchRow.chunks_run += 1;
+          batchRow.merged_count += merged.length;
+          batchRow.skipped_count += skipped.length;
+          batchRow.blocked_count += blockedList.length;
+          batchRow.remaining_eligible = remainingEligible;
+          batchRow.chunk_results = [...(batchRow.chunk_results || []), chunkResult];
+          batchRow.updated_at = new Date().toISOString();
+        } else {
+          mockTables.student_merge_batches.push({
+            id: batchId, admin_id: 'preview-admin', policy: batchPolicy.policyId, chunk_size: chunkSize,
+            chunks_run: 1, reason, requested_pairs: reqKeys ? reqKeys.length : 0,
+            merged_count: merged.length, skipped_count: skipped.length, blocked_count: blockedList.length,
+            failed_count: 0, remaining_eligible: remainingEligible, chunk_results: [chunkResult],
+            created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+          });
+        }
+        mockTables.audit_logs.push({
+          id: mockTables.audit_logs.length + 1, action: 'students.merge_batch',
+          details: {
+            batchId, actor: 'preview-admin', policy: batchPolicy.policyId, chunkSize, reason,
+            merged: merged.length, skipped: skipped.length, blocked: blockedList.length, failed: 0,
+            remainingEligible,
+            preservedStudentIds: merged.map((m) => m.preservedStudentId),
+            removedStudentIds: merged.map((m) => m.removedStudentId),
+            auditIds: merged.map((m) => m.auditId),
+          },
+          createdAt: new Date().toISOString(),
+        });
+
+        return {
+          data: {
+            batchId, adminId: 'preview-admin', policy: batchPolicy.policyId, policyDetail: batchPolicy,
+            chunkSize, atomicChunk: true, committed: true,
+            merged, skipped, blocked: blockedList, failed: [],
+            totals: { eligibleAtStart: filtered.length, examined, merged: merged.length, skipped: skipped.length, blocked: blockedList.length, failed: 0, remaining: remainingEligible },
+            invariants: batchPolicy.invariants,
+            durationMs: Date.now() - started,
+            startedAt: new Date(started).toISOString(), completedAt: new Date().toISOString(),
+          },
+          error: null,
+        };
+      }
+
+      const t0 = Date.now();
+      const limit = Math.min(2000, Math.max(1, Number(fn === 'preview_safe_duplicate_batch' ? (params?.p_limit ?? 500) : (params?.p_limit ?? 200)) || 200));
+      const offset = Math.max(0, Number(params?.p_offset ?? 0) || 0);
+      const includeExcluded = fn === 'preview_safe_duplicate_batch' ? true : (params?.p_include_excluded ?? true) !== false;
+      const report = batchCandidatePairs(true);
+      const rows = report.eligible.slice(offset, offset + limit);
+      const excludedRows = includeExcluded
+        ? report.excluded.slice(offset, offset + limit).map((e) => ({
+            pairKey: e.pairKey, keeperId: e.keeperId, removedId: e.removedId, studentName: e.studentName,
+            className: e.className, severity: e.severity, exclusionCodes: e.exclusionCodes,
+            exclusionReasons: e.exclusionCodes.map((c: string) => batchPolicy.exclusionDescriptions[c] ?? c),
+            keeper: e.keeper, removed: e.removed,
+          }))
+        : [];
+      const base = {
+        policy: batchPolicy,
+        summary: buildSummary(report),
+        exclusionReasons: report.reasons,
+        rows,
+        excludedRows,
+        paging: { limit, offset, includeExcluded },
+        generatedAt: new Date().toISOString(),
+        timings: { evaluateMs: Date.now() - t0 },
+      };
+      if (fn === 'preview_safe_duplicate_batch') {
+        const safeCount = rows.length;
+        const chunk = batchPolicy.chunkSize.default;
+        return {
+          data: {
+            ...base,
+            dryRun: true,
+            writesPerformed: 0,
+            batchId: `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+            previewToken: bHash(rows.map((r: any) => `${r.pairKey}:${r.fingerprint ?? ''}`).join('|')),
+            ready: { studentsToMerge: safeCount, recordsToBeRemoved: safeCount, studentIdsPreserved: safeCount },
+            chunkPlan: {
+              chunkSize: chunk,
+              chunks: safeCount === 0 ? 0 : Math.ceil(safeCount / chunk),
+              atomicPerChunk: true,
+              strategy: 'One RPC call = one chunk = one atomic transaction. The client asks for the next chunk; the server recomputes eligibility every time.',
+            },
+            confirmations: [
+              { id: 'keeper_rule', textEn: 'I understand the parent-assigned record is kept and the unassigned duplicate is removed.', textAr: 'أفهم أنه سيتم الاحتفاظ بالسجل المرتبط بولي الأمر وحذف السجل المكرر غير المرتبط.' },
+              { id: 'excluded_rule', textEn: 'I understand every excluded pair stays in individual review and nothing is discarded silently.', textAr: 'أفهم أن كل زوج مستبعد يبقى في المراجعة الفردية ولا يتم تجاهل أي بيانات بصمت.' },
+              { id: 'audit_rule', textEn: 'I understand each merge is audited with the batch id, policy and administrator.', textAr: 'أفهم أن كل عملية دمج تُسجَّل مع معرّف الدفعة والسياسة واسم المسؤول.' },
+            ],
+            assertions: {
+              noGovIdConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['gov_id_conflict', 'gov_id_belongs_to_third_student'].includes(c))),
+              noParentConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['both_parents_assigned', 'parent_conflict', 'both_parents_unassigned', 'parent_profile_missing'].includes(c))),
+              noPhoneConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['parent_phone_conflict', 'parent_phone_only_on_unassigned'].includes(c))),
+              noTransportConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['transport_conflict', 'transport_only_on_unassigned'].includes(c))),
+              noClassConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['class_conflict', 'enrollment_class_conflict'].includes(c))),
+              noExamConflicts: rows.every((r: any) => !r.exclusionCodes.includes('exam_conflict')),
+              noAttendanceConflicts: rows.every((r: any) => !r.exclusionCodes.includes('attendance_conflict')),
+              noQuizConflicts: rows.every((r: any) => !r.exclusionCodes.includes('quiz_conflict')),
+              noReleaseConflicts: rows.every((r: any) => !r.exclusionCodes.includes('release_conflict')),
+              noReportConflicts: rows.every((r: any) => !r.exclusionCodes.includes('report_comment_conflict')),
+              noEnrollmentConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['multiple_open_enrollments', 'no_open_enrollment', 'enrollment_year_conflict'].includes(c))),
+              noUnhandledChildDependencies: rows.every((r: any) => !r.exclusionCodes.includes('unhandled_child_dependency')),
+              everyKeeperIsParentAssigned: rows.every((r: any) => r.keeperIsParentAssigned),
+              everyRemovedIsUnassigned: rows.every((r: any) => r.removed?.parentId == null),
+            },
+            confirmPhrase: batchPolicy.confirmPhrase,
+            timings: { ...base.timings, previewMs: Date.now() - t0 },
+          },
+          error: null,
+        };
+      }
+      return { data: base, error: null };
     }
 
     // For class_students_for_term etc fallback

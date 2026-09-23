@@ -36,6 +36,7 @@ A complete school management system built with React, Vite, and Supabase. Manage
 - [Data model design](explanations/data-model.md) — why profiles→students→exams, RLS policies
 - [The theming system](explanations/theming.md) — 4 themes, light/dark variants, CSS variables
 - [AI lesson plan review](explanations/ai-lesson-review.md) — edge function, scoring, supervisor workflow
+- [Safe duplicate batch merge](explanations/safe-duplicate-batch.md) — server-decided eligibility, chunked atomic merges, audit trail
 
 ### Reference
 
