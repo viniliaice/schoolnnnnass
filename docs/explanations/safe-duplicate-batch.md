@@ -37,12 +37,32 @@ already decided:
   `{ studentId, delete: true }`) is **rejected outright** with
   `Every reviewed pair must provide both keeperId and removedId…`. A malformed
   list can never fall back to "merge everything the server can find";
-* the confirmation phrase and a ≤100-character batch id are validated;
+* the confirmation phrase and a ≤100-character batch id are validated, and an
+  **existing** batch id is accepted only from the administrator who created it
+  (`batch_id_not_owned` — see §3);
 * `p_chunk_size` is clamped to the documented 1..50 window (default 25).
 
 Nothing in `src/lib/db/duplicateStudents.ts` or
 `src/pages/admin/SafeBatchMergePanel.tsx` filters, scores, or decides anything —
 they call the RPCs and render the JSON.
+
+### The three functions behind those RPCs are internal
+
+`_safe_batch_candidate_pairs`, `_safe_batch_evaluate_pair` and
+`_safe_batch_unhandled_child_rows` do the actual work. They are
+`SECURITY DEFINER`, so they run as the function owner and see **every** student —
+Gov IDs, parent phones, family ids, parent profiles and child-row counts that a
+teacher's, parent's or supervisor's RLS policy would otherwise hide. Two layers
+keep that power inside the admin flow:
+
+* each one re-checks the project's standard guard
+  (`current_profile_role()` must be `'admin'`, else `insufficient_privilege`);
+* `EXECUTE` is revoked from `PUBLIC`, `anon` and `authenticated`, so no JWT role
+  can call them directly at all.
+
+The administrator's flow is unaffected: the RPCs call these helpers *inside*
+their own `SECURITY DEFINER` chain, after their own admin check, and a
+`SECURITY DEFINER` body runs with the owner's privileges.
 
 ---
 
@@ -133,7 +153,18 @@ asserts `safeCount = 0`, `blockedCount = 1`, `parent_phone_conflict`).
 3. **Chunks.** One RPC call = one chunk = one atomic transaction, 25 merges by
    default (max 50). The panel loops chunks until the server reports
    `remaining: 0`, reusing the same `batchId`.
-4. **Per-pair results.** Every call returns `merged`, `skipped`, `blocked`,
+4. **Batch id ownership.** The id is client-supplied so one run accumulates into
+   one aggregate row — so the server owns the identity check. Before any
+   eligibility scan or merge it takes `pg_advisory_xact_lock(hashtext(batch id))`
+   (which serialises two concurrent chunks that picked the same fresh id) and
+   then requires `student_merge_batches.admin_id` to equal the acting
+   administrator. Another administrator — or a legacy row with no owner — is
+   refused with `batch_id_not_owned` (`insufficient_privilege`) having written
+   **nothing**: no merges, no audits, no change to the aggregate row. The same
+   administrator's later chunks accumulate normally, ownership and `created_at`
+   are never rewritten, and the upsert itself only accumulates for the acting
+   administrator.
+5. **Per-pair results.** Every call returns `merged`, `skipped`, `blocked`,
    `failed` with ids, names and reasons, plus `totals` and `remaining`.
 
 ### Deterministic locking and staleness
@@ -169,7 +200,9 @@ asserts `safeCount = 0`, `blockedCount = 1`, `parent_phone_conflict`).
   size, counts, preserved and removed Student IDs and the audit ids.
 * `student_merge_batches` — one row per batch id: administrator, policy, chunk
   size, chunks run, requested pairs, merged/skipped/blocked/failed counts,
-  remaining eligible, and the full `chunk_results` JSON. RLS: `SELECT` for
+  remaining eligible, and the full `chunk_results` JSON. The row belongs to the
+  administrator who created it and `admin_id` is immutable — a second
+  administrator can neither append to it nor adopt it. RLS: `SELECT` for
   admin/supervisor only, **no** write policies (RPC-only writes).
 
 So "which students did this batch merge, under which policy, approved by whom,
@@ -197,8 +230,9 @@ again by the tests.
 |------|--------------|--------|
 | `src/lib/__tests__/duplicateBatch.eligibility.db.test.ts` | real PostgreSQL (PGlite) + the shipped migrations | every eligibility and exclusion rule, the C/raxmaan regression, order-independence of the pair evaluation, pagination, per-reason counts, performance on a few hundred candidate groups |
 | `src/lib/__tests__/duplicateBatch.execution.db.test.ts` | real PostgreSQL (PGlite) | happy path + invariants, newer-record keeper, keeper byte preservation, Gov ID move, third-party rows untouched, per-merge audits + batch metadata, 25/25/10 chunking, chunk-size clamping, **whole-chunk rollback**, stale candidates, already-resolved pairs, server authority against forged/incomplete lists, phrase enforcement, anon/teacher/parent/supervisor denial, zero-write dry run, timings |
+| `src/lib/__tests__/duplicateBatch.security.db.test.ts` | real PostgreSQL (PGlite) + `SET ROLE authenticated` | **Finding 1:** teacher/parent/supervisor/anon refused by all three internal helpers (`insufficient_privilege`, no PII in the error), helpers not executable by `anon`/`authenticated` while the four client RPCs still are, PostgreSQL-level denial under a real JWT role, admin flow (`get` → `preview` → `merge`) still working. **Finding 2:** batch creation, same-admin accumulation, cross-admin refusal with `batch_id_not_owned`, byte-identical aggregate row and zero writes after a refusal, second admin's own batch, same-admin retry idempotency, aggregate totals vs chunk results vs per-merge audits, uncorrupted per-merge detail, unadoptable `NULL` owner, server-generated ids, batch id as a bound value |
 | `src/lib/__tests__/duplicateBatch.sqlAssertions.db.test.ts` | real PostgreSQL (PGlite) | executes `supabase/tests/safe-duplicate-batch.sql` |
-| `supabase/tests/safe-duplicate-batch.sql` | any migrated database (`psql -v ON_ERROR_STOP=1`) | RPC existence/`SECURITY DEFINER`/no PUBLIC execute, policy contract, evaluator behaviour, RLS on `student_merge_batches`, audit columns, delegation to the shared merge RPC, the `get_merge_conflicts` regression |
+| `supabase/tests/safe-duplicate-batch.sql` | any migrated database (`psql -v ON_ERROR_STOP=1`) | RPC existence/`SECURITY DEFINER`/no PUBLIC execute, policy contract, **internal-helper hardening** (admin guard present, still `SECURITY DEFINER`, not executable by `anon`/`authenticated`, client RPCs still granted), RLS on `student_merge_batches`, audit columns, delegation to the shared merge RPC, the `get_merge_conflicts` regression, **batch id ownership guard** (`batch_id_not_owned`, advisory lock taken before the check, guard before any merge, owner never rewritten) |
 | `src/lib/__tests__/duplicateBatch.client.test.ts` | mock Supabase client | client wrappers, preview/summary/pairs/exclusions, refusals, staleness, execution, audits, individual workflow untouched |
 | `src/pages/admin/__tests__/SafeBatchMergePanel*.test.tsx` | mock Supabase client (jsdom) | bilingual UI (EN/عربي), dry run first, confirmation gate, typed phrase, per-pair results, non-admin denial |
 

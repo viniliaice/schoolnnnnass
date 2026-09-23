@@ -120,20 +120,99 @@ BEGIN
   END IF;
 END $$;
 
--- ── 4. The evaluator refuses a pair it cannot see (no fixture data needed) ─
+-- ── 4. Internal helpers are admin-only and NOT callable by a JWT role ──────
+-- _safe_batch_evaluate_pair returns Gov IDs, parent phones, family ids and both
+-- parent profiles for ANY two student ids; _safe_batch_candidate_pairs scans
+-- every name/class group in the school; _safe_batch_unhandled_child_rows counts
+-- child rows for any student id. All three run as the function owner, so each
+-- one carries the project's standard admin guard (current_profile_role()) and
+-- none of them may be executed directly by anon/authenticated. The SECURITY
+-- DEFINER batch RPCs still call them — as owner, after their own admin check.
+--
+-- The BEHAVIOURAL half (teacher/parent/supervisor/anon are refused with
+-- insufficient_privilege and receive no PII, an administrator is served, and a
+-- pair of missing students is never eligible) is executed on real PostgreSQL
+-- inside PGlite by src/lib/__tests__/duplicateBatch.security.db.test.ts — this
+-- file stays read-only so it remains safe to run against production.
 DO $$
 DECLARE
-  v_eval JSONB := public._safe_batch_evaluate_pair(
-    'safe-batch-assertion-missing-a', 'safe-batch-assertion-missing-b', 2, false);
+  v_fn TEXT;
+  v_role TEXT;
+  v_roles TEXT[] := ARRAY['anon', 'authenticated'];
+  v_total INT; v_invoker INT; v_unguarded INT; v_granted INT;
+  v_bad TEXT[] := ARRAY[]::TEXT[];
 BEGIN
-  IF COALESCE((v_eval->>'eligible')::BOOLEAN, true) THEN
-    RAISE EXCEPTION 'a pair of missing students must never be eligible';
+  FOREACH v_fn IN ARRAY ARRAY[
+    '_safe_batch_evaluate_pair',
+    '_safe_batch_candidate_pairs',
+    '_safe_batch_unhandled_child_rows'
+  ] LOOP
+    SELECT count(*),
+           count(*) FILTER (WHERE NOT p.prosecdef),
+           count(*) FILTER (
+             WHERE position('current_profile_role()' in pg_get_functiondef(p.oid)) = 0
+                OR position('insufficient_privilege' in pg_get_functiondef(p.oid)) = 0)
+      INTO v_total, v_invoker, v_unguarded
+      FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = v_fn;
+
+    IF COALESCE(v_total, 0) = 0 THEN
+      v_bad := v_bad || format('%s is missing', v_fn);
+    END IF;
+    IF COALESCE(v_invoker, 0) > 0 THEN
+      v_bad := v_bad || format('%s must stay SECURITY DEFINER (the batch RPCs call it as owner)', v_fn);
+    END IF;
+    IF COALESCE(v_unguarded, 0) > 0 THEN
+      v_bad := v_bad || format('%s lost its admin role guard (current_profile_role() + insufficient_privilege)', v_fn);
+    END IF;
+
+    FOREACH v_role IN ARRAY v_roles LOOP
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = v_role) THEN
+        SELECT count(*) INTO v_granted
+        FROM pg_proc p
+        JOIN pg_namespace n ON n.oid = p.pronamespace
+       WHERE n.nspname = 'public' AND p.proname = v_fn
+         AND has_function_privilege(v_role, p.oid, 'EXECUTE');
+        IF COALESCE(v_granted, 0) > 0 THEN
+          v_bad := v_bad || format('%s is still directly executable by %s', v_fn, v_role);
+        END IF;
+      END IF;
+    END LOOP;
+  END LOOP;
+
+  IF COALESCE(array_length(v_bad, 1), 0) > 0 THEN
+    RAISE EXCEPTION 'internal batch helper hardening failed: %', array_to_string(v_bad, '; ');
   END IF;
-  IF v_eval->>'severity' <> 'blocked' THEN
-    RAISE EXCEPTION 'missing students must be severity=blocked, got %', v_eval->>'severity';
+END $$;
+
+-- ── 4b. The client-callable batch functions KEEP their authenticated grant ──
+-- Revoking the helpers must not lock the administrator out of the feature.
+DO $$
+DECLARE
+  v_fn TEXT;
+  v_missing TEXT[] := ARRAY[]::TEXT[];
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+    RETURN;
   END IF;
-  IF NOT (v_eval->'exclusionCodes' ? 'student_missing') THEN
-    RAISE EXCEPTION 'expected the student_missing exclusion code, got %', v_eval->'exclusionCodes';
+  FOREACH v_fn IN ARRAY ARRAY[
+    'safe_duplicate_batch_policy',
+    'get_safe_duplicate_batch',
+    'preview_safe_duplicate_batch',
+    'merge_safe_duplicate_batch'
+  ] LOOP
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_proc p
+      JOIN pg_namespace n ON n.oid = p.pronamespace
+     WHERE n.nspname = 'public' AND p.proname = v_fn
+       AND has_function_privilege('authenticated', p.oid, 'EXECUTE')
+    ) THEN
+      v_missing := v_missing || v_fn;
+    END IF;
+  END LOOP;
+  IF COALESCE(array_length(v_missing, 1), 0) > 0 THEN
+    RAISE EXCEPTION 'batch RPC(s) no longer executable by authenticated: %', array_to_string(v_missing, ', ');
   END IF;
 END $$;
 
@@ -243,5 +322,51 @@ BEGIN
   END IF;
   IF position('c."subjectId"' in v_body) = 0 THEN
     RAISE EXCEPTION 'get_merge_conflicts must compare the quoted c."subjectId" column';
+  END IF;
+END $$;
+
+-- ── 9. A batch id can never be hijacked by a second administrator ──────────
+-- The client supplies p_batch_id so one run can accumulate several chunks into
+-- one aggregate row. An existing id must therefore be accepted ONLY from the
+-- administrator who created it: the guard runs before any merge, is serialised
+-- with an advisory lock (two concurrent chunks that picked the same fresh id),
+-- and the aggregate upsert may only accumulate for the acting administrator.
+DO $$
+DECLARE
+  v_body TEXT;
+  v_guard_pos INT;
+  v_merge_pos INT;
+BEGIN
+  SELECT pg_get_functiondef(p.oid) INTO v_body
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = 'public' AND p.proname = 'merge_safe_duplicate_batch'
+  LIMIT 1;
+  IF v_body IS NULL THEN
+    RAISE EXCEPTION 'public.merge_safe_duplicate_batch is missing';
+  END IF;
+  IF position('batch_id_not_owned' in v_body) = 0 THEN
+    RAISE EXCEPTION 'merge_safe_duplicate_batch lost the batch_id_not_owned ownership guard';
+  END IF;
+  IF position('pg_advisory_xact_lock' in v_body) = 0 THEN
+    RAISE EXCEPTION 'the batch id ownership check must be serialised (advisory lock) to close the creation race';
+  END IF;
+  IF position('admin_id IS NOT DISTINCT FROM v_actor' in v_body) = 0 THEN
+    RAISE EXCEPTION 'the aggregate batch upsert must only accumulate for the acting administrator';
+  END IF;
+  v_guard_pos := position('batch_id_not_owned' in v_body);
+  v_merge_pos := position('merge_duplicate_students_resolved' in v_body);
+  IF v_merge_pos > 0 AND v_guard_pos > v_merge_pos THEN
+    RAISE EXCEPTION 'the ownership guard must run BEFORE any merge is attempted';
+  END IF;
+  -- The lock must be taken BEFORE the ownership read, otherwise two concurrent
+  -- chunks that picked the same fresh id can both see "no row yet" and one of
+  -- them accumulates into the other's batch.
+  IF position('pg_advisory_xact_lock' in v_body) > v_guard_pos THEN
+    RAISE EXCEPTION 'the advisory lock must be taken before the batch id ownership check';
+  END IF;
+  -- Ownership is immutable: the accumulate path must never rewrite admin_id.
+  IF position('admin_id = EXCLUDED.admin_id' in v_body) > 0
+     OR position('admin_id = v_actor' in v_body) > 0 THEN
+    RAISE EXCEPTION 'an existing batch row must never change owner';
   END IF;
 END $$;

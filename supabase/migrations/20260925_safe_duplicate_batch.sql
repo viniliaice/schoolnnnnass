@@ -210,9 +210,21 @@ CREATE OR REPLACE FUNCTION public._safe_batch_unhandled_child_rows(p_student_id 
 RETURNS TABLE(table_name TEXT, row_count BIGINT)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
 DECLARE
+  v_role TEXT := public.current_profile_role();
   v_tbl RECORD;
   v_cnt BIGINT;
 BEGIN
+  -- 0. Authorization — the SAME guard the batch RPCs use (existing pattern:
+  --    current_profile_role() must be 'admin'). This helper counts child rows
+  --    for ANY student id, so without the guard a teacher/parent/supervisor
+  --    could probe records their own student RLS policy hides. It stays fully
+  --    reachable through the SECURITY DEFINER batch RPCs, which authorize the
+  --    caller first and then run as the function owner.
+  IF v_role IS NULL OR v_role <> 'admin' THEN
+    RAISE EXCEPTION 'Only administrators may inspect safe batch duplicate dependencies.'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
   IF p_student_id IS NULL THEN RETURN; END IF;
   FOR v_tbl IN
     SELECT format('%I.%I', n.nspname, c.relname) AS qual,
@@ -245,8 +257,11 @@ BEGIN
 END;
 $$;
 
+-- Internal helper — NOT callable by a JWT role. EXECUTE stays with the function
+-- owner (what the SECURITY DEFINER batch RPCs run as), so the shipped
+-- get/preview/merge flow is unaffected. The grants block at the end of this
+-- migration also revokes from anon/authenticated where those roles exist.
 REVOKE ALL ON FUNCTION public._safe_batch_unhandled_child_rows(TEXT) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public._safe_batch_unhandled_child_rows(TEXT) TO authenticated;
 
 -- ─── 4. The eligibility contract for ONE pair ───────────────────────────────
 -- p_a_id / p_b_id are unordered: the function decides which record is the
@@ -264,6 +279,7 @@ CREATE OR REPLACE FUNCTION public._safe_batch_evaluate_pair(
 ) RETURNS JSONB
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
 DECLARE
+  v_role TEXT := public.current_profile_role();
   v_a RECORD; v_b RECORD;
   v_keeper RECORD; v_removed RECORD;
   v_keeper_id TEXT; v_removed_id TEXT;
@@ -302,6 +318,17 @@ DECLARE
   v_fingerprint TEXT := NULL;
   v_class TEXT;
 BEGIN
+  -- 0. Authorization — the SAME guard the batch RPCs use (existing pattern).
+  --    The evaluation JSONB carries Gov IDs, parent phones, family ids and both
+  --    parent profiles for ANY two student ids, so it must never run for a
+  --    non-admin caller. The SECURITY DEFINER batch RPCs (get / preview / merge)
+  --    authorize the administrator first and then call this helper, so the
+  --    shipped batch flow is unchanged.
+  IF v_role IS NULL OR v_role <> 'admin' THEN
+    RAISE EXCEPTION 'Only administrators may evaluate safe batch duplicate pairs.'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
   SELECT * INTO v_a FROM public.students WHERE id = p_a_id;
   IF NOT FOUND THEN
     RETURN jsonb_build_object(
@@ -698,16 +725,28 @@ BEGIN
 END;
 $$;
 
+-- Internal helper — NOT callable by a JWT role (it returns Gov IDs, parent
+-- phones and family ids for arbitrary student ids). The SECURITY DEFINER batch
+-- RPCs call it as the function owner, so the shipped flow is unaffected.
 REVOKE ALL ON FUNCTION public._safe_batch_evaluate_pair(TEXT,TEXT,INTEGER,BOOLEAN) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public._safe_batch_evaluate_pair(TEXT,TEXT,INTEGER,BOOLEAN) TO authenticated;
 
 -- ─── 5. Candidate discovery (same grouping rule as get_duplicate_candidates) ─
 CREATE OR REPLACE FUNCTION public._safe_batch_candidate_pairs(p_deep BOOLEAN DEFAULT true)
 RETURNS TABLE(pair_key TEXT, evaluation JSONB)
 LANGUAGE plpgsql STABLE SECURITY DEFINER SET search_path = public AS $$
 DECLARE
+  v_role TEXT := public.current_profile_role();
   r RECORD;
 BEGIN
+  -- 0. Authorization — the SAME guard the batch RPCs use (existing pattern).
+  --    This scans EVERY name/class group in the school, so it must never run
+  --    for a non-admin caller. get_safe_duplicate_batch / preview / merge call
+  --    it after their own admin check, inside the SECURITY DEFINER chain.
+  IF v_role IS NULL OR v_role <> 'admin' THEN
+    RAISE EXCEPTION 'Only administrators may list safe batch duplicate candidates.'
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
+
   FOR r IN
     WITH grp AS (
       SELECT public.name_match_key(s.name) AS nkey,
@@ -730,8 +769,10 @@ BEGIN
 END;
 $$;
 
+-- Internal helper — NOT callable by a JWT role (it scans every name/class group
+-- in the school). get_safe_duplicate_batch / preview / merge call it as the
+-- function owner, so the shipped flow is unaffected.
 REVOKE ALL ON FUNCTION public._safe_batch_candidate_pairs(BOOLEAN) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION public._safe_batch_candidate_pairs(BOOLEAN) TO authenticated;
 
 -- ─── 6. Eligibility report (summary-first, paginated) ───────────────────────
 CREATE OR REPLACE FUNCTION public.get_safe_duplicate_batch(
@@ -930,6 +971,8 @@ DECLARE
   v_started TIMESTAMPTZ := clock_timestamp();
   v_chunk INT;
   v_batch TEXT;
+  v_batch_exists BOOLEAN := FALSE;
+  v_batch_owner TEXT;
   v_reason TEXT;
   v_req_keys TEXT[] := NULL;
   v_req_fps TEXT[] := NULL;
@@ -988,6 +1031,35 @@ BEGIN
   END IF;
   IF length(v_batch) > 100 THEN
     RAISE EXCEPTION 'Batch id must be 100 characters or fewer.' USING ERRCODE = 'invalid_parameter_value';
+  END IF;
+
+  -- 2b. Batch id ownership --------------------------------------------------
+  -- The client supplies the batch id so the UI can accumulate several chunks of
+  -- ONE run into ONE aggregate row. That must never let a second administrator
+  -- append to (or overwrite) a batch that belongs to someone else, so an
+  -- existing id is accepted ONLY from the administrator who created it. The id
+  -- itself stays a bound value (never concatenated into SQL) and keeps its
+  -- trim/length checks above.
+  --
+  -- This runs BEFORE the eligibility scan and BEFORE any merge, so a refused
+  -- caller has written nothing at all.
+  --
+  -- The advisory lock is taken first and keyed on the batch id. It serialises
+  -- two concurrent chunks that chose the SAME fresh id: the second one waits,
+  -- then sees the committed row and is refused (or, if it is the same admin,
+  -- accumulates) instead of racing into the upsert below.
+  PERFORM pg_advisory_xact_lock(hashtext(v_batch)::BIGINT);
+
+  SELECT TRUE, b.admin_id
+    INTO v_batch_exists, v_batch_owner
+    FROM public.student_merge_batches b
+   WHERE b.id = v_batch;
+
+  IF COALESCE(v_batch_exists, FALSE) THEN
+    IF v_actor IS NULL OR v_batch_owner IS DISTINCT FROM v_actor THEN
+      RAISE EXCEPTION 'batch_id_not_owned: batch "%" was created by another administrator. Re-run with a new batch id.', v_batch
+        USING ERRCODE = 'insufficient_privilege';
+    END IF;
   END IF;
 
   v_reason := NULLIF(btrim(COALESCE(p_reason, '')), '');
@@ -1266,7 +1338,24 @@ BEGIN
     blocked_count = public.student_merge_batches.blocked_count + EXCLUDED.blocked_count,
     remaining_eligible = EXCLUDED.remaining_eligible,
     chunk_results = public.student_merge_batches.chunk_results || EXCLUDED.chunk_results,
-    updated_at = NOW();
+    updated_at = NOW()
+    -- Accumulation is for the SAME administrator's chunks only. admin_id and
+    -- created_at are deliberately never rewritten: ownership is immutable.
+    WHERE public.student_merge_batches.admin_id IS NOT DISTINCT FROM v_actor;
+
+  -- Defence in depth: the aggregate row this chunk just touched must belong to
+  -- the acting administrator. If the guarded upsert skipped (someone else owns
+  -- the id) this raises, and because the chunk is one transaction EVERY write
+  -- it made — merges, per-merge audits, audit_logs — rolls back with it. A
+  -- batch row is therefore never silently overwritten or shared between admins.
+  IF EXISTS (
+    SELECT 1 FROM public.student_merge_batches b
+     WHERE b.id = v_batch
+       AND b.admin_id IS DISTINCT FROM v_actor
+  ) THEN
+    RAISE EXCEPTION 'batch_id_not_owned: batch "%" is not owned by the acting administrator.', v_batch
+      USING ERRCODE = 'insufficient_privilege';
+  END IF;
 
   INSERT INTO public.audit_logs (action, details, "createdAt")
   VALUES ('students.merge_batch', jsonb_build_object(
@@ -1310,21 +1399,44 @@ REVOKE ALL ON FUNCTION public.merge_safe_duplicate_batch(JSONB,INTEGER,TEXT,TEXT
 GRANT EXECUTE ON FUNCTION public.merge_safe_duplicate_batch(JSONB,INTEGER,TEXT,TEXT,TEXT) TO authenticated;
 
 -- ─── 9. Grants consistency (matches 20260922 style) ─────────────────────────
+-- Two tiers, and the tier is the security point:
+--   * The four functions a client may call (policy + get + preview + merge) keep
+--     EXECUTE for `authenticated`. Each one re-checks current_profile_role()
+--     internally, so a teacher/parent/supervisor is refused by the function.
+--   * The three `_safe_batch_*` helpers are INTERNAL. They execute as the
+--     function owner inside the SECURITY DEFINER chain of the RPCs above, so
+--     revoking EXECUTE from the JWT roles cannot break the batch — it only
+--     removes the direct call path that let ANY authenticated user read Gov IDs,
+--     parent phones, family ids and parent profiles for arbitrary student ids
+--     (bypassing student RLS). Defence in depth: the helpers also carry their own
+--     admin guard, so even a future re-grant cannot expose them.
 DO $$
-DECLARE f TEXT;
+DECLARE
+  f TEXT;
+  r TEXT;
 BEGIN
-  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
-    FOREACH f IN ARRAY ARRAY[
-      'public.safe_duplicate_batch_policy()',
-      'public._safe_batch_unhandled_child_rows(TEXT)',
-      'public._safe_batch_evaluate_pair(TEXT,TEXT,INTEGER,BOOLEAN)',
-      'public._safe_batch_candidate_pairs(BOOLEAN)',
-      'public.get_safe_duplicate_batch(INTEGER,INTEGER,BOOLEAN)',
-      'public.preview_safe_duplicate_batch(INTEGER)',
-      'public.merge_safe_duplicate_batch(JSONB,INTEGER,TEXT,TEXT,TEXT)'
-    ] LOOP
-      EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
+  FOREACH f IN ARRAY ARRAY[
+    'public.safe_duplicate_batch_policy()',
+    'public.get_safe_duplicate_batch(INTEGER,INTEGER,BOOLEAN)',
+    'public.preview_safe_duplicate_batch(INTEGER)',
+    'public.merge_safe_duplicate_batch(JSONB,INTEGER,TEXT,TEXT,TEXT)'
+  ] LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
       EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO authenticated', f);
+    END IF;
+  END LOOP;
+
+  FOREACH f IN ARRAY ARRAY[
+    'public._safe_batch_unhandled_child_rows(TEXT)',
+    'public._safe_batch_evaluate_pair(TEXT,TEXT,INTEGER,BOOLEAN)',
+    'public._safe_batch_candidate_pairs(BOOLEAN)'
+  ] LOOP
+    EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC', f);
+    FOREACH r IN ARRAY ARRAY['anon', 'authenticated'] LOOP
+      IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = r) THEN
+        EXECUTE format('REVOKE ALL ON FUNCTION %s FROM %I', f, r);
+      END IF;
     END LOOP;
-  END IF;
+  END LOOP;
 END $$;
