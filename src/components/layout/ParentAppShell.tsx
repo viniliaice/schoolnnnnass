@@ -182,6 +182,14 @@ export function ParentAppShell({ children, initialPath = '/dashboard' }: ParentA
             <p className="text-sm text-slate-400" style={{ fontFamily: "'Dancing Script', cursive", fontSize: '1rem' }}>
               {t('app.madeBy', 'Made by')} <span className="font-bold text-indigo-500">Eng. Akso</span>
             </p>
+            <p className="mt-1 text-xs">
+              <a
+                href="/privacy-policy"
+                className="text-slate-500 underline underline-offset-2 transition-colors hover:text-indigo-600"
+              >
+                Privacy Policy
+              </a>
+            </p>
           </footer>
         </div>
 
