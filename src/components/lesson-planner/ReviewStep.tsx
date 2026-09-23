@@ -4,6 +4,7 @@ import { Loader2, Send, FileCheck2, Download, AlertTriangle, CheckCircle2 } from
 import { cn } from '../../utils/cn';
 import { PlanReadView } from './PlanReadView';
 import { StepNav } from './PlanStepper';
+import { summarizeDay } from '../../lib/lessonPlanReview';
 
 interface ReviewStepProps {
   periods: {
@@ -55,8 +56,14 @@ export function ReviewStep({
   const emptyCount = active.filter((p) => !p.topic.trim()).length;
   const withObjective = active.filter((p) => p.objective.trim()).length;
   const activityCount = active.reduce((n, p) => n + p.details.filter((d) => d.activity.trim()).length, 0);
-  const totalSlots = periods.length || 1;
-  const completion = Math.round(((filledCount + freeCount) / totalSlots) * 100);
+  // Readiness is measured against the periods that actually need a plan, so
+  // free periods never deflate the percentage (4 planned + 1 free = 100%).
+  // Same rule as the per-day summaries rendered by PlanReadView.
+  const weekSummary = summarizeDay(
+    periods.map((p) => ({ is_free: p.isFree, subject: p.subject, topic: p.topic })),
+    periods.length,
+  );
+  const completion = weekSummary.percent;
 
   const handleExportPdf = () => {
     window.print();

@@ -15,10 +15,42 @@ export interface PeriodInstructionalReview {
   revisionReason: string;
 }
 
+/**
+ * One timetable slot for a single day.
+ *
+ * `is_free`/`subject` decide whether the slot requires a lesson plan, and
+ * `topic` carries the plan the teacher actually wrote for it. A `null`/
+ * `undefined` entry is a slot with no saved row yet — it still occupies the
+ * timetable, so it still requires a plan.
+ */
+export interface DayPlanningPeriodInput {
+  is_free?: boolean | null;
+  subject?: string | null;
+  topic?: string | null;
+}
+
+/** Sentinel subject used by the editor for a period toggled to Free. */
+export const FREE_PERIOD_SUBJECT = '__FREE__';
+
 export interface DayPlanningSummary {
+  /**
+   * Periods that REQUIRE a lesson plan — every timetable slot that is not
+   * explicitly Free (`total - free`). This is the completion denominator.
+   */
   planned: number;
+  /** Periods explicitly marked Free. They never require a lesson plan. */
   free: number;
+  /** Required (`planned`) periods that have a valid lesson plan. */
+  completed: number;
+  /** Every timetable slot for the day: `planned + free`. */
   total: number;
+  /**
+   * `completed ÷ planned × 100`, rounded to 2 decimals.
+   *
+   * Free periods are excluded from the denominator, so a fully-planned day
+   * reads 100% no matter how many free periods it contains. A day with no
+   * required period (every slot Free) has nothing missing, so it is 100%.
+   */
   percent: number;
 }
 
@@ -140,11 +172,53 @@ function buildSuggestedActivities(period: LessonPlanPeriod, matchedUnit?: UnitPl
   }
 }
 
-export function summarizeDay(periods: Array<Pick<LessonPlanPeriod, 'is_free' | 'topic'>>, periodCount: number): DayPlanningSummary {
-  const free = periods.filter((period) => period?.is_free).length;
-  const planned = periods.filter((period) => period && !period.is_free && (period.topic ?? '').trim()).length;
+function roundTo2(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+/**
+ * True only for a period the timetable EXPLICITLY marks as Free.
+ *
+ * A Free period is a deliberate timetable entry (the teacher toggled it, or
+ * it was saved with the `__FREE__` sentinel subject). A slot that is merely
+ * empty or has no saved row is NOT free — it is a required period whose
+ * lesson plan is still missing.
+ */
+export function isFreePeriod(period?: DayPlanningPeriodInput | null): boolean {
+  if (!period) return false;
+  return period.is_free === true || period.subject === FREE_PERIOD_SUBJECT;
+}
+
+/**
+ * Completion summary for one day of a lesson plan.
+ *
+ * The completion percentage is measured against the periods teachers are
+ * EXPECTED to plan (`planned`), not against every timetable slot (`total`).
+ * Free periods are explicit timetable entries that need no lesson plan, so
+ * counting them in the denominator would punish a teacher for a day the
+ * school scheduled as free — e.g. 4 planned + 1 free was reported as 80%
+ * when every required period was in fact complete (100%).
+ *
+ * Invariants: `planned + free === total` and `completed <= planned`.
+ */
+export function summarizeDay(
+  periods: ReadonlyArray<DayPlanningPeriodInput | null | undefined>,
+  periodCount: number,
+): DayPlanningSummary {
   const total = Math.max(periodCount, periods.length, 1);
-  return { planned, free, total, percent: Math.round((planned / total) * 100) };
+
+  const free = periods.reduce((count, period) => (isFreePeriod(period) ? count + 1 : count), 0);
+  const planned = Math.max(total - free, 0);
+  const completed = periods.reduce(
+    (count, period) => (!isFreePeriod(period) && (period?.topic ?? '').trim() ? count + 1 : count),
+    0,
+  );
+
+  // Nothing required ⇒ nothing missing ⇒ complete. This also keeps an
+  // all-free day from being reported as 0% (and avoids dividing by zero).
+  const percent = planned === 0 ? 100 : roundTo2(Math.min(completed / planned, 1) * 100);
+
+  return { planned, free, completed, total, percent };
 }
 
 export function findMatchingUnitPlan(period: LessonPlanPeriod, unitPlans: UnitPlan[] = [], weekLabel?: string): UnitPlan | undefined {
