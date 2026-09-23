@@ -120,8 +120,18 @@ export function LoginPage() {
         </div>
 
         {/* Footer */}
-        <div className="text-center mt-8">
+        <div className="mt-8 space-y-2 text-center">
           <p className="text-xs text-slate-500">Made by Eng. Akso</p>
+          {/* The sign-in screen is the only page a signed-out visitor sees, so the
+              public privacy-policy link lives here (no account required). */}
+          <p className="text-xs">
+            <a
+              href="/privacy-policy"
+              className="font-medium text-indigo-600 underline underline-offset-2 transition-colors hover:text-indigo-700"
+            >
+              Privacy Policy
+            </a>
+          </p>
         </div>
       </div>
     </div>

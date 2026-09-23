@@ -200,7 +200,16 @@ export function MorePage({ navigate }: { navigate: (path: string) => void }) {
           <li>Tap a child anywhere to switch between your children.</li>
           <li>For anything else, message the school from <span className="font-semibold text-slate-900">Messages</span>.</li>
         </ul>
-        <p className="mt-4 border-t border-slate-100 pt-3 text-center text-xs text-slate-400">
+        <p className="mt-4 border-t border-slate-100 pt-3 text-sm">
+          <a
+            href="/privacy-policy"
+            className="font-semibold text-indigo-600 underline underline-offset-2 transition-colors hover:text-indigo-700"
+          >
+            Privacy Policy
+          </a>
+          <span className="text-slate-500"> — how the school handles your family's information.</span>
+        </p>
+        <p className="mt-3 border-t border-slate-100 pt-3 text-center text-xs text-slate-400">
           MBK International School · {t('app.madeBy', 'Made by')}{' '}
           <span className="font-bold text-indigo-400">Eng. Akso</span>
         </p>

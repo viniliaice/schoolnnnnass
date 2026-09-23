@@ -19,6 +19,8 @@ import { ManageAcademic } from './pages/admin/ManageAcademic';
 import { BulkUpload } from './pages/admin/BulkUpload';
 import { FamilyIds } from './pages/admin/FamilyIds';
 import { canAccessRoute, DEFAULT_ROUTE } from './lib/routing';
+import { isPrivacyPolicyPath } from './legal/privacyPolicy';
+import { PrivacyPolicyPage } from './pages/legal/PrivacyPolicyPage';
 import { GateScreen } from './pages/admin/gate/GateScreen';
 import { ManageDrivers } from './pages/admin/drivers/ManageDrivers';
 import { OfficeDashboard } from './pages/office/OfficeDashboard';
@@ -68,6 +70,17 @@ import { StreamsPage } from './pages/shared/StreamsPage';
 
 function AppContent() {
   const { session, isLoggedIn, loading } = useRole();
+
+  // ── Public route ────────────────────────────────────────────────────────
+  // /privacy-policy is the URL registered in Google Play, so it must open for
+  // anyone — signed in or not — and never show a sign-in wall. It renders
+  // before the auth gate (and before the session spinner). The same content is
+  // also emitted as standalone HTML files (dist/privacy-policy.html and
+  // dist/privacy-policy/index.html — see vite.config.ts), which is what hosts
+  // serve when they resolve static files first.
+  if (isPrivacyPolicyPath(window.location.pathname)) {
+    return <PrivacyPolicyPage />;
+  }
 
   if (loading) {
     return (
