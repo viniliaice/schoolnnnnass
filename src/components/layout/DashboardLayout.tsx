@@ -1,7 +1,10 @@
-import { type ReactNode, useCallback, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useState } from 'react';
 import { Languages } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { useI18n, type AppLanguage } from '../../lib/i18n/AppLanguageContext';
+import { initialPathFromLocation, onNavigationRequest } from '../../lib/pwa/navigationBus';
+import { OfflineIndicator } from '../pwa/OfflineIndicator';
+import { UpdateBanner } from '../pwa/UpdateBanner';
 
 interface DashboardLayoutProps {
   children: (currentPath: string, navigate: (path: string) => void) => ReactNode;
@@ -48,20 +51,51 @@ export function LanguageSwitcher() {
 }
 
 export function DashboardLayout({ children, initialPath = '/dashboard', fullscreenPaths = [] }: DashboardLayoutProps) {
-  const [currentPath, setCurrentPath] = useState(initialPath);
+  // Deep links: when a notification click (or a cold PWA launch) opens the
+  // app on a known route such as /teacher/lesson-plans, honour the URL
+  // instead of always landing on the dashboard.
+  const [currentPath, setCurrentPath] = useState(() => initialPathFromLocation() ?? initialPath);
   const { t } = useI18n();
 
-  const navigate = useCallback((path: string) => {
+  const applyPath = useCallback((path: string, updateUrl: boolean) => {
     setCurrentPath(path);
+    if (updateUrl) {
+      try {
+        window.history.pushState({}, '', path);
+      } catch {
+        /* sandboxed iframe without allow-same-origin */
+      }
+    }
+  }, []);
+
+  const navigate = useCallback((path: string) => applyPath(path, true), [applyPath]);
+
+  // Service-worker notification clicks on an already-open window post
+  // NAVIGATE messages that arrive on this bus.
+  useEffect(() => onNavigationRequest((path) => applyPath(path, true)), [applyPath]);
+
+  // Keep in-app state in sync with browser back/forward.
+  useEffect(() => {
+    const onPopState = () => setCurrentPath(initialPathFromLocation() ?? '/dashboard');
+    window.addEventListener('popstate', onPopState);
+    return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
   // Mobile-first full-screen routes (no sidebar, no footer, edge-to-edge).
   if (fullscreenPaths.includes(currentPath)) {
-    return <main className="app-shell min-h-screen bg-slate-100">{children(currentPath, navigate)}</main>;
+    return (
+      <>
+        <main className="app-shell min-h-screen bg-slate-100">{children(currentPath, navigate)}</main>
+        <OfflineIndicator />
+        <UpdateBanner />
+      </>
+    );
   }
 
   return (
     <div className="app-shell flex min-h-screen bg-slate-50">
+      <OfflineIndicator />
+      <UpdateBanner />
       <Sidebar currentPath={currentPath} onNavigate={navigate} />
       <main className="relative flex-1 min-w-0 flex flex-col">
         <LanguageSwitcher />

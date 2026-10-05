@@ -39,6 +39,9 @@ import { DuplicateStudents } from './pages/admin/DuplicateStudents';
 import { SupervisorDashboard } from './pages/supervisor/SupervisorDashboard';
 
 // Teacher Pages
+import { TeacherNotifications } from './pages/teacher/TeacherNotifications';
+import { TeacherInstallPage } from './pages/teacher/TeacherInstallPage';
+import { SendTeacherNotifications } from './pages/admin/SendTeacherNotifications';
 import { TeacherDashboard } from './pages/teacher/TeacherDashboard';
 import { TeacherStudents } from './pages/teacher/TeacherStudents';
 import { UploadResults } from './pages/teacher/UploadResults';
@@ -168,6 +171,7 @@ function AppContent() {
             case '/admin/class-progress': return <ClassProgress />;
             case '/admin/exam-reports': return <ExamReport />;
             case '/admin/announcements': return <ClassAnnouncements />;
+            case '/admin/teacher-notifications': return <SendTeacherNotifications />;
             case '/admin/promotion': return <ClassPromotion />;
             case '/admin/unit-plans': return <UnitPlans />;
             case '/admin/duplicate-students': return <DuplicateStudents />;
@@ -232,6 +236,8 @@ function AppContent() {
             case '/teacher/all-results': return <AllResults />;
             case '/teacher/exam-reports': return <ExamReport />;
             case '/teacher/announcements': return <ClassAnnouncements />;
+            case '/teacher/notifications': return <TeacherNotifications />;
+            case '/teacher/install': return <TeacherInstallPage />;
             case '/teacher/attendance': return <RecordAttendance />;
             case '/teacher/homework': return <AssignHomework />;
             case '/teacher/quizzes': return <CreateQuiz />;
