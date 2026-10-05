@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -50,9 +51,65 @@ function privacyPolicyStaticPage(): Plugin {
   };
 }
 
+/**
+ * Stamps the built service worker (dist/sw.js, copied verbatim from public/)
+ * with a deterministic content hash of the built index.html. The whole app is
+ * inlined into index.html, so hashing it is equivalent to hashing the app
+ * bundle: any code change produces a new sw.js byte sequence, which is what
+ * browsers use to detect that a new service worker version exists. Without
+ * this the static public/sw.js would never change and installed PWAs would
+ * stay pinned to old app code forever.
+ *
+ * The source file keeps the literal placeholder __SW_BUILD_ID__ so that dev
+ * servers still register a working (version 'dev') worker.
+ */
+function serviceWorkerBuildId(): Plugin {
+  let outDir = "dist";
+
+  return {
+    name: "mbk-sw-build-id",
+    configResolved(config) {
+      outDir = config.build.outDir;
+    },
+    closeBundle() {
+      // Don't litter the repo during vitest's throw-away builds.
+      if (process.env.VITEST) return;
+
+      const swPath = path.resolve(__dirname, outDir, "sw.js");
+      if (!fs.existsSync(swPath)) return;
+
+      const indexPath = path.resolve(__dirname, outDir, "index.html");
+
+      // viteSingleFile builds with a relative base, which rewrites the
+      // absolute PWA link tags to "./manifest.webmanifest" / "./icons/…".
+      // Relative URLs resolve against the *current path*, so a cold load of a
+      // deep link (/teacher/lesson-plans) would look for the manifest under
+      // /teacher/. PWA URLs must stay root-absolute.
+      if (fs.existsSync(indexPath)) {
+        let html = fs.readFileSync(indexPath, "utf8");
+        const before = html;
+        html = html
+          .replace(/href="\.\.\/manifest\.webmanifest"/g, 'href="/manifest.webmanifest"')
+          .replace(/href="\.\/manifest\.webmanifest"/g, 'href="/manifest.webmanifest"')
+          .replace(/href="\.\.\/icons\//g, 'href="/icons/')
+          .replace(/href="\.\/icons\//g, 'href="/icons/');
+        if (html !== before) fs.writeFileSync(indexPath, html, "utf8");
+      }
+
+      const source = fs.existsSync(indexPath) ? fs.readFileSync(indexPath) : Buffer.from("");
+      const buildId = crypto.createHash("sha256").update(source).digest("hex").slice(0, 16);
+
+      const sw = fs.readFileSync(swPath, "utf8");
+      if (sw.includes("__SW_BUILD_ID__")) {
+        fs.writeFileSync(swPath, sw.replace(/__SW_BUILD_ID__/g, buildId), "utf8");
+      }
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), viteSingleFile(), privacyPolicyStaticPage()],
+  plugins: [react(), tailwindcss(), viteSingleFile(), privacyPolicyStaticPage(), serviceWorkerBuildId()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

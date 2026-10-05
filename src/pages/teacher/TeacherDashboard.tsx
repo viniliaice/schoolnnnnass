@@ -3,6 +3,9 @@ import { useRole } from '../../context/RoleContext';
 import { getUserById } from '../../lib/db/profiles';
 import { getStudentsByClasses } from '../../lib/db/students';
 import { getExamsByTeacher } from '../../lib/db/exams';
+import { InstallAppCard } from '../../components/pwa/InstallAppCard';
+import { EnableNotificationsCard } from '../../components/pwa/EnableNotificationsCard';
+import { listMyDevices } from '../../lib/db/notifications';
 import { GraduationCap, FileText, Clock, CheckCircle, XCircle, BookOpen, FileBarChart } from 'lucide-react';
 
 export function TeacherDashboard({ navigate }: { navigate?: (path: string) => void }) {
@@ -10,9 +13,17 @@ export function TeacherDashboard({ navigate }: { navigate?: (path: string) => vo
   const [stats, setStats] = useState({ classes: 0, students: 0, submissions: 0, pending: 0, approved: 0, rejected: 0 });
   const [assignedClasses, setAssignedClasses] = useState<string[]>([]);
   const [classCounts, setClassCounts] = useState<Record<string, number>>({});
+  const [subscribed, setSubscribed] = useState(false);
+
+  const refreshSubscription = (userId: string) => {
+    listMyDevices(userId)
+      .then((devices) => setSubscribed(devices.some((d) => d.is_active)))
+      .catch(() => setSubscribed(false));
+  };
 
   useEffect(() => {
     if (!session) return;
+    refreshSubscription(session.userId);
 
     const loadData = async () => {
       const teacher = await getUserById(session.userId);
@@ -54,6 +65,12 @@ export function TeacherDashboard({ navigate }: { navigate?: (path: string) => vo
       <div>
         <h1 className="text-2xl font-bold text-slate-900">Teacher Dashboard</h1>
         <p className="text-slate-500 mt-1">Welcome back, {session?.userName}</p>
+      </div>
+
+      {/* PWA install + push notification onboarding (dismissible, non-nagging). */}
+      <div className="space-y-4">
+        <EnableNotificationsCard subscribed={subscribed} onSubscribed={() => session && refreshSubscription(session.userId)} />
+        <InstallAppCard />
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">

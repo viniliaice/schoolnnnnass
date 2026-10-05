@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   FileSpreadsheet, Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, CalendarRange, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil, ListChecks, BarChart3, GitMerge, UsersRound, Copy
+  CalendarCheck, CalendarRange, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil, ListChecks, BarChart3, GitMerge, UsersRound, Copy, Download
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -36,6 +36,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Bulk Import', icon: DatabaseBackup, path: '/admin/bulk' },
     { label: 'Bulk Upload Grades', icon: FileSpreadsheet, path: '/admin/bulk-grades' },
     { label: 'Announcements', icon: BellRing, path: '/admin/announcements' },
+    { label: 'Teacher Notifications', icon: BellRing, path: '/admin/teacher-notifications' },
     { label: 'Messages', icon: Mail, path: '/messages' },
     { label: 'Streams', icon: Activity, path: '/streams' },
     { label: 'Record Attendance', icon: CalendarCheck, path: '/admin/attendance' },
@@ -62,6 +63,8 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'My Submissions', icon: FileText, path: '/teacher/all-results' },
     { label: 'Exam Reports', icon: FileBarChart, path: '/teacher/exam-reports' },
     { label: 'Announcements', icon: BellRing, path: '/teacher/announcements' },
+    { label: 'Notifications', icon: BellRing, path: '/teacher/notifications' },
+    { label: 'Install App', icon: Download, path: '/teacher/install' },
     { label: 'Messages', icon: Mail, path: '/messages' },
     { label: 'Streams', icon: Activity, path: '/streams' },
     { label: 'Record Attendance', icon: CalendarCheck, path: '/teacher/attendance' },

@@ -724,6 +724,47 @@ function createMockSupabase(): SupabaseClient {
   ];
   const demoMergeAudits: any[] = [];
 
+  // Teacher push-notification demo rows (preview mode): the notification
+  // centre and history render with realistic content without a real backend.
+  const demoNow = Date.now();
+  const demoNotifications: any[] = [
+    {
+      id: 'ntf-demo-1',
+      title: 'Staff Meeting',
+      body: 'Staff meeting tomorrow at 8:00 AM.',
+      url: '/teacher/announcements',
+      category: 'announcement',
+      sender_id: 'preview-admin',
+      created_at: new Date(demoNow - 10 * 60000).toISOString(),
+    },
+    {
+      id: 'ntf-demo-2',
+      title: 'Lesson Plan Reminder',
+      body: 'Please submit your lesson plan.',
+      url: '/teacher/lesson-plans',
+      category: 'lesson_plan',
+      sender_id: 'preview-admin',
+      created_at: new Date(demoNow - 26 * 3600000).toISOString(),
+    },
+  ];
+  // Flat (mock has no joins): the recipient rows carry the notification
+  // fields inline so getMyNotifications() can render them.
+  const demoNotificationRecipients: any[] = demoNotifications.map((n, i) => ({
+    title: n.title,
+    body: n.body,
+    url: n.url,
+    category: n.category,
+    id: `ntr-demo-${i + 1}`,
+    notification_id: n.id,
+    user_id: 'teacher-1',
+    status: 'sent',
+    delivered_devices: 1,
+    failed_devices: 0,
+    last_error: null,
+    read_at: i === 0 ? null : new Date(demoNow - 25 * 3600000).toISOString(),
+    created_at: n.created_at,
+  }));
+
   const mockTables: Record<string, any[]> = {
     academic_years: [...demoAcademicYears],
     terms: [...demoTerms],
@@ -753,6 +794,10 @@ function createMockSupabase(): SupabaseClient {
     student_merge_audits: [...demoMergeAudits],
     audit_logs: [],
     student_merge_batches: [],
+    push_subscriptions: [],
+    notification_preferences: [],
+    notifications: [...demoNotifications],
+    notification_recipients: [...demoNotificationRecipients],
   };
 
   // Helper to build a query chain that mimics supabase-js
@@ -887,6 +932,27 @@ function createMockSupabase(): SupabaseClient {
         return chain;
       },
       update: (payload: any) => { updatePayload = payload ?? {}; return chain; },
+      upsert: (payload: any, opts?: any) => {
+        // Minimal onConflict support (notification_preferences uses
+        // onConflict: 'user_id'): matching rows merge, missing rows insert.
+        const conflictCols = String(opts?.onConflict ?? 'id').split(',').map((c: string) => c.trim()).filter(Boolean);
+        const rows = Array.isArray(payload) ? payload : [payload];
+        const tableRows = mockTables[table] ?? [];
+        const touched: any[] = [];
+        for (const row of rows) {
+          const existing = tableRows.find((r) => conflictCols.every((c) => String(r[c]) === String(row[c])));
+          if (existing) {
+            Object.assign(existing, row);
+            touched.push(existing);
+          } else {
+            tableRows.push(row);
+            touched.push(row);
+          }
+        }
+        mockTables[table] = tableRows;
+        insertRows = touched;
+        return chain;
+      },
       // For queries that are awaited directly (supabase.from(...).select(...))
       then: (onFulfilled: any, onRejected: any) => {
         const rows = resolveRows();

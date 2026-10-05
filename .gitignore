@@ -13,4 +13,5 @@ github_pat_*
 # of the repo, which is how the live site ended up with no logo.
 !assets/*.png
 !public/*.png
+!public/icons/*.png
 /*.js
