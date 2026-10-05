@@ -60,15 +60,56 @@ export function currentPermission(): PushPermissionState {
   return Notification.permission;
 }
 
-/** Public VAPID key for subscribe(). Null when the server is not configured. */
+/**
+ * A VAPID application server key must be a 65-byte uncompressed P-256 point
+ * (base64url, first byte 0x04). Anything else makes
+ * pushManager.subscribe() throw "InvalidAccessError" in the browser, which
+ * surfaces to the teacher as a dead "Enable Notifications" button — so both the
+ * baked env value and the API response are validated before use.
+ */
+export function isValidVapidPublicKey(key: unknown): key is string {
+  if (typeof key !== 'string') return false;
+  const trimmed = key.trim();
+  if (trimmed.length === 0 || trimmed.length > 200) return false;
+  if (!/^[A-Za-z0-9_-]+$/.test(trimmed)) return false; // base64url alphabet only
+  let bytes: Uint8Array;
+  try {
+    bytes = urlBase64ToUint8Array(trimmed);
+  } catch {
+    return false;
+  }
+  return bytes.length === 65 && bytes[0] === 0x04;
+}
+
+/**
+ * Public VAPID key for subscribe(). Null when the server is not configured.
+ *
+ * Prefers the build-time VITE_VAPID_PUBLIC_KEY, but ONLY when it is a valid
+ * 65-byte uncompressed P-256 point; otherwise it falls back to the
+ * /api/push/vapid-public-key lookup (the single source of truth, derived from
+ * the server-side VAPID_PRIVATE_KEY).
+ */
 export async function getVapidPublicKey(): Promise<string | null> {
-  const fromEnv = (import.meta as any).env?.VITE_VAPID_PUBLIC_KEY as string | undefined;
-  if (fromEnv) return fromEnv;
+  const fromEnv = ((import.meta as any).env?.VITE_VAPID_PUBLIC_KEY as string | undefined)?.trim();
+  if (isValidVapidPublicKey(fromEnv)) return fromEnv;
+  if (fromEnv) {
+    console.warn(
+      '[push] VITE_VAPID_PUBLIC_KEY is not a 65-byte uncompressed P-256 point (base64url); ' +
+        'falling back to /api/push/vapid-public-key.'
+    );
+  }
   try {
     const res = await fetch('/api/push/vapid-public-key');
-    if (!res.ok) return null;
+    if (!res.ok) {
+      console.warn(`[push] /api/push/vapid-public-key responded ${res.status}; push stays disabled.`);
+      return null;
+    }
     const body = (await res.json()) as { publicKey?: string };
-    return body.publicKey || null;
+    if (!isValidVapidPublicKey(body?.publicKey)) {
+      console.warn('[push] /api/push/vapid-public-key returned a malformed public key; push stays disabled.');
+      return null;
+    }
+    return body.publicKey;
   } catch {
     return null;
   }

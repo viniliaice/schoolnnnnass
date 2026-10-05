@@ -4,8 +4,8 @@
  * the function enforces its own authorization before calling into the sender).
  */
 
-import type { NotificationDb, PushSubRow, PreferenceRow, RecipientStatus, TeacherProfile } from './notificationSender';
-import { inFilter, SupabaseRest } from './supabaseRest';
+import type { NotificationDb, PushSubRow, PreferenceRow, RecipientStatus, TeacherProfile } from './notificationSender.js';
+import { inFilter, SupabaseRest } from './supabaseRest.js';
 
 export function createSupabaseNotificationDb(rest: SupabaseRest): NotificationDb {
   return {
