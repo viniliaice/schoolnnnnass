@@ -7,7 +7,7 @@
  */
 
 // Explicit .js extension required — see api/notifications/send.ts.
-import { base64UrlDecode, derivePublicKeyB64, generateVapidKeys } from '../../server/lib/webpush.js';
+import { base64UrlDecode, derivePublicKeyB64, generateVapidKeys, sanitizePushResponseText } from '../../server/lib/webpush.js';
 
 let devKeys: ReturnType<typeof generateVapidKeys> | null = null;
 
@@ -18,13 +18,13 @@ let devKeys: ReturnType<typeof generateVapidKeys> | null = null;
  * explicit .js import specifiers above prevent.)
  */
 function sendJsonError(res: any, err: unknown, scope: string) {
-  const message = err instanceof Error ? err.message : String(err);
+  const message = sanitizePushResponseText(err instanceof Error ? err.message : String(err), 180);
   try {
-    console.error(`[${scope}] unhandled failure:`, message, err instanceof Error ? err.stack : '');
+    console.error(`[${scope}] unhandled failure:`, message || 'unknown error');
   } catch {
     /* logging must never mask the response */
   }
-  const payload = { error: message || 'Internal Server Error', code: 'HANDLER_EXCEPTION' };
+  const payload = { error: 'Internal server error.', code: 'HANDLER_EXCEPTION' };
   try {
     if (typeof res?.status === 'function' && typeof res?.json === 'function') {
       return res.status(500).json(payload);
@@ -95,9 +95,9 @@ async function handleVapidPublicKey(req: any, res: any) {
     res.setHeader('Cache-Control', 'public, max-age=3600');
     return res.status(200).json({ publicKey });
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('[push/vapid-public-key] VAPID_PRIVATE_KEY is unusable:', message);
-    return res.status(500).json({ error: 'VAPID_PRIVATE_KEY is invalid.', detail: message });
+    const message = sanitizePushResponseText(err instanceof Error ? err.message : String(err), 180);
+    console.error('[push/vapid-public-key] VAPID_PRIVATE_KEY is unusable:', message || 'unknown error');
+    return res.status(500).json({ error: 'VAPID_PRIVATE_KEY is invalid.', code: 'INVALID_VAPID_PRIVATE_KEY' });
   }
 }
 

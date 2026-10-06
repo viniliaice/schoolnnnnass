@@ -24,15 +24,15 @@ All existing functionality is unchanged.
 
 ## Deployment steps
 
-1. **Run the migration** on the Supabase project (Dashboard → SQL, or `supabase db push`):
-   `supabase/migrations/20261005_push_notifications.sql`.
-2. **Generate VAPID keys**: `node scripts/generate-vapid-keys.mjs`.
-3. **Set Vercel environment variables** (server-side only):
+The delivery-hardening changes do not alter the schema and require no new migration. For a first-time push deployment only, apply the original migration once: `supabase/migrations/20261005_push_notifications.sql`.
+
+1. **Generate VAPID keys**: `node scripts/generate-vapid-keys.mjs`.
+2. **Set Vercel environment variables** (server-side only):
    - `SUPABASE_SERVICE_ROLE_KEY` (never prefixed `VITE_`)
-   - `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`
-   - Optionally `VITE_VAPID_PUBLIC_KEY` (public, skips the `/api` lookup)
+   - `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT` (the subject must be a bare `mailto:` or `https:` URI)
+   - Do not set `VITE_VAPID_PUBLIC_KEY`; the browser always fetches the current public key from `/api/push/vapid-public-key`.
    (`SUPABASE_URL`/`SUPABASE_ANON_KEY` fall back to the existing `VITE_` values.)
-4. Deploy as usual. The build stamps `dist/sw.js` with a content hash so installed
+3. Deploy as usual. The build stamps `dist/sw.js` with a content hash so installed
    PWAs detect new versions; users see “New version available — Update Now”.
 
 ## Security model
@@ -48,17 +48,10 @@ All existing functionality is unchanged.
 
 ## Testing performed
 
-- `npm run typecheck` — clean.
-- `npm run test:ci` — 127 files / 1387 tests pass, including:
-  - `webpush.test.ts`: RFC 8291 encrypt→decrypt round-trip + RFC 8292 VAPID header.
-  - `notificationSender.test.ts`: multi-device delivery, preference skips,
-    no-device and 410-deactivation paths.
-  - `pushNotifications.db.test.ts`: the real migration loaded into PGlite; RLS
-    proven as a non-owner `authenticated` role.
-  - Render smoke tests for all new pages/cards.
-- `npm run build` + served `dist/`: `/sw.js` (`application/javascript`),
-  `/manifest.webmanifest` (`application/manifest+json`), icons (`image/png`),
-  deep link `/teacher/lesson-plans` → 200 HTML (SPA rewrite).
+- `npm run validate` runs app typecheck, API/server typecheck, the complete Vitest suite and production build.
+- Push coverage includes VAPID subject/key validation, HTTP/network failure classification, subscription retirement rules, authenticated send/diagnostics handlers, stale-key re-registration, and the RFC 8291 encrypt→decrypt round-trip / RFC 8292 header checks.
+- `pushNotifications.db.test.ts` loads the existing migration into PGlite and proves RLS as a non-owner `authenticated` role; this delivery fix adds no migration.
+- Production phone delivery still requires the production Vercel/Supabase environment and a real device; sandbox tests use a scripted push service.
 
 Live push delivery requires the production Vercel + Supabase environment (a real
 push service); it cannot be exercised inside the sandbox.
