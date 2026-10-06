@@ -45,6 +45,7 @@ No environment-variable values are included in this report.
 - `tsc -p tsconfig.api.json`
 - Vitest: **135 files / 1,476 tests passed**
 - `vite build` — passed; single-file production HTML and service-worker build completed
+- GitHub PR checks: Vercel Preview **passed**; Supabase Preview **skipped** (no DB changes)
 
 The 10 push-related test suites run separately also passed (**99 tests**). They cover VAPID validation and health agreement, authentication/authorization, send fan-out and partial delivery, dead-row retirement, retryable/network failures, diagnostics redaction/hints, key-rotation resubscription, and stale refresh-token cleanup.
 
