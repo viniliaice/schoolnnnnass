@@ -1,14 +1,7 @@
 /**
- * Guards the "Enable Notifications" path: a malformed VAPID key must never
- * reach pushManager.subscribe() (browsers throw InvalidAccessError on it), and
- * a bad/absent build-time key must fall back to the API lookup.
- *
- * NOTE on the baked-key branch: Vitest gives every module its own
- * `import.meta.env` object, and neither `vi.stubEnv`, `test.env` nor mutating
- * the test module's env reaches another module's copy (verified). The
- * "VITE_VAPID_PUBLIC_KEY is used when valid" behaviour is therefore verified
- * against a real production-parity build (`VITE_SUPABASE_URL=… VITE_VAPID_PUBLIC_KEY=… npm run build`
- * → the key is inlined into the bundle verbatim) rather than from a unit test.
+ * Guards the "Enable Notifications" path: malformed API keys never reach
+ * pushManager.subscribe(). The API is deliberately the single source of truth
+ * so a baked, stale VITE_VAPID_PUBLIC_KEY cannot survive server-side rotation.
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { getVapidPublicKey, isValidVapidPublicKey } from '../pwa/pushClient';
@@ -63,7 +56,7 @@ describe('getVapidPublicKey (API lookup path)', () => {
     await expect(getVapidPublicKey()).resolves.toBe(VALID_KEY);
   });
 
-  it('falls back to the API when no valid baked key is available', async () => {
+  it('always fetches the current server key as the single source of truth', async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
@@ -72,7 +65,7 @@ describe('getVapidPublicKey (API lookup path)', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(getVapidPublicKey()).resolves.toBe(VALID_KEY);
-    expect(fetchMock).toHaveBeenCalledWith('/api/push/vapid-public-key');
+    expect(fetchMock).toHaveBeenCalledWith('/api/push/vapid-public-key', { cache: 'no-store' });
   });
 
   it('returns null when the API returns a malformed key', async () => {

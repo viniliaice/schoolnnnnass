@@ -8,7 +8,16 @@
  * trusts `senderId`.
  */
 
-import { sendWebPush, type VapidConfig } from './webpush.js';
+import {
+  describePushFailure,
+  looksLikeTokenProblem,
+  sanitizePushResponseText,
+  sendWebPush,
+  validateVapidConfig,
+  type PushFailureCode,
+  type VapidConfig,
+  type VapidConfigCheck,
+} from './webpush.js';
 
 export type NotificationCategory =
   | 'announcement'
@@ -142,10 +151,28 @@ export interface RecipientResult {
   status: RecipientStatus;
   deliveredDevices: number;
   failedDevices: number;
+  expiredDevices: number;
+  rejectedDevices: number;
+  failureCode: PushFailureCode | null;
   lastError: string | null;
 }
 
+export interface SendOutcomeCounts {
+  recipients: number;
+  /** Number of individual subscriptions attempted. */
+  devices: number;
+  /** Number of devices whose push service accepted the notification. */
+  sent: number;
+  failed: number;
+  expired: number;
+  rejected: number;
+  skipped: number;
+  noDevices: number;
+}
+
 export interface SendSummary {
+  /** Set only by the browser's local placeholder preview, never by the send API. */
+  simulated?: boolean;
   notificationId: string;
   totalRecipients: number;
   sent: number;
@@ -154,7 +181,13 @@ export interface SendSummary {
   failed: number;
   devicesDelivered: number;
   devicesFailed: number;
+  devicesExpired: number;
+  devicesRejected: number;
   deactivatedSubscriptions: number;
+  /** True only if at least one device was attempted and every target was delivered. */
+  deliveryOk: boolean;
+  vapid: VapidConfigCheck;
+  outcome: SendOutcomeCounts;
   recipients: RecipientResult[];
 }
 
@@ -184,6 +217,41 @@ export async function sendTeacherNotification(opts: {
   const makeId =
     opts.makeId ??
     ((prefix: string) => `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`);
+  const notificationId = makeId('ntf');
+  const vapidCheck = validateVapidConfig(opts.vapid);
+
+  // Keep this module safe when called directly (e.g. from a job or test), even
+  // though the HTTP handler also rejects invalid VAPID configuration before
+  // authentication or any database work.
+  if (!vapidCheck.ok) {
+    const outcome: SendOutcomeCounts = {
+      recipients: 0,
+      devices: 0,
+      sent: 0,
+      failed: 0,
+      expired: 0,
+      rejected: 0,
+      skipped: 0,
+      noDevices: 0,
+    };
+    return {
+      notificationId,
+      totalRecipients: 0,
+      sent: 0,
+      skipped: 0,
+      noDevices: 0,
+      failed: 0,
+      devicesDelivered: 0,
+      devicesFailed: 0,
+      devicesExpired: 0,
+      devicesRejected: 0,
+      deactivatedSubscriptions: 0,
+      deliveryOk: false,
+      vapid: vapidCheck,
+      outcome,
+      recipients: [],
+    };
+  }
 
   const teachers = await db.listTeachers({
     audience: request.audience,
@@ -203,7 +271,6 @@ export async function sendTeacherNotification(opts: {
 
   const plans = planDelivery(teachers, preferences, subscriptions, request.category);
 
-  const notificationId = makeId('ntf');
   await db.insertNotification({
     id: notificationId,
     title: request.title.trim(),
@@ -233,8 +300,11 @@ export async function sendTeacherNotification(opts: {
   };
 
   const results: RecipientResult[] = [];
+  let devicesAttempted = 0;
   let devicesDelivered = 0;
   let devicesFailed = 0;
+  let devicesExpired = 0;
+  let devicesRejected = 0;
   let deactivatedSubscriptions = 0;
 
   for (const plan of plans) {
@@ -245,6 +315,9 @@ export async function sendTeacherNotification(opts: {
         status: plan.status === 'skipped' ? 'skipped' : 'no_devices',
         deliveredDevices: 0,
         failedDevices: 0,
+        expiredDevices: 0,
+        rejectedDevices: 0,
+        failureCode: null,
         lastError: null,
       });
       continue;
@@ -252,39 +325,83 @@ export async function sendTeacherNotification(opts: {
 
     let delivered = 0;
     let failed = 0;
+    let expired = 0;
+    let rejected = 0;
+    let failureCode: PushFailureCode | null = null;
     let lastError: string | null = null;
+
     for (const sub of plan.subscriptions) {
+      devicesAttempted += 1;
+      let outcome;
       try {
-        const outcome = await sendWebPush({
+        outcome = await sendWebPush({
           endpoint: sub.endpoint,
           keys: { p256dh: sub.p256dh, auth: sub.auth },
           payload,
           vapid: opts.vapid,
           fetchImpl: opts.fetchImpl,
         });
-        if (outcome.expired) {
-          // Push service says the subscription is gone — retire it so future
-          // sends don't waste requests on it.
+      } catch (err) {
+        // Encryption/key validation happens before a network call. Record it as
+        // a non-retryable per-device error, but never treat it as an expired
+        // subscription because the push service did not see the request.
+        const detail = sanitizePushResponseText(err instanceof Error ? err.message : String(err));
+        const code: PushFailureCode = /too large/i.test(detail) ? 'payload_too_large' : 'bad_request';
+        failed += 1;
+        devicesFailed += 1;
+        rejected += 1;
+        devicesRejected += 1;
+        failureCode = code;
+        lastError = `${code}: push pre-flight validation failed${detail ? ` — ${detail}` : ''}`;
+        continue;
+      }
+
+      if (outcome.ok) {
+        delivered += 1;
+        devicesDelivered += 1;
+        continue;
+      }
+
+      const failure = describePushFailure(outcome);
+      failed += 1;
+      devicesFailed += 1;
+      failureCode = failure.code;
+      let message = `${failure.code}: ${failure.message}`;
+
+      if (failure.code === 'expired') {
+        expired += 1;
+        devicesExpired += 1;
+        try {
           await db.deactivateSubscription(sub.endpoint);
           deactivatedSubscriptions += 1;
-          failed += 1;
-          lastError = `subscription expired (HTTP ${outcome.status})`;
-          continue;
+        } catch {
+          // Delivery remains recorded as expired even if the best-effort
+          // cleanup fails; do not expose the endpoint or database error.
+          message += '; automatic subscription retirement failed';
         }
-        if (outcome.ok) {
-          delivered += 1;
-        } else {
-          failed += 1;
-          lastError = `push service HTTP ${outcome.status}`;
+      } else if (
+        failure.code === 'unauthorized' ||
+        failure.code === 'forbidden' ||
+        failure.code === 'bad_request' ||
+        failure.code === 'payload_too_large'
+      ) {
+        rejected += 1;
+        devicesRejected += 1;
+
+        if (failure.code === 'unauthorized' || failure.code === 'forbidden') {
+          const tokenProblem = looksLikeTokenProblem(outcome.responseText);
+          // 401/403 do not prove that a device subscription is dead. Keep it:
+          // service VAPID mistakes can reject every device, while a genuinely
+          // old device key can be repaired safely by client-side resubscription.
+          message += tokenProblem || !vapidCheck.ok
+            ? '; kept subscription — check VAPID_PRIVATE_KEY/VAPID_SUBJECT (see /api/push/health)'
+            : '; kept subscription for safety — verify VAPID config and re-register this device if the key was rotated';
         }
-      } catch (err) {
-        failed += 1;
-        lastError = err instanceof Error ? err.message : String(err);
       }
+
+      lastError = sanitizePushResponseText(message);
     }
 
-    devicesDelivered += delivered;
-    devicesFailed += failed;
     const status: RecipientStatus = delivered > 0 ? 'sent' : 'failed';
     await db.updateRecipient(notificationId, plan.userId, {
       status,
@@ -298,20 +415,43 @@ export async function sendTeacherNotification(opts: {
       status,
       deliveredDevices: delivered,
       failedDevices: failed,
+      expiredDevices: expired,
+      rejectedDevices: rejected,
+      failureCode,
       lastError,
     });
   }
 
+  const sentRecipients = results.filter((r) => r.status === 'sent').length;
+  const skipped = results.filter((r) => r.status === 'skipped').length;
+  const noDevices = results.filter((r) => r.status === 'no_devices').length;
+  const failedRecipients = results.filter((r) => r.status === 'failed').length;
+  const outcome: SendOutcomeCounts = {
+    recipients: plans.length,
+    devices: devicesAttempted,
+    sent: devicesDelivered,
+    failed: devicesFailed,
+    expired: devicesExpired,
+    rejected: devicesRejected,
+    skipped,
+    noDevices,
+  };
+
   return {
     notificationId,
     totalRecipients: plans.length,
-    sent: results.filter((r) => r.status === 'sent').length,
-    skipped: results.filter((r) => r.status === 'skipped').length,
-    noDevices: results.filter((r) => r.status === 'no_devices').length,
-    failed: results.filter((r) => r.status === 'failed').length,
+    sent: sentRecipients,
+    skipped,
+    noDevices,
+    failed: failedRecipients,
     devicesDelivered,
     devicesFailed,
+    devicesExpired,
+    devicesRejected,
     deactivatedSubscriptions,
+      deliveryOk: devicesDelivered > 0 && devicesFailed === 0 && noDevices === 0 && skipped === 0,
+    vapid: vapidCheck,
+    outcome,
     recipients: results,
   };
 }

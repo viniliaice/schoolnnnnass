@@ -234,6 +234,48 @@ describe('sendTeacherNotification orchestration', () => {
     expect(validateSendRequest({ audience: 'all_teachers', title: 't', body: 'b', category: 'general' })).toBeNull();
   });
 
+  it('records sanitized per-device HTTP details and does not retire a 400 subscription', async () => {
+    const keys = validKeys();
+    const state: MemoryState = {
+      teachers: [{ id: 't1', name: 'T', assignedClasses: [] }],
+      subs: [{ id: 's1', user_id: 't1', endpoint: 'https://push.example.test/sub', ...keys, is_active: true }],
+      prefs: [], notifications: [], recipients: [], deactivated: [], updates: [],
+    };
+    const fetchImpl = (async () => ({ status: 400, text: async () => 'InvalidSubscription bad request' }) as Response) as unknown as typeof fetch;
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' },
+      senderId: 'admin-1', db: makeDb(state),
+      vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' }, fetchImpl,
+    });
+    expect(summary.deliveryOk).toBe(false);
+    expect(summary.recipients[0]).toMatchObject({ status: 'failed', failureCode: 'bad_request', failedDevices: 1, rejectedDevices: 1 });
+    expect(summary.recipients[0].lastError).toContain('HTTP 400');
+    expect(state.updates[0].patch.last_error).toContain('InvalidSubscription');
+    expect(state.deactivated).toHaveLength(0);
+  });
+
+  it('returns an invalid-VAPID summary without DB writes or subscription retirement', async () => {
+    const keys = validKeys();
+    const state: MemoryState = {
+      teachers: [{ id: 't1', name: 'T', assignedClasses: [] }],
+      subs: [{ id: 's1', user_id: 't1', endpoint: 'https://push.example.test/sub', ...keys, is_active: true }],
+      prefs: [], notifications: [], recipients: [], deactivated: [], updates: [],
+    };
+    let calls = 0;
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' },
+      senderId: 'admin-1', db: makeDb(state),
+      vapid: { privateKey: vapid.privateKey, subject: '[mailto:a@b](mailto:a@b)' },
+      fetchImpl: (async () => { calls += 1; return { status: 201, text: async () => '' } as Response; }) as unknown as typeof fetch,
+    });
+    expect(summary.vapid.ok).toBe(false);
+    expect(summary.deliveryOk).toBe(false);
+    expect(summary.outcome).toMatchObject({ recipients: 0, devices: 0, sent: 0, failed: 0 });
+    expect(state.notifications).toHaveLength(0);
+    expect(state.deactivated).toHaveLength(0);
+    expect(calls).toBe(0);
+  });
+
   it('planDelivery prefers explicit off over defaults', () => {
     const teachers = [{ id: 'a', name: 'A' }];
     const prefs = [

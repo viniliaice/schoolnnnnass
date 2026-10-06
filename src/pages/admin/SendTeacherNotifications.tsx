@@ -7,6 +7,7 @@ import { getUsersByRole } from '../../lib/db/profiles';
 import { CLASSES, type User } from '../../types';
 import { timeAgo } from '../../utils/timeAgo';
 import type { SendSummary } from '../../../server/lib/notificationSender';
+import { PushDiagnosticsPanel } from '../../components/admin/PushDiagnosticsPanel';
 
 const CATEGORIES = [
   { value: 'announcement', label: 'School Announcement' },
@@ -39,6 +40,19 @@ interface HistoryRow {
   created_at: string;
   senderName: string;
   recipientSummary: string;
+  deliveredDevices: number;
+  failedDevices: number;
+  failureDetail: string | null;
+}
+
+function explainNoAttempt(summary: Pick<SendSummary, 'totalRecipients' | 'noDevices' | 'skipped'>): string {
+  if (summary.totalRecipients === 0) return 'No teachers matched this audience.';
+  if (summary.noDevices === summary.totalRecipients) return 'No matched teacher has an active device subscription yet.';
+  if (summary.skipped === summary.totalRecipients) return 'All matched teachers have notifications disabled for this category.';
+  if (summary.noDevices > 0 && summary.skipped > 0) {
+    return `${summary.noDevices} matched teacher(s) have no active device; ${summary.skipped} were skipped by notification preferences.`;
+  }
+  return 'No teacher device was eligible for this notification.';
 }
 
 /**
@@ -91,25 +105,27 @@ export function SendTeacherNotifications() {
           ? supabase.from('profiles').select('id, name').in('id', senderIds)
           : Promise.resolve({ data: [] as any[], error: null }),
         notifIds.length
-          ? supabase.from('notification_recipients').select('notification_id, status').in('notification_id', notifIds)
+          ? supabase.from('notification_recipients').select('notification_id, status, last_error, delivered_devices, failed_devices').in('notification_id', notifIds)
           : Promise.resolve({ data: [] as any[], error: null }),
       ]);
 
       const senderNames = new Map(((senderRes.data || []) as any[]).map((p) => [p.id, p.name]));
-      const byNotif = new Map<string, string[]>();
+      const byNotif = new Map<string, any[]>();
       for (const r of (recipRes.data || []) as any[]) {
         const list = byNotif.get(r.notification_id) ?? [];
-        list.push(r.status);
+        list.push(r);
         byNotif.set(r.notification_id, list);
       }
 
       setHistory(
         rows.map((row) => {
-          const statuses = byNotif.get(row.id) ?? [];
+          const recipients = byNotif.get(row.id) ?? [];
+          const statuses = recipients.map((r) => r.status);
           const sent = statuses.filter((s) => s === 'sent').length;
           const noDev = statuses.filter((s) => s === 'no_devices').length;
           const skipped = statuses.filter((s) => s === 'skipped').length;
           const failed = statuses.filter((s) => s === 'failed').length;
+          const failureDetail = recipients.map((r) => r.last_error).find((value) => typeof value === 'string' && value.trim()) || null;
           return {
             id: row.id,
             title: row.title,
@@ -119,6 +135,9 @@ export function SendTeacherNotifications() {
             created_at: row.created_at,
             senderName: senderNames.get(row.sender_id) || 'System',
             recipientSummary: `${statuses.length} recipient(s) · ${sent} sent · ${noDev} no devices · ${skipped} skipped · ${failed} failed`,
+            deliveredDevices: recipients.reduce((total, r) => total + (Number(r.delivered_devices) || 0), 0),
+            failedDevices: recipients.reduce((total, r) => total + (Number(r.failed_devices) || 0), 0),
+            failureDetail,
           };
         }),
       );
@@ -139,6 +158,8 @@ export function SendTeacherNotifications() {
   }, [teachers, search]);
 
   const resolvedUrl = destination === 'custom' ? customUrl.trim() : destination;
+  const resultAttemptedDevices = result?.outcome?.devices ?? ((result?.devicesDelivered || 0) + (result?.devicesFailed || 0));
+  const resultFailure = result?.recipients.find((recipient) => recipient.lastError)?.lastError || null;
 
   const send = async () => {
     if (!title.trim() || !body.trim()) {
@@ -185,8 +206,22 @@ export function SendTeacherNotifications() {
           setError(json?.error || `Send failed (HTTP ${res.status}).`);
           return;
         }
-        setResult(json as SendSummary);
-        addToast({ type: 'success', title: 'Notification sent', description: `${json.devicesDelivered} device(s) reached.` });
+        const summary = json as SendSummary;
+        setResult(summary);
+        const attemptedDevices = summary.outcome?.devices ?? summary.devicesDelivered + summary.devicesFailed;
+        if (
+          (summary.deliveryOk || summary.devicesDelivered > 0) &&
+          (summary.devicesFailed > 0 || summary.noDevices > 0 || summary.skipped > 0)
+        ) {
+          addToast({ type: 'info', title: 'Partially delivered', description: `${summary.devicesDelivered} device(s) accepted the push; ${summary.devicesFailed} device(s) failed, ${summary.noDevices} recipient(s) had no devices, and ${summary.skipped} were skipped.` });
+        } else if (summary.deliveryOk || summary.devicesDelivered > 0) {
+          addToast({ type: 'success', title: 'Notification delivered', description: `${summary.devicesDelivered} device(s) accepted the push.` });
+        } else if (attemptedDevices > 0) {
+          const reason = summary.recipients.find((recipient) => recipient.lastError)?.lastError;
+          addToast({ type: 'error', title: 'Not delivered', description: reason || 'The push service did not accept this notification.' });
+        } else {
+          addToast({ type: 'info', title: 'Nothing sent', description: explainNoAttempt(summary) });
+        }
       }
       await loadHistory();
     } finally {
@@ -342,14 +377,23 @@ export function SendTeacherNotifications() {
             </button>
             {error && <p className="text-sm text-rose-600">{error}</p>}
             {result && (
-              <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">
-                Sent to {result.sent} teacher(s) on {result.devicesDelivered} device(s) · {result.noDevices} without
-                devices · {result.skipped} skipped by preferences · {result.failed} failed.
-              </p>
+              <div
+                className={`rounded-lg p-3 text-sm ${result.simulated ? 'bg-slate-50 text-slate-700' : result.devicesDelivered > 0 && result.devicesFailed === 0 && result.noDevices === 0 && result.skipped === 0 ? 'bg-emerald-50 text-emerald-800' : result.devicesDelivered > 0 ? 'bg-amber-50 text-amber-900' : resultAttemptedDevices > 0 ? 'bg-rose-50 text-rose-800' : 'bg-slate-50 text-slate-700'}`}
+                data-testid="send-result-summary"
+              >
+                <p>
+                  {result.simulated ? `${result.devicesDelivered} simulated device(s)` : `${result.devicesDelivered} delivered`} · {result.devicesFailed} failed · {result.devicesExpired} expired · {result.devicesRejected} rejected · {result.noDevices} no devices · {result.skipped} skipped.
+                </p>
+                {result.simulated && <p className="mt-1 text-xs">Preview only — no push service delivery was attempted.</p>}
+                {resultFailure && <p className="mt-1 text-xs" data-testid="send-result-failure">{resultFailure}</p>}
+                {!result.deliveryOk && resultAttemptedDevices === 0 && <p className="mt-1 text-xs">{explainNoAttempt(result)}</p>}
+              </div>
             )}
           </div>
         </section>
       </div>
+
+      <PushDiagnosticsPanel />
 
       {/* History */}
       <section className="rounded-2xl border border-slate-200 bg-white p-6" data-testid="admin-notification-history">
@@ -374,7 +418,11 @@ export function SendTeacherNotifications() {
                   <tr key={row.id} className="align-top">
                     <td className="py-3 pr-4 font-medium text-slate-800">{row.title}</td>
                     <td className="max-w-[240px] py-3 pr-4 text-slate-600">{row.body}</td>
-                    <td className="py-3 pr-4 text-slate-600">{row.recipientSummary}</td>
+                    <td className="py-3 pr-4 text-slate-600">
+                      <p>{row.recipientSummary}</p>
+                      <p className="mt-1 text-xs text-slate-400">Devices: {row.deliveredDevices} delivered · {row.failedDevices} failed</p>
+                      {row.failureDetail && <p className="mt-1 max-w-xs break-words text-xs text-rose-700" data-testid="history-failure-detail">{row.failureDetail}</p>}
+                    </td>
                     <td className="py-3 pr-4 text-slate-600">{row.senderName}</td>
                     <td className="whitespace-nowrap py-3 pr-4 text-slate-500">{timeAgo(row.created_at)}</td>
                     <td className="py-3 text-xs text-slate-500">{row.category}</td>
@@ -442,6 +490,7 @@ async function previewSimulatedSend(
   }
 
   return {
+    simulated: true,
     notificationId,
     totalRecipients: targets.length,
     sent: targets.length,
@@ -450,13 +499,37 @@ async function previewSimulatedSend(
     failed: 0,
     devicesDelivered: targets.length,
     devicesFailed: 0,
+    devicesExpired: 0,
+    devicesRejected: 0,
     deactivatedSubscriptions: 0,
+    deliveryOk: targets.length > 0,
+    vapid: {
+      ok: true,
+      subjectValid: true,
+      subjectScheme: 'mailto',
+      privateKeyBytes: 32,
+      publicKeyBytes: 65,
+      problems: [],
+    },
+    outcome: {
+      recipients: targets.length,
+      devices: targets.length,
+      sent: targets.length,
+      failed: 0,
+      expired: 0,
+      rejected: 0,
+      skipped: 0,
+      noDevices: 0,
+    },
     recipients: targets.map((t) => ({
       userId: t.id,
       teacherName: t.name,
       status: 'sent' as const,
       deliveredDevices: 1,
       failedDevices: 0,
+      expiredDevices: 0,
+      rejectedDevices: 0,
+      failureCode: null,
       lastError: null,
     })),
   };
