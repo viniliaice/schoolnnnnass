@@ -1,8 +1,16 @@
 import { useCallback, useEffect, useState } from 'react';
-import { BellRing, BellOff } from 'lucide-react';
+import { BellRing, BellOff, RefreshCw } from 'lucide-react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { currentPermission, enablePush, pushSupported } from '../../lib/pwa/pushClient';
+import {
+  currentPermission,
+  enablePush,
+  getPushSubscriptionState,
+  pushSupported,
+  resyncPushSubscription,
+  type PushSubscriptionState,
+} from '../../lib/pwa/pushClient';
+import { isPlaceholderEnv } from '../../lib/supabase';
 
 const DENIED_KEY = 'mbk-notifications-dismissed-at';
 const DISMISS_COOLDOWN_MS = 3 * 24 * 60 * 60 * 1000;
@@ -18,9 +26,9 @@ function dismissedRecently(): boolean {
 }
 
 /**
- * Friendly in-app prompt for push notifications. The browser permission
- * request ONLY fires from the "Enable Notifications" button — never on page
- * load. Handles granted / denied / default / unsupported / failure states.
+ * Friendly in-app prompt for push notifications. Permission is requested only
+ * from an explicit button. Existing subscriptions are checked against the
+ * server's current VAPID key so key rotation can be repaired in one tap.
  */
 export function EnableNotificationsCard({
   subscribed,
@@ -36,9 +44,29 @@ export function EnableNotificationsCard({
   const [busy, setBusy] = useState(false);
   const [dismissed, setDismissed] = useState(dismissedRecently());
   const [message, setMessage] = useState<string | null>(null);
+  const [pushState, setPushState] = useState<PushSubscriptionState | null>(null);
+
+  const refreshState = useCallback(async () => {
+    setPermission(currentPermission());
+    if (isPlaceholderEnv) {
+      setPushState(null);
+      return;
+    }
+    const state = await getPushSubscriptionState();
+    setPushState(state);
+  }, []);
 
   useEffect(() => {
+    let active = true;
     setPermission(currentPermission());
+    if (isPlaceholderEnv) {
+      setPushState(null);
+      return () => { active = false; };
+    }
+    getPushSubscriptionState().then((state) => {
+      if (active) setPushState(state);
+    });
+    return () => { active = false; };
   }, [subscribed]);
 
   const handleEnable = useCallback(async () => {
@@ -47,7 +75,7 @@ export function EnableNotificationsCard({
     setMessage(null);
     const result = await enablePush(user.id);
     setBusy(false);
-    setPermission(currentPermission());
+    await refreshState();
 
     if (result.ok) {
       addToast({ type: 'success', title: 'Notifications enabled', description: 'This device will receive school announcements.' });
@@ -63,12 +91,35 @@ export function EnableNotificationsCard({
         setMessage('This browser does not support push notifications.');
         break;
       case 'not-configured':
-        setMessage('Push is not configured on the server yet (VAPID keys missing). Contact your administrator.');
+        setMessage('Push is not configured on the server yet. Contact your administrator.');
         break;
       default:
         setMessage(`Could not enable notifications (${result.error}). Please try again.`);
     }
-  }, [user, busy, addToast, onSubscribed]);
+  }, [user, busy, addToast, onSubscribed, refreshState]);
+
+  const handleFix = useCallback(async () => {
+    if (!user || busy) return;
+    setBusy(true);
+    setMessage(null);
+    const result = await resyncPushSubscription(user.id);
+    setBusy(false);
+    await refreshState();
+    if (result.ok) {
+      addToast({
+        type: 'success',
+        title: 'Notifications fixed',
+        description: result.action === 'reused' ? 'This device is registered with the current push key.' : 'This device has been re-registered.',
+      });
+      onSubscribed?.();
+      return;
+    }
+    if (result.action === 'none') {
+      setMessage('Grant notification permission first, then use Enable Notifications.');
+    } else {
+      setMessage(result.error || 'Could not re-register this device. Please try again.');
+    }
+  }, [user, busy, addToast, onSubscribed, refreshState]);
 
   if (!pushSupported()) {
     return (
@@ -78,7 +129,36 @@ export function EnableNotificationsCard({
     );
   }
 
-  if (subscribed && permission === 'granted') {
+  const needsReregister =
+    !isPlaceholderEnv &&
+    permission === 'granted' &&
+    Boolean(pushState?.hasBrowserSubscription) &&
+    pushState?.browserKeyMatchesServer === false;
+
+  if (needsReregister) {
+    return (
+      <div className="rounded-2xl border border-amber-300 bg-amber-50 p-4 text-sm text-amber-900" data-testid="push-reregister-card">
+        <div className="flex items-start gap-3">
+          <RefreshCw className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="min-w-0 flex-1">
+            <h3 className="font-semibold">Notifications need to be re-registered on this device</h3>
+            <p className="mt-1 text-amber-800">The push key changed. Fix notifications to connect this device to the current server key.</p>
+            <button
+              type="button"
+              onClick={handleFix}
+              disabled={busy}
+              className="mt-3 min-h-11 rounded-xl bg-amber-700 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-amber-800 disabled:opacity-60"
+            >
+              {busy ? 'Fixing…' : 'Fix notifications'}
+            </button>
+            {message && <p className="mt-2 text-xs text-rose-700">{message}</p>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (subscribed && permission === 'granted' && pushState?.browserKeyMatchesServer === true) {
     return (
       <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-800">
         <BellRing className="h-4 w-4 shrink-0" /> Push notifications are ON for this device.

@@ -1,6 +1,33 @@
 import { supabase } from './supabase';
 import type { Role, RoleSession } from '../types';
 
+const UNRECOVERABLE_SESSION_ERROR = /invalid refresh token|refresh token not found|refresh_token_not_found|invalid_grant/i;
+
+function errorText(error: unknown): string {
+  if (typeof error === 'string') return error;
+  if (error && typeof error === 'object') {
+    const value = error as { message?: unknown; code?: unknown; error?: unknown };
+    return [value.message, value.code, value.error].filter((part) => typeof part === 'string').join(' ');
+  }
+  return String(error ?? '');
+}
+
+/** True only for refresh-token errors that cannot recover without local sign-out. */
+export function isUnrecoverableSessionError(error: unknown): boolean {
+  return UNRECOVERABLE_SESSION_ERROR.test(errorText(error));
+}
+
+/** Clear only this browser's dead Supabase session; transient errors are untouched. */
+export async function recoverFromStaleSession(error: unknown): Promise<boolean> {
+  if (!isUnrecoverableSessionError(error)) return false;
+  try {
+    const result = await supabase.auth.signOut({ scope: 'local' });
+    return !result?.error;
+  } catch {
+    return false;
+  }
+}
+
 export type ProfileSessionRow = {
   id: string; // profiles.id
   name: string;
@@ -82,8 +109,19 @@ export async function signUp(email: string, password: string) {
  * — treat as "not logged in" rather than crashing).
  */
 export async function restoreProfileSession(): Promise<{ roleSession: RoleSession; profile: ProfileSessionRow } | null> {
-  const { data, error } = await supabase.auth.getSession();
-  if (error || !data.session?.user) return null;
+  let data: { session: { user: { id: string } } | null };
+  try {
+    const result = await supabase.auth.getSession();
+    if (result.error) {
+      await recoverFromStaleSession(result.error);
+      return null;
+    }
+    data = result.data;
+  } catch (error) {
+    await recoverFromStaleSession(error);
+    return null;
+  }
+  if (!data.session?.user) return null;
   const profile = await getProfileByAuthId(data.session.user.id);
   if (!profile) return null;
   return { roleSession: buildRoleSession(profile), profile };

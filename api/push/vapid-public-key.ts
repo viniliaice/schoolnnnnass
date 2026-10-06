@@ -7,7 +7,7 @@
  */
 
 // Explicit .js extension required — see api/notifications/send.ts.
-import { base64UrlDecode, derivePublicKeyB64, generateVapidKeys } from '../../server/lib/webpush.js';
+import { base64UrlDecode, derivePublicKeyB64, generateVapidKeys, validateVapidConfig } from '../../server/lib/webpush.js';
 
 let devKeys: ReturnType<typeof generateVapidKeys> | null = null;
 
@@ -17,14 +17,13 @@ let devKeys: ReturnType<typeof generateVapidKeys> | null = null;
  * handler runs — module resolution — cannot be caught here; that is what the
  * explicit .js import specifiers above prevent.)
  */
-function sendJsonError(res: any, err: unknown, scope: string) {
-  const message = err instanceof Error ? err.message : String(err);
+function sendJsonError(res: any, _err: unknown, scope: string) {
   try {
-    console.error(`[${scope}] unhandled failure:`, message, err instanceof Error ? err.stack : '');
+    console.error(`[${scope}] unhandled failure`);
   } catch {
     /* logging must never mask the response */
   }
-  const payload = { error: message || 'Internal Server Error', code: 'HANDLER_EXCEPTION' };
+  const payload = { error: 'Could not serve the push public key.', code: 'HANDLER_EXCEPTION' };
   try {
     if (typeof res?.status === 'function' && typeof res?.json === 'function') {
       return res.status(500).json(payload);
@@ -66,6 +65,7 @@ async function handleVapidPublicKey(req: any, res: any) {
   // handing browsers a key that no notification could ever be decrypted with.
   let privateKeyBytes: Buffer;
   try {
+    if (!/^[A-Za-z0-9_-]+$/.test(privateKey)) throw new Error('invalid base64url alphabet');
     privateKeyBytes = base64UrlDecode(privateKey);
   } catch {
     privateKeyBytes = Buffer.alloc(0);
@@ -79,11 +79,22 @@ async function handleVapidPublicKey(req: any, res: any) {
     });
   }
 
-  try {
-    const publicKey = derivePublicKeyB64({
-      privateKey,
-      subject: process.env.VAPID_SUBJECT || 'mailto:admin@schoolnnnnass.vercel.app',
+  const vapid = {
+    privateKey,
+    subject: process.env.VAPID_SUBJECT || (process.env.NODE_ENV !== 'production' ? 'mailto:dev@localhost' : ''),
+  };
+  const vapidCheck = validateVapidConfig(vapid);
+  if (!vapidCheck.ok) {
+    return res.status(500).json({
+      error: 'VAPID configuration is invalid. Check VAPID_PRIVATE_KEY and VAPID_SUBJECT (see /api/push/health).',
+      code: 'INVALID_VAPID_CONFIG',
+      problems: vapidCheck.problems,
+      vapid: vapidCheck,
     });
+  }
+
+  try {
+    const publicKey = derivePublicKeyB64(vapid);
     // The client refuses anything that is not a 65-byte uncompressed P-256
     // point, so verify it here too instead of shipping a key the browser will
     // reject with "InvalidAccessError".
@@ -92,12 +103,11 @@ async function handleVapidPublicKey(req: any, res: any) {
       console.error(`[push/vapid-public-key] derived public key is malformed (${publicKeyBytes.length} bytes).`);
       return res.status(500).json({ error: 'Derived VAPID public key is malformed.', code: 'INVALID_VAPID_PUBLIC_KEY' });
     }
-    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.setHeader('Cache-Control', 'no-store');
     return res.status(200).json({ publicKey });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('[push/vapid-public-key] VAPID_PRIVATE_KEY is unusable:', message);
-    return res.status(500).json({ error: 'VAPID_PRIVATE_KEY is invalid.', detail: message });
+  } catch {
+    console.error('[push/vapid-public-key] VAPID configuration is unusable.');
+    return res.status(500).json({ error: 'VAPID configuration is invalid.', code: 'INVALID_VAPID_CONFIG' });
   }
 }
 

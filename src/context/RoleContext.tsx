@@ -14,6 +14,7 @@ import { supabase, isPlaceholderEnv, resolvePreviewProfile } from '../lib/supaba
 import {
   buildRoleSession,
   getProfileByAuthId,
+  recoverFromStaleSession,
   signInProfileSession,
   signOutProfileSession,
 } from '../lib/auth';
@@ -243,6 +244,7 @@ export function RoleProvider({ children }: { children: ReactNode }) {
         if (cancelled) return;
         if (sessionError) {
           console.warn('[RoleContext] getSession failed:', sessionError.message);
+          await recoverFromStaleSession(sessionError);
         } else {
           const authUser = data.session?.user ?? null;
           if (authUser) {

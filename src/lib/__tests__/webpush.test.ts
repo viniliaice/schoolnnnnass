@@ -12,10 +12,16 @@ import { describe, expect, it } from 'vitest';
 import {
   base64UrlDecode,
   base64UrlEncode,
+  classifyPushStatus,
   derivePublicKeyB64,
+  describePushFailure,
   encryptPushPayload,
   generateVapidKeys,
+  looksLikeTokenProblem,
+  sanitizePushResponseText,
   sendWebPush,
+  validateVapidConfig,
+  validateVapidSubject,
 } from '../../../server/lib/webpush';
 
 /** Build a browser-like push subscription (P-256 keypair + 16-byte auth). */
@@ -135,5 +141,93 @@ describe('Web Push sender (RFC 8291/8292)', () => {
     });
     expect(result.ok).toBe(true);
     expect(result.expired).toBe(false);
+  });
+});
+
+describe('push result classification and VAPID validation', () => {
+  it.each([
+    [201, 'ok'], [204, 'ok'], [400, 'bad_request'], [401, 'unauthorized'], [403, 'forbidden'],
+    [404, 'expired'], [410, 'expired'], [413, 'payload_too_large'], [429, 'rate_limited'],
+    [500, 'server_error'], [503, 'server_error'], [0, 'network'],
+  ] as const)('classifies HTTP %i as %s', (status, expected) => {
+    expect(classifyPushStatus(status)).toBe(expected);
+  });
+
+  it('describes failures with a sanitized service detail and retry policy', () => {
+    expect(describePushFailure({ status: 410, ok: false, expired: true, responseText: 'Gone' })).toMatchObject({
+      code: 'expired', retryable: false, subscriptionUnusable: true,
+    });
+    expect(describePushFailure({ status: 429, ok: false, expired: false, responseText: 'retry later' }).retryable).toBe(true);
+    expect(describePushFailure({ status: 400, ok: false, expired: false, responseText: 'Invalid request' }).message).toContain('HTTP 400');
+    expect(describePushFailure({ status: 0, ok: false, expired: false, responseText: '', networkError: 'getaddrinfo ENOTFOUND fcm.googleapis.com' }).message).toContain('ENOTFOUND');
+  });
+
+  it('redacts JWTs, long base64url material, control characters and endpoint paths', () => {
+    const jwt = `eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJzZWNyZXQifQ.${'a'.repeat(48)}`;
+    const sanitized = sanitizePushResponseText(`Bad ${jwt}\n${'A'.repeat(64)} https://push.example/subscription-registration-token`);
+    expect(sanitized).toContain('<redacted-jwt>');
+    expect(sanitized).toContain('<redacted>');
+    expect(sanitized).not.toContain(jwt);
+    expect(sanitized).not.toContain('subscription-registration-token');
+    expect(sanitizePushResponseText('detail '.repeat(100))).toHaveLength(200);
+  });
+
+  it('detects push-service JWT/VAPID token problems', () => {
+    expect(looksLikeTokenProblem('BadJwtToken')).toBe(true);
+    expect(looksLikeTokenProblem('Unauthorized')).toBe(true);
+    expect(looksLikeTokenProblem('invalid token signature')).toBe(true);
+    expect(looksLikeTokenProblem('sender key mismatch')).toBe(false);
+  });
+
+  it('accepts bare mailto/https subjects and rejects the production Markdown value', () => {
+    expect(validateVapidSubject('mailto:admin@school.example')).toMatchObject({ valid: true, scheme: 'mailto' });
+    expect(validateVapidSubject('https://school.example/contact')).toMatchObject({ valid: true, scheme: 'https' });
+    expect(validateVapidSubject('[mailto:admin@school.example](mailto:admin@school.example)').valid).toBe(false);
+    expect(validateVapidSubject('admin@school.example').valid).toBe(false);
+    expect(validateVapidSubject('"mailto:admin@school.example"').valid).toBe(false);
+  });
+
+  it('validates raw private-key length and a derivable P-256 point without exposing key bytes', () => {
+    const keys = generateVapidKeys();
+    expect(validateVapidConfig({ privateKey: keys.privateKey, subject: 'mailto:admin@school.example' })).toMatchObject({
+      ok: true, subjectValid: true, subjectScheme: 'mailto', privateKeyBytes: 32, publicKeyBytes: 65,
+    });
+    const badSubject = validateVapidConfig({ privateKey: keys.privateKey, subject: '[mailto:a@b](mailto:a@b)' });
+    expect(badSubject.ok).toBe(false);
+    expect(badSubject.problems.join(' ')).toMatch(/Markdown/);
+    const zeroScalar = base64UrlEncode(Buffer.alloc(32));
+    expect(validateVapidConfig({ privateKey: zeroScalar, subject: 'mailto:a@b' }).ok).toBe(false);
+    expect(JSON.stringify(badSubject)).not.toContain(keys.privateKey);
+  });
+
+  it('returns a network classification for fetch failures, never expired', async () => {
+    const sub = makeBrowserSubscription();
+    const vapid = generateVapidKeys();
+    const dns = Object.assign(new Error('fetch failed'), {
+      cause: Object.assign(new Error('getaddrinfo ENOTFOUND push.example.com'), { code: 'ENOTFOUND', hostname: 'push.example.com' }),
+    });
+    const result = await sendWebPush({
+      endpoint: sub.endpoint,
+      keys: { p256dh: sub.p256dh, auth: sub.auth },
+      payload: { title: 'x' },
+      vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' },
+      fetchImpl: (async () => { throw dns; }) as unknown as typeof fetch,
+    });
+    expect(result).toMatchObject({ status: 0, ok: false, expired: false });
+    expect(result.networkError).toContain('ENOTFOUND');
+    expect(classifyPushStatus(result.status)).toBe('network');
+  });
+
+  it('keeps malformed subscription encryption material in pre-flight (no fetch call)', async () => {
+    const vapid = generateVapidKeys();
+    let calls = 0;
+    await expect(sendWebPush({
+      endpoint: 'https://fcm.googleapis.com/send/device',
+      keys: { p256dh: 'bad', auth: 'bad' },
+      payload: { title: 'x' },
+      vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' },
+      fetchImpl: (async () => { calls += 1; return new Response(null, { status: 201 }); }) as typeof fetch,
+    })).rejects.toThrow(/p256dh/);
+    expect(calls).toBe(0);
   });
 });
