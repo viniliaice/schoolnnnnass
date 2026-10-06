@@ -8,7 +8,7 @@
  * trusts `senderId`.
  */
 
-import { sendWebPush, type VapidConfig } from './webpush';
+import { sendWebPush, type VapidConfig } from './webpush.js';
 
 export type NotificationCategory =
   | 'announcement'

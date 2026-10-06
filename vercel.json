@@ -1,5 +1,9 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
+  "functions": {
+    "api/*.ts": { "runtime": "nodejs24.x" },
+    "api/*/*.ts": { "runtime": "nodejs24.x" }
+  },
   "headers": [
     {
       "source": "/sw.js",

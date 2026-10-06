@@ -12,14 +12,45 @@
  *   SUPABASE_SERVICE_ROLE_KEY, VAPID_PRIVATE_KEY, VAPID_SUBJECT (optional).
  */
 
-import { sendTeacherNotification, validateSendRequest } from '../../server/lib/notificationSender';
-import { createSupabaseNotificationDb } from '../../server/lib/supabaseNotificationDb';
-import { SupabaseRest } from '../../server/lib/supabaseRest';
-import { generateVapidKeys, type VapidConfig } from '../../server/lib/webpush';
+// NOTE: explicit .js extensions are REQUIRED. The Vercel Node builder transpiles
+// each file individually (no bundling) and, because package.json has
+// "type": "module", the output runs as ESM — Node's ESM loader cannot resolve
+// extensionless relative specifiers, which made these routes 500 at load time.
+import { sendTeacherNotification, validateSendRequest } from '../../server/lib/notificationSender.js';
+import { createSupabaseNotificationDb } from '../../server/lib/supabaseNotificationDb.js';
+import { SupabaseRest } from '../../server/lib/supabaseRest.js';
+import { generateVapidKeys, type VapidConfig } from '../../server/lib/webpush.js';
 
 let devVapid: VapidConfig | null = null;
 
-export default async function handler(req: any, res: any) {
+/**
+ * Last-resort error responder: guarantees a readable JSON body instead of
+ * Vercel's opaque FUNCTION_INVOCATION_FAILED page. (Failures *before* the
+ * handler runs — module resolution — cannot be caught here; that is what the
+ * explicit .js import specifiers above prevent.)
+ */
+function sendJsonError(res: any, err: unknown, scope: string) {
+  const message = err instanceof Error ? err.message : String(err);
+  try {
+    console.error(`[${scope}] unhandled failure:`, message, err instanceof Error ? err.stack : '');
+  } catch {
+    /* logging must never mask the response */
+  }
+  const payload = { error: message || 'Internal Server Error', code: 'HANDLER_EXCEPTION' };
+  try {
+    if (typeof res?.status === 'function' && typeof res?.json === 'function') {
+      return res.status(500).json(payload);
+    }
+    res.statusCode = 500;
+    if (typeof res.setHeader === 'function') res.setHeader('Content-Type', 'application/json');
+    if (typeof res.end === 'function') return res.end(JSON.stringify(payload));
+  } catch {
+    /* nothing else we can do */
+  }
+  return undefined;
+}
+
+async function handleSend(req: any, res: any) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res.status(405).json({ error: 'Method Not Allowed' });
@@ -91,6 +122,14 @@ export default async function handler(req: any, res: any) {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.error('[notifications/send] failed:', message);
-    return res.status(502).json({ error: message });
+    return res.status(502).json({ error: message, code: 'SEND_FAILED' });
+  }
+}
+
+export default async function handler(req: any, res: any) {
+  try {
+    return await handleSend(req, res);
+  } catch (err) {
+    return sendJsonError(res, err, 'notifications/send');
   }
 }

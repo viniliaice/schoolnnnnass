@@ -6,11 +6,39 @@
  * and only the derived public point is exposed here.
  */
 
-import { derivePublicKeyB64, generateVapidKeys } from '../../server/lib/webpush';
+// Explicit .js extension required — see api/notifications/send.ts.
+import { base64UrlDecode, derivePublicKeyB64, generateVapidKeys } from '../../server/lib/webpush.js';
 
 let devKeys: ReturnType<typeof generateVapidKeys> | null = null;
 
-export default async function handler(req: any, res: any) {
+/**
+ * Last-resort error responder: guarantees a readable JSON body instead of
+ * Vercel's opaque FUNCTION_INVOCATION_FAILED page. (Failures *before* the
+ * handler runs — module resolution — cannot be caught here; that is what the
+ * explicit .js import specifiers above prevent.)
+ */
+function sendJsonError(res: any, err: unknown, scope: string) {
+  const message = err instanceof Error ? err.message : String(err);
+  try {
+    console.error(`[${scope}] unhandled failure:`, message, err instanceof Error ? err.stack : '');
+  } catch {
+    /* logging must never mask the response */
+  }
+  const payload = { error: message || 'Internal Server Error', code: 'HANDLER_EXCEPTION' };
+  try {
+    if (typeof res?.status === 'function' && typeof res?.json === 'function') {
+      return res.status(500).json(payload);
+    }
+    res.statusCode = 500;
+    if (typeof res.setHeader === 'function') res.setHeader('Content-Type', 'application/json');
+    if (typeof res.end === 'function') return res.end(JSON.stringify(payload));
+  } catch {
+    /* nothing else we can do */
+  }
+  return undefined;
+}
+
+async function handleVapidPublicKey(req: any, res: any) {
   if (req.method !== 'GET') {
     res.setHeader('Allow', 'GET');
     return res.status(405).json({ error: 'Method Not Allowed' });
@@ -31,14 +59,52 @@ export default async function handler(req: any, res: any) {
     });
   }
 
+  // A VAPID private key is a raw 32-byte P-256 scalar (base64url). Node's
+  // setPrivateKey() accepts shorter buffers and derives a *different*
+  // (well-formed but useless) public key from them, so the length is checked
+  // explicitly: a mis-set key must fail loudly here rather than silently
+  // handing browsers a key that no notification could ever be decrypted with.
+  let privateKeyBytes: Buffer;
+  try {
+    privateKeyBytes = base64UrlDecode(privateKey);
+  } catch {
+    privateKeyBytes = Buffer.alloc(0);
+  }
+  if (privateKeyBytes.length !== 32) {
+    console.error(`[push/vapid-public-key] VAPID_PRIVATE_KEY decodes to ${privateKeyBytes.length} bytes, expected 32.`);
+    return res.status(500).json({
+      error: 'VAPID_PRIVATE_KEY must be a base64url-encoded 32-byte P-256 private key. Generate one with scripts/generate-vapid-keys.mjs.',
+      code: 'INVALID_VAPID_PRIVATE_KEY',
+      decodedBytes: privateKeyBytes.length,
+    });
+  }
+
   try {
     const publicKey = derivePublicKeyB64({
       privateKey,
       subject: process.env.VAPID_SUBJECT || 'mailto:admin@schoolnnnnass.vercel.app',
     });
+    // The client refuses anything that is not a 65-byte uncompressed P-256
+    // point, so verify it here too instead of shipping a key the browser will
+    // reject with "InvalidAccessError".
+    const publicKeyBytes = base64UrlDecode(publicKey);
+    if (publicKeyBytes.length !== 65 || publicKeyBytes[0] !== 0x04) {
+      console.error(`[push/vapid-public-key] derived public key is malformed (${publicKeyBytes.length} bytes).`);
+      return res.status(500).json({ error: 'Derived VAPID public key is malformed.', code: 'INVALID_VAPID_PUBLIC_KEY' });
+    }
     res.setHeader('Cache-Control', 'public, max-age=3600');
     return res.status(200).json({ publicKey });
   } catch (err) {
-    return res.status(500).json({ error: 'VAPID_PRIVATE_KEY is invalid.' });
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[push/vapid-public-key] VAPID_PRIVATE_KEY is unusable:', message);
+    return res.status(500).json({ error: 'VAPID_PRIVATE_KEY is invalid.', detail: message });
+  }
+}
+
+export default async function handler(req: any, res: any) {
+  try {
+    return await handleVapidPublicKey(req, res);
+  } catch (err) {
+    return sendJsonError(res, err, 'push/vapid-public-key');
   }
 }
