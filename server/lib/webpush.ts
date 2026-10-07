@@ -223,7 +223,7 @@ function vapidAuthorizationHeader(endpoint: string, vapid: VapidConfig): string 
     dsaEncoding: 'ieee-p1363',
   });
   const jwt = `${signingInput}.${base64UrlEncode(signature)}`;
-  return `vapid t=${jwt}, p=${derivePublicKeyB64(vapid)}`;
+  return `vapid t=${jwt}, k=${derivePublicKeyB64(vapid)}`;
 }
 
 /* ── RFC 8291 payload encryption (aes128gcm) ──────────────────────────────── */
