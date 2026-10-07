@@ -424,6 +424,13 @@ async function seedReproduction(db, opts) {
     // blank, which would silently skip the very check this fixture exists for.
     await conflict(4, 'Cabdiraxmaan Xuseen Warsame 004',
       {}, { familyId: '99990001' });
+    // A family ID with NO DIGIT. normalize_family_id() strips every non-digit,
+    // so this normalizes to '' and the batch sees the pair as "both blank":
+    // it merges, transfers nothing, records nothing in the audit — and the raw
+    // value is deleted with the duplicate. This is exactly the silent-loss case
+    // the --analyse normalization check exists to catch BEFORE a real merge.
+    await conflict(5, 'Cabdiraxmaan Xuseen Warsame 005',
+      {}, { familyId: 'HOUSE-RED' });
   }
 
   process.stdout.write('\r  seeding done.                                          \n');
@@ -652,8 +659,61 @@ async function renderPostState(ctx, label = 'Post-run verification (read back fr
 // database, not assumed.
 
 const FIELDS = ['parentPhone', 'transport', 'familyId', 'govId'];
-const STATES = ['both_blank', 'keeper_only', 'duplicate_only', 'identical', 'conflict'];
-const ACTIONS = ['keep', 'transfer', 'block', 'review'];
+
+/**
+ * Ordered, human-readable breakdown per field — the exact rows an operator
+ * needs to see, derived from the policy's own `fieldStates` classification.
+ * Crucially this SPLITS `duplicate_only` by outcome, because "the duplicate is
+ * the only record with a value" is not a verdict: it can be safely transferred,
+ * refused as another family's data, or held for review as unprovable.
+ */
+const FIELD_ROWS = {
+  parentPhone: [
+    ['both blank', (f) => f.state === 'both_blank'],
+    ['keeper only', (f) => f.state === 'keeper_only'],
+    ['duplicate only → safely transferable', (f) => f.state === 'duplicate_only' && f.action === 'transfer'],
+    ['identical', (f) => f.state === 'identical'],
+    ['true conflict', (f) => f.state === 'conflict'],
+    ['belongs to another family', (f) => f.state === 'duplicate_only' && f.action === 'block'],
+  ],
+  transport: [
+    ['both blank', (f) => f.state === 'both_blank'],
+    ['keeper only', (f) => f.state === 'keeper_only'],
+    ['duplicate only → safely transferable', (f) => f.state === 'duplicate_only' && f.action === 'transfer'],
+    ['identical', (f) => f.state === 'identical'],
+    ['incompatible conflict', (f) => f.state === 'conflict'],
+  ],
+  familyId: [
+    ['both blank', (f) => f.state === 'both_blank'],
+    ['keeper only', (f) => f.state === 'keeper_only'],
+    ['duplicate only → proven transferable', (f) => f.state === 'duplicate_only' && f.action === 'transfer'],
+    ['duplicate only → unprovable (review)', (f) => f.state === 'duplicate_only' && f.action === 'review'],
+    ['identical', (f) => f.state === 'identical'],
+    ['conflicting family IDs', (f) => f.state === 'conflict'
+      || (f.state === 'duplicate_only' && f.action === 'block')],
+  ],
+  govId: [
+    ['both blank', (f) => f.state === 'both_blank'],
+    ['keeper only', (f) => f.state === 'keeper_only'],
+    ['duplicate only', (f) => f.state === 'duplicate_only' && f.action === 'transfer'],
+    ['identical', (f) => f.state === 'identical'],
+    ['conflict', (f) => f.state === 'conflict'],
+  ],
+};
+
+// JS mirror of public.normalize_family_id(TEXT) — 20260802:55:
+//   regexp_replace(COALESCE(p_raw,''), '\D', '', 'g')
+// It strips EVERY non-digit, so a family ID with no digit at all becomes '' and
+// the batch treats the record as having no family ID at all.
+const normalizeFamilyIdJs = (v) => String(v ?? '').replace(/\D/g, '');
+
+/** Show only what an admin needs to identify a record. Phone and Gov ID are
+ *  partially masked; nothing more is revealed than the screen already shows. */
+function mask(v) {
+  if (v === null || v === undefined || v === '') return '—';
+  const t = String(v);
+  return t.length <= 4 ? '••••' : `${'•'.repeat(Math.min(t.length - 4, 8))}${t.slice(-4)}`;
+}
 
 async function runAnalysis(ctx, opts) {
   const pageSize = opts.chunk && opts.chunk > 0 ? Math.min(opts.chunk, 500) : 200;
@@ -677,34 +737,101 @@ async function runAnalysis(ctx, opts) {
     if (offset > 200000) break; // hard stop; a candidate set this size is a data problem
   }
 
-  // Per-field state × action matrix over EVERY candidate pair.
-  const matrix = {};
-  for (const f of FIELDS) matrix[f] = { state: {}, action: {} };
-  const tally = (bucket, key) => { bucket[key] = (bucket[key] ?? 0) + 1; };
-  const transfers = {};          // field -> count of values that WILL be copied
-  let newlySafe = 0;             // safe pairs whose verdict depends on a transfer
-  let plainSafe = 0;             // safe pairs with nothing to consolidate
+  // Per-field tally by the human-readable rows above, plus transfer counts.
+  const perField = {};
+  for (const f of FIELDS) perField[f] = {};
+  const transfers = {};
+  const examples = { newlySafe: [], blocked: [], review: [] };
+  let newlySafe = 0;
+  let plainSafe = 0;
+  // Family-ID normalization findings, measured from the RAW values the RPC
+  // returns for each side of the pair — i.e. from real production data.
+  const famNorm = {
+    pairsWithRawFamilyId: 0,     // at least one side has a non-blank raw value
+    pairsInvisibleToPolicy: 0,   // raw value present but normalizes to ''
+    distinctInvisibleValues: new Set(),
+    pairsWhereBothSidesRaw: 0,   // both sides carry a raw value
+    pairsRawDifferKeySame: 0,    // distinct spellings, identical normalized key
+  };
+
+  const pushExample = (bucket, row, fs) => {
+    if (examples[bucket].length >= 10) return;
+    examples[bucket].push({
+      keeperId: row?.keeperId ?? '?',
+      removedId: row?.removedId ?? '?',
+      studentName: row?.studentName ?? '?',
+      className: row?.className ?? '?',
+      verdict: bucket === 'newlySafe' ? 'SAFE' : bucket === 'blocked' ? 'BLOCKED' : 'REVIEW',
+      reasons: row?.exclusionCodes ?? [],
+      // the object, not its entries — renderAnalysis re-reads it with entries()
+      transfers: transfersFor(fs),
+    });
+  };
+
+  function transfersFor(fs) {
+    const out = {};
+    for (const f of FIELDS) {
+      const cell = fs?.[f];
+      if (cell?.action === 'transfer') out[f] = cell.value ?? null;
+    }
+    return out;
+  }
+
   for (const row of [...rows, ...excluded]) {
     const fs = row?.fieldStates ?? {};
+
+    // ── family ID normalization impact on THIS pair ────────────────────────
+    const famRawK = String(row?.keeper?.familyId ?? '').trim();
+    const famRawR = String(row?.removed?.familyId ?? '').trim();
+    if (famRawK !== '' || famRawR !== '') famNorm.pairsWithRawFamilyId += 1;
+    if (famRawK !== '' && famRawR !== '') famNorm.pairsWhereBothSidesRaw += 1;
+    let invisible = false;
+    for (const raw of [famRawK, famRawR]) {
+      if (raw !== '' && normalizeFamilyIdJs(raw) === '') {
+        invisible = true;
+        famNorm.distinctInvisibleValues.add(raw);
+      }
+    }
+    if (invisible) famNorm.pairsInvisibleToPolicy += 1;
+    if (famRawK !== '' && famRawR !== ''
+        && famRawK !== famRawR
+        && normalizeFamilyIdJs(famRawK) !== ''
+        && normalizeFamilyIdJs(famRawK) === normalizeFamilyIdJs(famRawR)) {
+      famNorm.pairsRawDifferKeySame += 1;
+    }
+
     let anyTransfer = false;
     for (const f of FIELDS) {
       const cell = fs[f];
       if (!cell) continue;
-      tally(matrix[f].state, cell.state ?? '?');
-      tally(matrix[f].action, cell.action ?? '?');
+      for (const [label, test] of FIELD_ROWS[f]) {
+        if (test(cell)) { perField[f][label] = (perField[f][label] ?? 0) + 1; break; }
+      }
       if (cell.action === 'transfer') { anyTransfer = true; transfers[f] = (transfers[f] ?? 0) + 1; }
     }
-    if (row?.eligible) { if (anyTransfer) newlySafe += 1; else plainSafe += 1; }
+    if (row?.eligible) {
+      if (anyTransfer) { newlySafe += 1; pushExample('newlySafe', row, fs); }
+      else plainSafe += 1;
+    } else if (row?.severity === 'blocked') {
+      pushExample('blocked', row, fs);
+    } else if (row?.severity === 'review') {
+      pushExample('review', row, fs);
+    }
   }
 
   const reasonsFor = (sev) => {
     const counts = {};
     for (const r of excluded) {
       if (r?.severity !== sev) continue;
-      for (const code of r?.exclusionCodes ?? []) tally(counts, code);
+      for (const code of r?.exclusionCodes ?? []) counts[code] = (counts[code] ?? 0) + 1;
     }
     return counts;
   };
+
+  // "Already merged" — read-only post-run verification RPC (20261007). Wrapped
+  // because an older deployment may not have that migration yet.
+  let verified = null;
+  try { verified = await ctx.rpc('verify_safe_duplicate_batch_state', {}); } catch { verified = null; }
 
   return {
     policy,
@@ -717,43 +844,56 @@ async function runAnalysis(ctx, opts) {
     plainSafe,
     newlySafe,
     transfers,
-    matrix,
+    perField,
+    examples,
     blockedReasons: reasonsFor('blocked'),
     reviewReasons: reasonsFor('review'),
     rowsCollected: rows.length,
     excludedCollected: excluded.length,
+    verified,
+    famNorm: {
+      pairsWithRawFamilyId: famNorm.pairsWithRawFamilyId,
+      pairsInvisibleToPolicy: famNorm.pairsInvisibleToPolicy,
+      distinctInvisibleValues: [...famNorm.distinctInvisibleValues],
+      pairsWhereBothSidesRaw: famNorm.pairsWhereBothSidesRaw,
+      pairsRawDifferKeySame: famNorm.pairsRawDifferKeySame,
+    },
   };
 }
 
 function renderAnalysis(a, opts) {
-  h1('Field consolidation analysis — computed by the database, read-only');
+  h1('PRODUCTION ANALYSIS — computed by the database, read-only');
   kv('policy', `${a.policy?.policyId ?? '?'} v${a.policy?.version ?? '?'}`);
-  kv('candidate pairs examined', a.candidatePairs);
   line('');
-  line(c(BOLD, '  Verdict'));
-  kv('SAFE (batch-mergeable)', c(GREEN, a.safeCount));
-  kv('  └ nothing to consolidate', a.plainSafe);
-  kv('  └ safe BECAUSE one-sided data transfers', c(GREEN, a.newlySafe));
-  kv('BLOCKED (a true conflict)', c(RED, a.blockedCount));
-  kv('NEEDS REVIEW', c(AMBER, a.needsReviewCount));
+  line(c(BOLD, '  Duplicate totals'));
+  kv('potential duplicate pairs', a.candidatePairs);
+  kv('server-safe pairs', c(GREEN, a.safeCount));
+  kv('needs review', c(AMBER, a.needsReviewCount));
+  kv('blocked', c(a.blockedCount ? RED : GREEN, a.blockedCount));
+  const aud = a.verified?.audits;
+  if (aud) {
+    kv('already merged (individual)', aud.individual ?? 0);
+    kv('already merged (safe batch)', aud.safeBatch ?? 0);
+    kv('distinct student IDs removed', aud.distinctRemovedIds ?? 0);
+  } else {
+    kv('already merged', c(DIM, 'unavailable — verify_safe_duplicate_batch_state() not present'));
+  }
+  line('');
+  kv('  └ safe with nothing to consolidate', a.plainSafe);
+  kv('  └ NEWLY safe via field consolidation', c(GREEN, a.newlySafe));
   if (a.rowsCollected + a.excludedCollected !== a.candidatePairs) {
-    warn(`paged ${a.rowsCollected + a.excludedCollected} of ${a.candidatePairs} pairs — the per-field matrix below covers the paged subset`);
+    warn(`paged ${a.rowsCollected + a.excludedCollected} of ${a.candidatePairs} pairs — counts below cover the paged subset`);
   }
 
   line('');
-  line(c(BOLD, '  Per-field state across all examined pairs (the safe union)'));
-  line(`    ${'field'.padEnd(13)} ${STATES.map((x) => x.padEnd(14)).join('')}`);
+  line(c(BOLD, '  Field consolidation analysis (per profile field)'));
   for (const f of FIELDS) {
-    const cells = STATES.map((st) => String(a.matrix[f].state[st] ?? 0).padEnd(14)).join('');
-    line(`    ${f.padEnd(13)} ${cells}`);
-  }
-
-  line('');
-  line(c(BOLD, '  What the policy DOES with each field'));
-  line(`    ${'field'.padEnd(13)} ${ACTIONS.map((x) => x.padEnd(11)).join('')}`);
-  for (const f of FIELDS) {
-    const cells = ACTIONS.map((ac) => String(a.matrix[f].action[ac] ?? 0).padEnd(11)).join('');
-    line(`    ${f.padEnd(13)} ${cells}`);
+    line(`    ${c(BOLD, f)}`);
+    for (const [label] of FIELD_ROWS[f]) {
+      const n = a.perField[f][label] ?? 0;
+      const highlight = label.includes('transferable') ? GREEN : (label.includes('conflict') || label.includes('another family')) ? RED : (label.includes('review') ? AMBER : null);
+      kv(`      ${label}`, highlight ? c(highlight, n) : n);
+    }
   }
 
   const tEntries = Object.entries(a.transfers);
@@ -779,16 +919,54 @@ function renderAnalysis(a, opts) {
   dump('Why pairs are BLOCKED', a.blockedReasons, RED);
   dump('Why pairs stay in individual review', a.reviewReasons, AMBER);
 
+  line('');
+  line(c(BOLD, '  Family ID normalization impact (normalize_family_id strips every non-digit)'));
+  const fn = a.famNorm ?? {};
+  kv('  pairs where a raw family ID exists', fn.pairsWithRawFamilyId ?? 0);
+  kv('  pairs where BOTH sides carry one', fn.pairsWhereBothSidesRaw ?? 0);
+  kv('  pairs INVISIBLE to the policy', c((fn.pairsInvisibleToPolicy ?? 0) ? RED : GREEN, fn.pairsInvisibleToPolicy ?? 0));
+  if ((fn.distinctInvisibleValues ?? []).length) {
+    line(c(DIM, `    values that normalize to '': ${fn.distinctInvisibleValues.slice(0, 20).join(', ')}`));
+    warn('these records look like they have NO family ID; the batch cannot reason about them');
+  }
+  kv('  distinct spellings, same key', c((fn.pairsRawDifferKeySame ?? 0) ? RED : GREEN, fn.pairsRawDifferKeySame ?? 0));
+  if ((fn.pairsInvisibleToPolicy ?? 0) > 0 || (fn.pairsRawDifferKeySame ?? 0) > 0) {
+    warn('run supabase/tests/family-id-normalization-audit.sql and resolve these before merging');
+  } else {
+    ok('no family ID in any candidate pair is hidden or collapsed by normalization');
+  }
+
+  const showExamples = (title, list, colour) => {
+    line('');
+    line(c(BOLD, `  ${title}`));
+    if (list.length === 0) { line(c(DIM, '    none')); return; }
+    for (const e of list) {
+      line(`    ${c(colour, e.verdict.padEnd(7))} ${e.studentName}  ${c(DIM, `[${e.className}]`)}`);
+      line(`            keeper ${e.keeperId}  ←  duplicate ${e.removedId}`);
+      if (e.reasons.length) line(`            reason: ${e.reasons.join(', ')}`);
+      const t = Object.entries(e.transfers ?? {});
+      if (t.length) {
+        const parts = t.map(([f, v]) => `${f}=${f === 'parentPhone' || f === 'govId' ? mask(v) : (v ?? '—')}`);
+        line(`            ${c(GREEN, 'transfers')}: ${parts.join(', ')}`);
+      }
+    }
+  };
+  showExamples('Representative examples — newly SAFE because of field transfer', a.examples.newlySafe, GREEN);
+  showExamples('Representative examples — remaining BLOCKED', a.examples.blocked, RED);
+  showExamples('Representative examples — remaining REVIEW', a.examples.review, AMBER);
+
   if (opts.json) {
     line('');
     line(JSON.stringify({
       policy: a.policy?.policyId, version: a.policy?.version,
-      candidatePairs: a.candidatePairs, safe: a.safeCount,
-      plainSafe: a.plainSafe, newlySafeByTransfer: a.newlySafe,
-      blocked: a.blockedCount, needsReview: a.needsReviewCount,
-      transfers: a.transfers, matrix: a.matrix,
+      potentialDuplicatePairs: a.candidatePairs, serverSafe: a.safeCount,
+      needsReview: a.needsReviewCount, blocked: a.blockedCount,
+      alreadyMerged: aud ? { individual: aud.individual, safeBatch: aud.safeBatch, distinctRemovedIds: aud.distinctRemovedIds } : null,
+      newlySafeByFieldConsolidation: a.newlySafe,
+      safeWithNothingToConsolidate: a.plainSafe,
+      perField: a.perField, transfers: a.transfers, familyIdNormalization: a.famNorm,
       blockedReasons: a.blockedReasons, reviewReasons: a.reviewReasons,
-      exclusionReasons: a.exclusionReasons,
+      exclusionReasons: a.exclusionReasons, examples: a.examples,
     }, null, 2));
   }
 }
