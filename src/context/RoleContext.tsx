@@ -16,6 +16,7 @@ import {
   getProfileByAuthId,
   signInProfileSession,
   signOutProfileSession,
+  recoverFromStaleSession,
 } from '../lib/auth';
 
 interface RoleContextType {
@@ -242,7 +243,12 @@ export function RoleProvider({ children }: { children: ReactNode }) {
         const { data, error: sessionError } = await supabase.auth.getSession();
         if (cancelled) return;
         if (sessionError) {
-          console.warn('[RoleContext] getSession failed:', sessionError.message);
+          const recovered = await recoverFromStaleSession(sessionError);
+          if (recovered) {
+            console.warn('[RoleContext] cleared an unrecoverable local refresh token; sign in again.');
+          } else {
+            console.warn('[RoleContext] getSession failed; retaining signed-out state.');
+          }
         } else {
           const authUser = data.session?.user ?? null;
           if (authUser) {
@@ -253,8 +259,10 @@ export function RoleProvider({ children }: { children: ReactNode }) {
         const message = e instanceof Error ? e.message : String(e);
         if (message.startsWith(PROFILE_NOT_FOUND_PREFIX)) {
           console.warn('[RoleContext] fallback getSession auth user without profile (unlinked or pending auth user):', message);
+        } else if (await recoverFromStaleSession(e)) {
+          console.warn('[RoleContext] cleared an unrecoverable local refresh token; sign in again.');
         } else {
-          console.error('[RoleContext] fallback getSession apply failed:', e);
+          console.error('[RoleContext] fallback getSession apply failed.');
         }
       } finally {
         if (!cancelled) setLoading(false);

@@ -21,9 +21,20 @@ export interface PushSubscriptionKeys {
 export interface VapidConfig {
   /** base64url-encoded 32-byte P-256 private key. */
   privateKey: string;
-  /** Contact URL, e.g. mailto:admin@school.example */
+  /** Contact URI, e.g. mailto:admin@school.example */
   subject: string;
 }
+
+export type PushFailureCode =
+  | 'ok'
+  | 'bad_request'
+  | 'unauthorized'
+  | 'forbidden'
+  | 'expired'
+  | 'payload_too_large'
+  | 'rate_limited'
+  | 'server_error'
+  | 'network';
 
 export interface WebPushResult {
   status: number;
@@ -31,6 +42,26 @@ export interface WebPushResult {
   /** 404/410 from the push service — the subscription is dead. */
   expired: boolean;
   responseText: string;
+  /** Present when the push service could not be reached at all. */
+  networkError?: string;
+}
+
+export type VapidSubjectScheme = 'mailto' | 'https' | 'invalid';
+
+export interface VapidSubjectValidation {
+  valid: boolean;
+  scheme: VapidSubjectScheme;
+  reason?: string;
+}
+
+/** Safe-to-return VAPID inspection. Never includes any key material. */
+export interface VapidConfigCheck {
+  ok: boolean;
+  subjectValid: boolean;
+  subjectScheme: VapidSubjectScheme;
+  privateKeyBytes: number;
+  publicKeyBytes: number | null;
+  problems: string[];
 }
 
 /* ── base64url helpers ────────────────────────────────────────────────────── */
@@ -45,7 +76,14 @@ export function base64UrlDecode(input: string): Buffer {
   return Buffer.from(padded, 'base64');
 }
 
-/* ── VAPID keys ───────────────────────────────────────────────────────────── */
+function decodeBase64UrlStrict(input: unknown): Buffer | null {
+  if (typeof input !== 'string' || !/^[A-Za-z0-9_-]*={0,2}$/.test(input)) return null;
+  const unpadded = input.replace(/=+$/, '');
+  if (unpadded.length === 0 && input.length > 0) return null;
+  return base64UrlDecode(unpadded);
+}
+
+/* ── VAPID keys and configuration validation ─────────────────────────────── */
 
 export interface VapidKeyPair {
   privateKey: string; // base64url raw 32 bytes
@@ -61,15 +99,26 @@ export function generateVapidKeys(): VapidKeyPair {
   return { privateKey: privJwk.d, publicKey: base64UrlEncode(rawPublic) };
 }
 
-function privateKeyObject(vapid: VapidConfig): crypto.KeyObject {
-  const d = base64UrlDecode(vapid.privateKey);
+function publicPointFromPrivateBytes(d: Buffer): Buffer {
   if (d.length !== 32) {
     throw new Error('VAPID_PRIVATE_KEY must be a base64url-encoded 32-byte P-256 private key.');
   }
-  // Re-derive the public point so the JWK is complete (Node requires x/y).
   const ecdh = crypto.createECDH('prime256v1');
   ecdh.setPrivateKey(d);
-  const rawPublic = ecdh.getPublicKey(); // 65 bytes: 0x04 ‖ X  Y
+  const point = ecdh.getPublicKey();
+  if (point.length !== 65 || point[0] !== 0x04) {
+    throw new Error('VAPID_PRIVATE_KEY did not derive a valid uncompressed P-256 public point.');
+  }
+  return point;
+}
+
+function privateKeyObject(vapid: VapidConfig): crypto.KeyObject {
+  const d = decodeBase64UrlStrict(vapid.privateKey);
+  if (!d || d.length !== 32) {
+    throw new Error('VAPID_PRIVATE_KEY must be a base64url-encoded 32-byte P-256 private key.');
+  }
+  // Re-derive the public point so the JWK is complete (Node requires x/y).
+  const rawPublic = publicPointFromPrivateBytes(d);
   const x = rawPublic.subarray(1, 33);
   const y = rawPublic.subarray(33, 65);
   return crypto.createPrivateKey({
@@ -79,10 +128,80 @@ function privateKeyObject(vapid: VapidConfig): crypto.KeyObject {
 }
 
 export function derivePublicKeyB64(vapid: VapidConfig): string {
-  const d = base64UrlDecode(vapid.privateKey);
-  const ecdh = crypto.createECDH('prime256v1');
-  ecdh.setPrivateKey(d);
-  return base64UrlEncode(ecdh.getPublicKey());
+  const d = decodeBase64UrlStrict(vapid.privateKey);
+  if (!d || d.length !== 32) {
+    throw new Error('VAPID_PRIVATE_KEY must be a base64url-encoded 32-byte P-256 private key.');
+  }
+  return base64UrlEncode(publicPointFromPrivateBytes(d));
+}
+
+/** Validate a VAPID `sub` value as a bare RFC 8292 contact URI. */
+export function validateVapidSubject(subject: unknown): VapidSubjectValidation {
+  const value = typeof subject === 'string' ? subject.trim() : '';
+  const invalid = (reason: string): VapidSubjectValidation => ({ valid: false, scheme: 'invalid', reason });
+
+  if (!value) return invalid('VAPID_SUBJECT is empty. Set it to a bare mailto: or https: URI.');
+  // Markdown links, quotes, whitespace and angle-bracket wrappers are not URIs
+  // for the VAPID sub claim. In particular, reject
+  // [mailto:address](mailto:address), which push services reject.
+  if (/[\s\[\]()<>'"`]/.test(value)) {
+    return invalid('VAPID_SUBJECT must be a bare URI, not Markdown, bracketed, quoted, or whitespace-padded text.');
+  }
+
+  if (/^mailto:/i.test(value)) {
+    if (value.slice(value.indexOf(':') + 1).length === 0) {
+      return invalid('VAPID_SUBJECT mailto: URI must include a contact address.');
+    }
+    return { valid: true, scheme: 'mailto' };
+  }
+
+  if (/^https:/i.test(value)) {
+    try {
+      const parsed = new URL(value);
+      if (parsed.protocol !== 'https:' || !parsed.hostname || parsed.username || parsed.password) {
+        return invalid('VAPID_SUBJECT must be a valid https: contact URI without credentials.');
+      }
+      return { valid: true, scheme: 'https' };
+    } catch {
+      return invalid('VAPID_SUBJECT must be a valid https: contact URI.');
+    }
+  }
+
+  return invalid('VAPID_SUBJECT must use the mailto: or https: URI scheme.');
+}
+
+/** Validate the server-side VAPID private key and subject without returning key bytes. */
+export function validateVapidConfig(config: Partial<VapidConfig> | null | undefined): VapidConfigCheck {
+  const problems: string[] = [];
+  const keyBytes = decodeBase64UrlStrict(config?.privateKey);
+  const privateKeyBytes = keyBytes?.length ?? 0;
+  let publicKeyBytes: number | null = null;
+
+  if (!keyBytes || privateKeyBytes !== 32) {
+    problems.push(`VAPID_PRIVATE_KEY must decode to 32 bytes (currently ${privateKeyBytes}).`);
+  } else {
+    try {
+      const publicPoint = publicPointFromPrivateBytes(keyBytes);
+      publicKeyBytes = publicPoint.length;
+      if (publicPoint.length !== 65 || publicPoint[0] !== 0x04) {
+        problems.push('VAPID_PRIVATE_KEY does not derive a valid 65-byte P-256 public point.');
+      }
+    } catch {
+      problems.push('VAPID_PRIVATE_KEY is not a valid P-256 scalar.');
+    }
+  }
+
+  const subjectCheck = validateVapidSubject(config?.subject);
+  if (!subjectCheck.valid && subjectCheck.reason) problems.push(subjectCheck.reason);
+
+  return {
+    ok: problems.length === 0,
+    subjectValid: subjectCheck.valid,
+    subjectScheme: subjectCheck.scheme,
+    privateKeyBytes,
+    publicKeyBytes,
+    problems,
+  };
 }
 
 function vapidAuthorizationHeader(endpoint: string, vapid: VapidConfig): string {
@@ -162,7 +281,114 @@ export function encryptPushPayload(
   return Buffer.concat([header, ciphertext]);
 }
 
+/* ── Failure classification and safe diagnostics ────────────────────────── */
+
+export function classifyPushStatus(status: number): PushFailureCode {
+  if (status >= 200 && status < 300) return 'ok';
+  if (status === 0) return 'network';
+  if (status === 400) return 'bad_request';
+  if (status === 401) return 'unauthorized';
+  if (status === 403) return 'forbidden';
+  if (status === 404 || status === 410) return 'expired';
+  if (status === 413) return 'payload_too_large';
+  if (status === 429) return 'rate_limited';
+  if (status >= 500) return 'server_error';
+  if (status >= 400) return 'bad_request';
+  return 'server_error';
+}
+
+/** Remove control characters and registration/auth tokens before persistence or display. */
+export function sanitizePushResponseText(text: unknown, maxLen = 200, sensitiveEndpoints: string[] = []): string {
+  const safeMax = Number.isFinite(maxLen) ? Math.max(0, Math.floor(maxLen)) : 200;
+  let value = typeof text === 'string' ? text : String(text ?? '');
+  for (const endpoint of sensitiveEndpoints) {
+    if (typeof endpoint !== 'string' || endpoint.length === 0) continue;
+    try {
+      const parsed = new URL(endpoint);
+      const tokens = [endpoint, parsed.href, parsed.pathname];
+      for (const segment of parsed.pathname.split('/').filter((part) => part.length >= 8)) {
+        tokens.push(segment);
+        try { tokens.push(decodeURIComponent(segment)); } catch { /* retain encoded segment */ }
+      }
+      parsed.searchParams.forEach((part) => { if (part.length >= 8) tokens.push(part); });
+      for (const token of new Set(tokens.filter(Boolean))) {
+        value = value.split(token).join('<redacted-endpoint>');
+      }
+    } catch {
+      value = value.split(endpoint).join('<redacted-endpoint>');
+    }
+  }
+  value = value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ');
+  value = value.replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '<redacted-jwt>');
+  value = value.replace(/[A-Za-z0-9_-]{40,}/g, '<redacted>');
+  // Push endpoints contain a per-device registration token in their path.
+  // If a provider happens to echo a URL, preserve only its origin.
+  value = value.replace(/https?:\/\/[^\s"'<>]+/gi, (match) => {
+    try {
+      return `${new URL(match).origin}/<redacted-path>`;
+    } catch {
+      return '<redacted-url>';
+    }
+  });
+  return value.replace(/\s+/g, ' ').trim().slice(0, safeMax);
+}
+
+export function looksLikeTokenProblem(body: unknown): boolean {
+  return /badjwt|invalid\s*jwt|token|unauthori[sz]ed/i.test(typeof body === 'string' ? body : String(body ?? ''));
+}
+
+export interface PushFailureDescription {
+  code: PushFailureCode;
+  message: string;
+  retryable: boolean;
+  subscriptionUnusable: boolean;
+}
+
+export function describePushFailure(result: WebPushResult, endpoint?: string): PushFailureDescription {
+  const code = result.networkError ? 'network' : classifyPushStatus(result.status);
+  const sensitiveEndpoints = endpoint ? [endpoint] : [];
+  const detail = sanitizePushResponseText(result.responseText, 200, sensitiveEndpoints);
+  const network = sanitizePushResponseText(result.networkError, 160, sensitiveEndpoints);
+  const suffix = detail ? ` — ${detail}` : '';
+  let message: string;
+
+  if (code === 'ok') {
+    message = `push service accepted the notification (HTTP ${result.status})`;
+  } else if (code === 'expired') {
+    message = `subscription expired (HTTP ${result.status})${suffix}`;
+  } else if (code === 'unauthorized' || code === 'forbidden') {
+    message = `push service rejected VAPID authorization (HTTP ${result.status})${suffix}`;
+  } else if (code === 'network') {
+    message = `could not reach the push service${network ? ` (${network})` : ''}`;
+  } else {
+    const label = code === 'bad_request'
+      ? 'push service rejected the request'
+      : code === 'payload_too_large'
+        ? 'push payload is too large'
+        : code === 'rate_limited'
+          ? 'push service rate-limited the request'
+          : 'push service returned a server error';
+    message = `${label} (HTTP ${result.status})${suffix}`;
+  }
+
+  return {
+    code,
+    message: sanitizePushResponseText(message, 200),
+    retryable: code === 'network' || code === 'rate_limited' || code === 'server_error',
+    subscriptionUnusable: code === 'expired',
+  };
+}
+
 /* ── Delivery ─────────────────────────────────────────────────────────────── */
+
+function networkErrorMessage(err: unknown): string {
+  const outer = err && typeof err === 'object' ? err as { message?: unknown; cause?: unknown } : null;
+  const cause = outer?.cause;
+  const nestedMessage = cause && typeof cause === 'object' && 'message' in cause
+    ? (cause as { message?: unknown }).message
+    : null;
+  return sanitizePushResponseText(nestedMessage ?? outer?.message ?? err, 240) || 'network request failed';
+}
 
 export async function sendWebPush(opts: {
   endpoint: string;
@@ -173,18 +399,32 @@ export async function sendWebPush(opts: {
   fetchImpl?: typeof fetch;
 }): Promise<WebPushResult> {
   const doFetch = opts.fetchImpl ?? fetch;
+  // Encryption and VAPID/header construction are intentionally pre-flight.
+  // Bad stored key material throws here and never makes a network request.
   const body = encryptPushPayload(Buffer.from(JSON.stringify(opts.payload), 'utf8'), opts.keys);
+  const authorization = vapidAuthorizationHeader(opts.endpoint, opts.vapid);
 
-  const response = await doFetch(opts.endpoint, {
-    method: 'POST',
-    headers: {
-      TTL: String(opts.ttlSeconds ?? 24 * 60 * 60),
-      'Content-Type': 'application/octet-stream',
-      'Content-Encoding': 'aes128gcm',
-      Authorization: vapidAuthorizationHeader(opts.endpoint, opts.vapid),
-    },
-    body: new Uint8Array(body),
-  });
+  let response: Response;
+  try {
+    response = await doFetch(opts.endpoint, {
+      method: 'POST',
+      headers: {
+        TTL: String(opts.ttlSeconds ?? 24 * 60 * 60),
+        'Content-Type': 'application/octet-stream',
+        'Content-Encoding': 'aes128gcm',
+        Authorization: authorization,
+      },
+      body: new Uint8Array(body),
+    });
+  } catch (err) {
+    return {
+      status: 0,
+      ok: false,
+      expired: false,
+      responseText: '',
+      networkError: networkErrorMessage(err),
+    };
+  }
 
   const text = await response.text().catch(() => '');
   return {

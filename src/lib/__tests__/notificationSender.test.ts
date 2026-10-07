@@ -6,7 +6,7 @@
 // handling and 410-driven deactivation.
 
 import crypto from 'node:crypto';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   categoryAllowedByPreferences,
   planDelivery,
@@ -74,6 +74,10 @@ function makeDb(state: MemoryState): NotificationDb {
 }
 
 const vapid = generateVapidKeys();
+
+function oneTeacherState(subs: PushSubRow[], teachers: TeacherProfile[] = [{ id: 'teacher-1', name: 'Teacher' }]): MemoryState {
+  return { teachers, subs, prefs: [], notifications: [], recipients: [], deactivated: [], updates: [] };
+}
 
 describe('sendTeacherNotification orchestration', () => {
   it('delivers to every active device of each teacher', async () => {
@@ -242,5 +246,138 @@ describe('sendTeacherNotification orchestration', () => {
     const plan = planDelivery(teachers, prefs, [], 'announcement');
     expect(plan[0].status).toBe('skipped');
     expect(categoryAllowedByPreferences(undefined, 'announcement')).toBe(true);
+  });
+
+  it('records a sanitized HTTP 400 failure and keeps the subscription active', async () => {
+    const state = oneTeacherState([{ id: 's1', user_id: 'teacher-1', endpoint: 'https://push/device/secret-path', ...validKeys(), is_active: true }]);
+    const fetchImpl = (async () => ({ status: 400, text: async () => 'InvalidSubscription: Bad request' }) as Response) as unknown as typeof fetch;
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
+      db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' }, fetchImpl,
+    });
+    expect(summary.devicesFailed).toBe(1);
+    expect(summary.deliveryOk).toBe(false);
+    expect(summary.recipients[0]).toMatchObject({ status: 'failed', failureCode: 'bad_request' });
+    expect(summary.recipients[0].lastError).toContain('HTTP 400');
+    expect(summary.recipients[0].lastError).toContain('InvalidSubscription');
+    expect(summary.recipients[0].lastError).not.toContain('secret-path');
+    expect(state.deactivated).toEqual([]);
+  });
+
+  it('retires 404/410 subscriptions and records expired-device counts', async () => {
+    const state = oneTeacherState([{ id: 's1', user_id: 'teacher-1', endpoint: 'https://push/device/dead', ...validKeys(), is_active: true }]);
+    const fetchImpl = (async () => ({ status: 410, text: async () => 'Gone' }) as Response) as unknown as typeof fetch;
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
+      db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' }, fetchImpl,
+    });
+    expect(summary.devicesExpired).toBe(1);
+    expect(summary.deactivatedSubscriptions).toBe(1);
+    expect(summary.recipients[0].lastError).toContain('subscription expired (HTTP 410)');
+    expect(state.subs[0].is_active).toBe(false);
+  });
+
+  it('keeps rows and blames VAPID when a push service reports BadJwtToken', async () => {
+    const state = oneTeacherState([{ id: 's1', user_id: 'teacher-1', endpoint: 'https://push/device/jwt', ...validKeys(), is_active: true }]);
+    const fetchImpl = (async () => ({ status: 403, text: async () => 'BadJwtToken' }) as Response) as unknown as typeof fetch;
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
+      db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' }, fetchImpl,
+    });
+    expect(summary.devicesRejected).toBe(1);
+    expect(summary.deactivatedSubscriptions).toBe(0);
+    expect(state.subs[0].is_active).toBe(true);
+    expect(summary.recipients[0].lastError).toContain('check VAPID_PRIVATE_KEY/VAPID_SUBJECT');
+  });
+
+  it.each([401, 403])('preserves subscriptions for HTTP %i because it may be a VAPID deployment failure', async (status) => {
+    const state = oneTeacherState([{ id: 's1', user_id: 'teacher-1', endpoint: 'https://push/device/rejected', ...validKeys(), is_active: true }]);
+    const fetchImpl = (async () => ({ status, text: async () => 'subscription is not authorized' }) as Response) as unknown as typeof fetch;
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
+      db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' }, fetchImpl,
+    });
+    expect(summary.vapid.ok).toBe(true);
+    expect(summary.devicesRejected).toBe(1);
+    expect(summary.deactivatedSubscriptions).toBe(0);
+    expect(state.subs[0].is_active).toBe(true);
+    expect(summary.recipients[0].lastError).toContain('check VAPID_PRIVATE_KEY/VAPID_SUBJECT');
+  });
+
+  it('keeps a subscription when invalid VAPID is reported, even if the service says 403', async () => {
+    const state = oneTeacherState([{ id: 's1', user_id: 'teacher-1', endpoint: 'https://push/device/vapid', ...validKeys(), is_active: true }]);
+    const fetchImpl = (async () => ({ status: 403, text: async () => 'Forbidden' }) as Response) as unknown as typeof fetch;
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
+      db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: '[mailto:a@b.c](mailto:a@b.c)' }, fetchImpl,
+    });
+    expect(summary.vapid.ok).toBe(false);
+    expect(summary.deactivatedSubscriptions).toBe(0);
+    expect(state.subs[0].is_active).toBe(true);
+    expect(summary.recipients[0].lastError).toContain('VAPID_PRIVATE_KEY/VAPID_SUBJECT');
+  });
+
+  it.each([429, 503])('does not retire subscriptions for retryable HTTP %i responses', async (status) => {
+    const state = oneTeacherState([{ id: 's1', user_id: 'teacher-1', endpoint: 'https://push/device/retry', ...validKeys(), is_active: true }]);
+    const fetchImpl = (async () => ({ status, text: async () => 'try again' }) as Response) as unknown as typeof fetch;
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
+      db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' }, fetchImpl,
+    });
+    expect(summary.devicesFailed).toBe(1);
+    expect(summary.deactivatedSubscriptions).toBe(0);
+    expect(state.subs[0].is_active).toBe(true);
+  });
+
+  it('classifies DNS failure as network (not expired) and keeps the row', async () => {
+    const state = oneTeacherState([{ id: 's1', user_id: 'teacher-1', endpoint: 'https://push/device/dns', ...validKeys(), is_active: true }]);
+    const fetchImpl = (async () => { throw new Error('getaddrinfo ENOTFOUND push.example.test'); }) as unknown as typeof fetch;
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
+      db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' }, fetchImpl,
+    });
+    expect(summary.recipients[0].failureCode).toBe('network');
+    expect(summary.devicesExpired).toBe(0);
+    expect(summary.deactivatedSubscriptions).toBe(0);
+    expect(state.subs[0].is_active).toBe(true);
+  });
+
+  it('handles malformed stored subscription keys as pre-flight failures without a request', async () => {
+    const state = oneTeacherState([{ id: 's1', user_id: 'teacher-1', endpoint: 'https://push/device/bad-key', p256dh: 'bad', auth: 'bad', is_active: true }]);
+    const fetchImpl = vi.fn(async () => ({ status: 201, text: async () => '' }) as Response) as unknown as typeof fetch;
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
+      db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' }, fetchImpl,
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(summary.devicesFailed).toBe(1);
+    expect(summary.devicesExpired).toBe(0);
+    expect(state.deactivated).toEqual([]);
+    expect(summary.recipients[0].lastError).toContain('pre-flight');
+  });
+
+  it('reports partial multi-device success without losing per-device counts', async () => {
+    const state = oneTeacherState([
+      { id: 's1', user_id: 'teacher-1', endpoint: 'https://push/device/one', ...validKeys(), is_active: true },
+      { id: 's2', user_id: 'teacher-1', endpoint: 'https://push/device/two', ...validKeys(), is_active: true },
+    ]);
+    let requestIndex = 0;
+    const fetchImpl = (async () => ({ status: ++requestIndex === 1 ? 201 : 500, text: async () => 'Down' }) as Response) as unknown as typeof fetch;
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
+      db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' }, fetchImpl,
+    });
+    expect(summary).toMatchObject({ deliveryOk: true, sent: 1, devicesDelivered: 1, devicesFailed: 1 });
+    expect(state.updates[0].patch).toMatchObject({ status: 'sent', delivered_devices: 1, failed_devices: 1 });
+  });
+
+  it('returns an all-zero outcome for an empty audience', async () => {
+    const state = oneTeacherState([], []);
+    const summary = await sendTeacherNotification({
+      request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
+      db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' },
+    });
+    expect(summary.outcome).toEqual({ recipients: 0, devices: 0, sent: 0, failed: 0, expired: 0, rejected: 0, skipped: 0, noDevices: 0 });
+    expect(summary.deliveryOk).toBe(false);
   });
 });

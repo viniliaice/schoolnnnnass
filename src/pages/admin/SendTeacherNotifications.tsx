@@ -3,7 +3,9 @@ import { BellRing, Send, Users } from 'lucide-react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
 import { supabase, isPlaceholderEnv } from '../../lib/supabase';
+import { readCurrentAccessToken } from '../../lib/auth';
 import { getUsersByRole } from '../../lib/db/profiles';
+import { PushDiagnosticsPanel } from '../../components/admin/PushDiagnosticsPanel';
 import { CLASSES, type User } from '../../types';
 import { timeAgo } from '../../utils/timeAgo';
 import type { SendSummary } from '../../../server/lib/notificationSender';
@@ -39,6 +41,7 @@ interface HistoryRow {
   created_at: string;
   senderName: string;
   recipientSummary: string;
+  failureDetail: string | null;
 }
 
 /**
@@ -91,25 +94,31 @@ export function SendTeacherNotifications() {
           ? supabase.from('profiles').select('id, name').in('id', senderIds)
           : Promise.resolve({ data: [] as any[], error: null }),
         notifIds.length
-          ? supabase.from('notification_recipients').select('notification_id, status').in('notification_id', notifIds)
+          ? supabase
+              .from('notification_recipients')
+              .select('notification_id, status, last_error, delivered_devices, failed_devices')
+              .in('notification_id', notifIds)
           : Promise.resolve({ data: [] as any[], error: null }),
       ]);
 
       const senderNames = new Map(((senderRes.data || []) as any[]).map((p) => [p.id, p.name]));
-      const byNotif = new Map<string, string[]>();
+      const byNotif = new Map<string, any[]>();
       for (const r of (recipRes.data || []) as any[]) {
         const list = byNotif.get(r.notification_id) ?? [];
-        list.push(r.status);
+        list.push(r);
         byNotif.set(r.notification_id, list);
       }
 
       setHistory(
         rows.map((row) => {
-          const statuses = byNotif.get(row.id) ?? [];
-          const sent = statuses.filter((s) => s === 'sent').length;
-          const noDev = statuses.filter((s) => s === 'no_devices').length;
-          const skipped = statuses.filter((s) => s === 'skipped').length;
-          const failed = statuses.filter((s) => s === 'failed').length;
+          const recipients = byNotif.get(row.id) ?? [];
+          const sent = recipients.filter((r) => r.status === 'sent').length;
+          const noDev = recipients.filter((r) => r.status === 'no_devices').length;
+          const skipped = recipients.filter((r) => r.status === 'skipped').length;
+          const failed = recipients.filter((r) => r.status === 'failed').length;
+          const deliveredDevices = recipients.reduce((sum, r) => sum + (Number(r.delivered_devices) || 0), 0);
+          const failedDevices = recipients.reduce((sum, r) => sum + (Number(r.failed_devices) || 0), 0);
+          const failureDetail = recipients.find((r) => typeof r.last_error === 'string' && r.last_error.trim())?.last_error ?? null;
           return {
             id: row.id,
             title: row.title,
@@ -118,7 +127,8 @@ export function SendTeacherNotifications() {
             category: row.category,
             created_at: row.created_at,
             senderName: senderNames.get(row.sender_id) || 'System',
-            recipientSummary: `${statuses.length} recipient(s) · ${sent} sent · ${noDev} no devices · ${skipped} skipped · ${failed} failed`,
+            recipientSummary: `${recipients.length} recipient(s) · ${sent} sent · ${deliveredDevices} delivered / ${failedDevices} failed devices · ${noDev} no devices · ${skipped} skipped · ${failed} failed`,
+            failureDetail,
           };
         }),
       );
@@ -169,12 +179,14 @@ export function SendTeacherNotifications() {
         setResult(summary);
         addToast({ type: 'info', title: 'Preview mode', description: 'Simulated send — deploy to Vercel for real push delivery.' });
       } else {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData.session?.access_token;
-        if (!token) {
-          setError('Your session has expired — sign in again.');
+        const currentSession = await readCurrentAccessToken();
+        if (currentSession.status !== 'ready') {
+          setError(currentSession.status === 'unavailable'
+            ? 'Could not validate your session. Please try again.'
+            : 'Your session has expired — sign in again.');
           return;
         }
+        const token = currentSession.accessToken;
         const res = await fetch('/api/notifications/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -185,10 +197,28 @@ export function SendTeacherNotifications() {
           setError(json?.error || `Send failed (HTTP ${res.status}).`);
           return;
         }
-        setResult(json as SendSummary);
-        addToast({ type: 'success', title: 'Notification sent', description: `${json.devicesDelivered} device(s) reached.` });
+        const summary = json as SendSummary;
+        setResult(summary);
+        const deliveryOk = summary.deliveryOk ?? summary.devicesDelivered > 0;
+        const attemptedDevices = summary.outcome?.devices ?? (summary.devicesDelivered + summary.devicesFailed);
+        const firstFailure = summary.recipients?.find((recipient) => recipient.lastError)?.lastError;
+        if (deliveryOk) {
+          addToast({ type: 'success', title: 'Notification delivered', description: `${summary.devicesDelivered} device(s) accepted the push.` });
+        } else if (attemptedDevices > 0) {
+          addToast({ type: 'error', title: 'Not delivered', description: firstFailure || 'The push service did not accept a device notification.' });
+        } else {
+          addToast({
+            type: 'info',
+            title: 'Nothing sent',
+            description: 'No teacher in this audience has an active device subscription yet.',
+          });
+        }
       }
       await loadHistory();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Notification could not be sent.';
+      setError(message);
+      addToast({ type: 'error', title: 'Notification send failed', description: message });
     } finally {
       setBusy(false);
     }
@@ -342,14 +372,26 @@ export function SendTeacherNotifications() {
             </button>
             {error && <p className="text-sm text-rose-600">{error}</p>}
             {result && (
-              <p className="rounded-lg bg-emerald-50 p-3 text-sm text-emerald-700">
-                Sent to {result.sent} teacher(s) on {result.devicesDelivered} device(s) · {result.noDevices} without
-                devices · {result.skipped} skipped by preferences · {result.failed} failed.
-              </p>
+              <div
+                className={`rounded-lg border p-3 text-sm ${result.deliveryOk || result.devicesDelivered > 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : result.devicesFailed > 0 ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-sky-200 bg-sky-50 text-sky-800'}`}
+                data-testid="send-result-summary"
+              >
+                <p className="font-semibold">
+                  {result.deliveryOk || result.devicesDelivered > 0 ? 'Delivery accepted' : result.devicesFailed > 0 ? 'Not delivered' : 'Nothing sent'} · {result.sent}/{result.totalRecipients} teacher(s) delivered.
+                </p>
+                <p className="mt-1">
+                  Devices: {result.devicesDelivered} delivered · {result.devicesFailed} failed · {result.devicesExpired} expired · {result.devicesRejected} rejected · {result.noDevices} no devices · {result.skipped} skipped.
+                </p>
+                {(result.recipients?.find((recipient) => recipient.lastError)?.lastError || result.vapid?.problems?.[0]) && (
+                  <p className="mt-1 break-words">Reason: {result.recipients?.find((recipient) => recipient.lastError)?.lastError || result.vapid?.problems?.[0]}</p>
+                )}
+              </div>
             )}
           </div>
         </section>
       </div>
+
+      <PushDiagnosticsPanel />
 
       {/* History */}
       <section className="rounded-2xl border border-slate-200 bg-white p-6" data-testid="admin-notification-history">
@@ -374,7 +416,10 @@ export function SendTeacherNotifications() {
                   <tr key={row.id} className="align-top">
                     <td className="py-3 pr-4 font-medium text-slate-800">{row.title}</td>
                     <td className="max-w-[240px] py-3 pr-4 text-slate-600">{row.body}</td>
-                    <td className="py-3 pr-4 text-slate-600">{row.recipientSummary}</td>
+                    <td className="py-3 pr-4 text-slate-600">
+                      {row.recipientSummary}
+                      {row.failureDetail && <p className="mt-1 max-w-[360px] break-words text-xs text-rose-700" data-testid="history-failure-detail">{row.failureDetail}</p>}
+                    </td>
                     <td className="py-3 pr-4 text-slate-600">{row.senderName}</td>
                     <td className="whitespace-nowrap py-3 pr-4 text-slate-500">{timeAgo(row.created_at)}</td>
                     <td className="py-3 text-xs text-slate-500">{row.category}</td>
@@ -450,13 +495,37 @@ async function previewSimulatedSend(
     failed: 0,
     devicesDelivered: targets.length,
     devicesFailed: 0,
+    devicesExpired: 0,
+    devicesRejected: 0,
     deactivatedSubscriptions: 0,
+    deliveryOk: targets.length > 0,
+    vapid: {
+      ok: true,
+      subjectValid: true,
+      subjectScheme: 'mailto' as const,
+      privateKeyBytes: 0,
+      publicKeyBytes: null,
+      problems: [],
+    },
+    outcome: {
+      recipients: targets.length,
+      devices: targets.length,
+      sent: targets.length,
+      failed: 0,
+      expired: 0,
+      rejected: 0,
+      skipped: 0,
+      noDevices: 0,
+    },
     recipients: targets.map((t) => ({
       userId: t.id,
       teacherName: t.name,
       status: 'sent' as const,
       deliveredDevices: 1,
       failedDevices: 0,
+      expiredDevices: 0,
+      rejectedDevices: 0,
+      failureCode: null,
       lastError: null,
     })),
   };
