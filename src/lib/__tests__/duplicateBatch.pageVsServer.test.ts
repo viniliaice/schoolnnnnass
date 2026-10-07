@@ -153,6 +153,24 @@ describe('page confidence vs the database batch contract', () => {
     expect(server.exclusionCodes).toContain('gov_id_conflict');
   });
 
+  it('never lets the divergence reach execution: a pair the page approves but the server excludes is absent from the preview rows', async () => {
+    // The attendance-collision pair is "High Confidence" to the page and
+    // blocked to the database. The batch is driven by the preview rows, so the
+    // only thing that matters is whether the pair appears in them.
+    const report = await db.rpc<{ rows: Array<{ pairKey: string }>; summary: Record<string, number> }>(
+      'get_safe_duplicate_batch',
+      { p_limit: 500, p_offset: 0, p_include_excluded: true },
+    );
+    const keys = new Set((report.rows ?? []).map((r) => r.pairKey));
+    expect(keys.has('att-k>att-r')).toBe(false);
+    expect(keys.has('att-r>att-k')).toBe(false);
+    // …while the pair the page under-rates IS there, because the server proved it.
+    expect(keys.has('gov-k>gov-r')).toBe(true);
+    // And the summary the UI presents as authoritative is the server's own.
+    expect(typeof report.summary.safeCount).toBe('number');
+    expect(report.summary.blockedCount).toBeGreaterThanOrEqual(1);
+  });
+
   it('treats the page label as advisory: only the database verdict carries a fingerprint', async () => {
     const { page, server } = await compare('agree-k', 'agree-r');
     // The client classifier returns a boolean hint. It has no way to prove the

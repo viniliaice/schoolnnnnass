@@ -2,50 +2,60 @@
 /**
  * Operator runner for the Duplicate Students → "Merge All Safe Duplicates" batch.
  *
- * This script is a thin, auditable front-end for the SAME two RPCs the admin
- * page uses. It decides NOTHING: which pairs are safe, which Student ID is
- * kept, which field survives and when a pair must be refused are all computed
- * by the SECURITY DEFINER functions in
+ * This script is a thin, auditable front-end for the SAME RPCs the admin page
+ * uses. It decides NOTHING: which pairs are safe, which Student ID is kept,
+ * which field survives and when a pair must be refused are all computed by the
+ * SECURITY DEFINER functions in
  * supabase/migrations/20260925_safe_duplicate_batch.sql. The list this script
  * sends back to the server is advisory only — the server recomputes
  * eligibility from live rows, locks the pair, revalidates the fingerprint and
  * refuses anything it does not consider safe.
  *
- *   preview_safe_duplicate_batch()  → dry run, zero writes, exact pairs
- *   merge_safe_duplicate_batch()    → ONE atomic chunk per call
+ *   preview_safe_duplicate_batch()        → dry run, zero writes, exact pairs
+ *   merge_safe_duplicate_batch()          → ONE atomic chunk per call
+ *   verify_safe_duplicate_batch_state()   → read-only post-run verification
  *
  * ── Targets ────────────────────────────────────────────────────────────────
  *   --target pglite     (default) Real PostgreSQL (PGlite, in-process WASM)
  *                       with the SHIPPED migrations applied and a
  *                       reproducible reproduction of the reported screen
  *                       (254 safe / 24 needs review / 0 blocked / 8 merged).
- *                       Touches no production data — used to rehearse the run
- *                       and to prove the preview writes nothing.
+ *                       Touches no production data — use it to rehearse.
  *
  *   --target supabase   The live project. Requires:
  *                         SUPABASE_URL          https://<ref>.supabase.co
  *                         SUPABASE_ANON_KEY     the public anon key
- *                         SUPABASE_ADMIN_JWT    an ACCESS TOKEN for a user whose
- *                                               public.profiles.role = 'admin'
- *                       The service_role key does NOT work: the RPCs resolve
- *                       the actor with auth.uid(), which a service-role call
- *                       does not carry, and they refuse a NULL role.
+ *                       plus ONE genuine admin identity:
+ *                         SUPABASE_ADMIN_EMAIL + SUPABASE_ADMIN_PASSWORD
+ *                           → the runner signs in with signInWithPassword(),
+ *                             exactly as the web app does, and pins every
+ *                             request to that access token
+ *                         or SUPABASE_ADMIN_JWT
+ *                           → an existing admin access token (browser session:
+ *                             supabase.auth.getSession().data.session.access_token)
+ *
+ *                       The service_role key deliberately does NOT work and
+ *                       must not be used. The RPCs resolve the actor with
+ *                       auth.uid(); a service-role call carries no user, so
+ *                       current_profile_role() is NULL and every RPC refuses.
+ *                       This runner does not work around that — it obtains a
+ *                       real authenticated admin identity instead.
  *
  * ── Usage ──────────────────────────────────────────────────────────────────
  *   # 1. DRY RUN — always safe, always first. Never writes.
  *   node scripts/safe-duplicate-batch-run.mjs
  *
- *   # 2. Execute the chunked batch (requires the explicit --yes).
+ *   # 2. Execute (preflight must pass; requires the explicit --yes).
  *   node scripts/safe-duplicate-batch-run.mjs --execute --yes
  *
  *   # 3. Re-run the very same batch to prove idempotency.
  *   node scripts/safe-duplicate-batch-run.mjs --execute --yes --rerun
  *
  *   # Against production
- *   SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_ADMIN_JWT=... \
+ *   SUPABASE_URL=... SUPABASE_ANON_KEY=... \
+ *   SUPABASE_ADMIN_EMAIL=admin@school.example SUPABASE_ADMIN_PASSWORD=... \
  *     node scripts/safe-duplicate-batch-run.mjs --target supabase
- *   SUPABASE_URL=... SUPABASE_ANON_KEY=... SUPABASE_ADMIN_JWT=... \
- *     node scripts/safe-duplicate-batch-run.mjs --target supabase --execute --yes
+ *   ... --target supabase --execute --yes --rerun
  *
  * ── Options ────────────────────────────────────────────────────────────────
  *   --chunk N            chunk size per atomic transaction (server clamps 1..50)
@@ -56,10 +66,13 @@
  *   --merged N           pglite only: number of already-merged audit rows
  *   --keep-db            pglite only: keep the database open at the end
  *
- * Exit code is non-zero if any invariant the script can check is violated.
+ * Exit code is non-zero if any preflight check fails or any post-run invariant
+ * is violated.
  */
 
 import { setTimeout as delay } from 'node:timers/promises';
+import { pathToFileURL } from 'node:url';
+import { REQUIRED_RPCS, runPreflight } from './lib/safeBatchPreflight.mjs';
 
 const CONFIRM_PHRASE = 'MERGE SAFE DUPLICATES';
 
@@ -128,10 +141,13 @@ async function openPglite(opts) {
   const harness = await import('../src/lib/__tests__/pgDuplicateBatchHarness.ts');
   if (!(await harness.pgliteAvailable())) throw new Error('@electric-sql/pglite is not installed — run npm install.');
   const db = await harness.createDuplicateBatchTestDb();
-  await seedReproduction(db, opts);
+  const actorLabel = await seedReproduction(db, opts);
   return {
     kind: 'pglite',
     db,
+    supabaseUrl: null,
+    accessToken: 'pglite-session',
+    actorLabel,
     rpc: (fn, params) => db.rpc(fn, params),
     query: (sql, params) => db.query(sql, params),
     /** Content hash of every public table — used to prove a dry run wrote nothing. */
@@ -158,29 +174,55 @@ async function openPglite(opts) {
 }
 
 async function openSupabase() {
-  const url = process.env.SUPABASE_URL;
-  const anon = process.env.SUPABASE_ANON_KEY;
-  const jwt = process.env.SUPABASE_ADMIN_JWT;
-  const missing = [url && 'SUPABASE_URL', anon && 'SUPABASE_ANON_KEY', jwt && 'SUPABASE_ADMIN_JWT'].filter(Boolean);
-  if (missing.length < 3) {
-    throw new Error(`--target supabase needs SUPABASE_URL, SUPABASE_ANON_KEY and SUPABASE_ADMIN_JWT (missing: ${
-      ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_ADMIN_JWT'].filter((k) => !process.env[k]).join(', ')})`);
+  const url = process.env.SUPABASE_URL ?? '';
+  const anon = process.env.SUPABASE_ANON_KEY ?? '';
+  const email = process.env.SUPABASE_ADMIN_EMAIL ?? '';
+  const password = process.env.SUPABASE_ADMIN_PASSWORD ?? '';
+  const jwt = process.env.SUPABASE_ADMIN_JWT ?? '';
+
+  // No URL / no key: return a context that fails the preflight honestly rather
+  // than throwing before the operator sees WHICH check failed.
+  if (!url || !anon) {
+    const fail = async (fn) => { throw new Error(`cannot reach the database: ${!url ? 'SUPABASE_URL is not set' : 'SUPABASE_ANON_KEY is not set'} (called ${fn})`); };
+    return {
+      kind: 'supabase', db: null, supabaseUrl: url || null, accessToken: null, actorLabel: null,
+      rpc: fail, query: null, snapshot: null, close: async () => {},
+    };
   }
+
   const { createClient } = await import('@supabase/supabase-js');
-  const supabase = createClient(url, anon, {
-    auth: { persistSession: false, autoRefreshToken: false },
-    global: { headers: { Authorization: `Bearer ${jwt}` } },
-  });
+  const baseOptions = { auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false } };
+  const base = createClient(url, anon, baseOptions);
+
+  // Obtain a GENUINE authenticated admin identity. This is the project's own
+  // pattern (src/lib/supabase.ts createAuthedClient + profiles.ts createUser):
+  // sign in, then pin every request to that user's access token.
+  let token = jwt || null;
+  let actorLabel = jwt ? 'SUPABASE_ADMIN_JWT (pre-existing admin access token)' : null;
+  if (!token && email && password) {
+    const { data, error } = await base.auth.signInWithPassword({ email, password });
+    if (error) throw new Error(`admin sign-in failed: ${error.message}`);
+    token = data.session.access_token;
+    actorLabel = `signed in as ${email}`;
+  }
+
+  const client = token
+    ? createClient(url, anon, { ...baseOptions, accessToken: async () => token })
+    : base;
+
   return {
     kind: 'supabase',
     db: null,
+    supabaseUrl: url,
+    accessToken: token,
+    actorLabel,
     async rpc(fn, params) {
-      const { data, error } = await supabase.rpc(fn, params);
+      const { data, error } = await client.rpc(fn, params);
       if (error) throw new Error(`${fn}: ${error.message}`);
       return data;
     },
-    query: async () => { throw new Error('Direct SQL is not available against a live project; use the Supabase SQL editor.'); },
-    snapshot: async () => null,
+    query: null,
+    snapshot: null,
     close: async () => {},
   };
 }
@@ -194,6 +236,7 @@ async function seedReproduction(db, opts) {
   const ADMIN_UID = '11111111-1111-4111-8111-111111111111';
 
   await seedProfile(db, 'admin-1', 'admin', 'Batch Administrator', ADMIN_UID);
+  await seedProfile(db, 'teacher-1', 'teacher', 'Not An Admin', '22222222-2222-4222-8222-222222222222');
   await seedProfile(db, 'staff-1', 'office', 'Gate Officer');
   await db.query(`INSERT INTO public.academic_years (id, name, "isCurrent") VALUES ('ay-2026','2026',true) ON CONFLICT DO NOTHING`);
   await db.query(`INSERT INTO public.terms (id, name, "academicYearId", "isCurrent") VALUES ('term-1','Term 1','ay-2026',true) ON CONFLICT DO NOTHING`);
@@ -299,9 +342,18 @@ async function seedReproduction(db, opts) {
   }
   process.stdout.write('\r  seeding done.                                          \n');
   await db.setAuthUid(ADMIN_UID);
+  return 'admin-1 (profiles.role = admin, auth uid set in this PGlite session)';
 }
 
 // ── Report rendering ─────────────────────────────────────────────────────────
+function renderPreflight(preflight) {
+  h1(preflight.ok ? 'Preflight — all checks passed' : 'Preflight — FAILED');
+  for (const r of preflight.results) {
+    console.log(`  ${r.ok ? c(GREEN, '✓') : c(RED, '✗')} ${r.label.padEnd(44)} ${c(DIM, r.detail)}`);
+  }
+  return preflight.ok;
+}
+
 function renderPreview(preview, opts) {
   const s = preview.summary ?? {};
   h1('Safe preview (dry run) — computed by the database, not by this script');
@@ -334,10 +386,8 @@ function renderPreview(preview, opts) {
   line('');
   if (failed.length === 0) ok('every server-side safety assertion holds across all eligible rows');
   else for (const [k] of failed) bad(`safety assertion failed: ${k}`);
-  if (preview.dryRun === true && preview.writesPerformed === 0) ok('preview reports dryRun=true, writesPerformed=0');
-  else bad('preview did not report a clean dry run');
 
-  const sample = (preview.rows ?? []).slice(0, opts.sampleRows ?? 3);
+  const sample = (preview.rows ?? []).slice(0, 3);
   if (sample.length > 0) {
     line('');
     line(c(BOLD, '  Sample of the eligible pairs (merge direction + preserved history)'));
@@ -360,6 +410,15 @@ function renderPreview(preview, opts) {
     if ((preview.rows ?? []).length > sample.length) console.log(`    … and ${(preview.rows ?? []).length - sample.length} more`);
   }
   return failed.length === 0;
+}
+
+function renderVerifiedBlock(preview) {
+  const s = preview.summary ?? {};
+  line('');
+  console.log(c(BOLD, '  DATABASE VERIFIED: ') + c(GREEN, `${s.safeCount ?? 0} pairs currently eligible for safe merge.`));
+  console.log(`  ${c(AMBER, `${s.needsReviewCount ?? 0} pairs require individual review.`)}`);
+  console.log(`  ${s.blockedCount ? c(RED, `${s.blockedCount} blocked.`) : `${s.blockedCount ?? 0} blocked.`}`);
+  console.log('  ' + c(RED, 'This operation will modify student records.'));
 }
 
 async function runChunks(ctx, preview, opts, label) {
@@ -405,50 +464,47 @@ async function runChunks(ctx, preview, opts, label) {
   kv('skipped after re-check', acc.skipped.length);
   kv('blocked by the server', c(acc.blocked.length ? RED : '', acc.blocked.length));
   kv('failed', c(acc.failed.length ? RED : '', acc.failed.length));
-  if (acc.skipped.length) {
-    const byReason = {};
-    for (const s of acc.skipped) byReason[s.reason ?? 'unknown'] = (byReason[s.reason ?? 'unknown'] ?? 0) + 1;
-    kv('skip reasons', Object.entries(byReason).map(([k, v]) => `${k}=${v}`).join(', '));
-  }
-  if (acc.blocked.length) {
-    const byReason = {};
-    for (const b of acc.blocked) byReason[b.reason ?? 'unknown'] = (byReason[b.reason ?? 'unknown'] ?? 0) + 1;
-    kv('block reasons', Object.entries(byReason).map(([k, v]) => `${k}=${v}`).join(', '));
+  for (const [key, list] of [['skip reasons', acc.skipped], ['block reasons', acc.blocked]]) {
+    if (list.length) {
+      const byReason = {};
+      for (const item of list) byReason[item.reason ?? 'unknown'] = (byReason[item.reason ?? 'unknown'] ?? 0) + 1;
+      kv(key, Object.entries(byReason).map(([k, v]) => `${k}=${v}`).join(', '));
+    }
   }
   for (const f of acc.failed.slice(0, 10)) bad(`failure: ${JSON.stringify(f)}`);
-  return { merged: acc.merged.length, skipped: acc.skipped.length, blocked: acc.blocked.length, failed: acc.failed.length, chunks: chunk, entries: acc.merged };
+  return { merged: acc.merged.length, skipped: acc.skipped.length, blocked: acc.blocked.length, failed: acc.failed.length, chunks: chunk };
 }
 
-async function renderPostState(ctx) {
-  h1('Database state after the batch (read back from the server)');
-  const report = await ctx.rpc('get_safe_duplicate_batch', { p_limit: 1, p_offset: 0, p_include_excluded: false });
-  const s = report.summary ?? {};
-  kv('candidate pairs remaining', s.candidatePairs ?? '?');
-  kv('still eligible', c(s.safeCount ? RED : GREEN, s.safeCount ?? 0));
-  kv('needs individual review', c(AMBER, s.needsReviewCount ?? 0));
-  kv('blocked', c(s.blockedCount ? RED : GREEN, s.blockedCount ?? 0));
-
-  if (ctx.kind === 'pglite') {
-    const q = async (sql) => (await ctx.query(sql)).rows[0];
-    kv('students', (await q('SELECT count(*)::INT n FROM public.students')).n);
-    kv('merge audits (total)', (await q('SELECT count(*)::INT n FROM public.student_merge_audits')).n);
-    kv('  └ stamped safe_batch', (await q(`SELECT count(*)::INT n FROM public.student_merge_audits WHERE merge_kind='safe_batch'`)).n);
-    kv('  └ pre-existing individual', (await q(`SELECT count(*)::INT n FROM public.student_merge_audits WHERE merge_kind='individual'`)).n);
-    kv('duplicate groups (page count)', (await q('SELECT count(*)::INT n FROM public.get_duplicate_candidates()')).n);
-    kv('batch runs', (await q('SELECT count(*)::INT n FROM public.student_merge_batches')).n);
-    kv('audit_logs (merge_batch)', (await q(`SELECT count(*)::INT n FROM public.audit_logs WHERE action='students.merge_batch'`)).n);
-    kv('orphaned child rows', (await q(`
-      SELECT (SELECT count(*) FROM public.exams e LEFT JOIN public.students s ON s.id=e."studentId" WHERE s.id IS NULL)
-           + (SELECT count(*) FROM public.attendance a LEFT JOIN public.students s ON s.id=a."studentId" WHERE s.id IS NULL)
-           + (SELECT count(*) FROM public.homework hw LEFT JOIN public.students s ON s.id=hw."studentId" WHERE s.id IS NULL)
-           + (SELECT count(*) FROM public.quiz_attempts qa LEFT JOIN public.students s ON s.id=qa."studentId" WHERE s.id IS NULL)
-           + (SELECT count(*) FROM public.report_comments rc LEFT JOIN public.students s ON s.id=rc."studentId" WHERE s.id IS NULL)
-           + (SELECT count(*) FROM public.release_log rl LEFT JOIN public.students s ON s.id=rl."studentId" WHERE s.id IS NULL)
-           + (SELECT count(*) FROM public.student_promotions sp LEFT JOIN public.students s ON s.id=sp."studentId" WHERE s.id IS NULL)
-           + (SELECT count(*) FROM public.student_enrollments se LEFT JOIN public.students s ON s.id=se."studentId" WHERE s.id IS NULL)
-           ::INT AS n`)).n);
+/** Read back the state the batch promised, using the read-only server RPC so
+ *  the same verification runs in rehearsal AND against production. */
+async function renderPostState(ctx, label = 'Post-run verification (read back from the server)') {
+  h1(label);
+  let v;
+  try {
+    v = await ctx.rpc('verify_safe_duplicate_batch_state', {});
+  } catch (e) {
+    bad(`verify_safe_duplicate_batch_state() failed: ${e?.message ?? e}`);
+    bad('apply supabase/migrations/20261007_safe_batch_post_run_verification.sql, then re-verify');
+    return null;
   }
-  return report;
+  const a = v.authoritative ?? {};
+  kv('still eligible (safe)', c(a.safeEligible ? RED : GREEN, a.safeEligible));
+  kv('needs individual review', c(AMBER, a.needsReview));
+  kv('blocked', c(a.blocked ? RED : GREEN, a.blocked));
+  kv('candidate pairs remaining', a.candidatePairs);
+  kv('students', v.students);
+  kv('merge audits (total)', v.audits?.total);
+  kv('  └ safe_batch', v.audits?.safeBatch);
+  kv('  └ individual', v.audits?.individual);
+  kv('  └ distinct removed IDs', v.audits?.distinctRemovedIds);
+  kv('batch runs', v.batches?.runs);
+  kv('  └ merged / skipped / blocked', `${v.batches?.mergedSum} / ${v.batches?.skippedSum} / ${v.batches?.blockedSum}`);
+  kv('students.merge_batch audit logs', v.batchAuditLogs);
+  const integrity = v.integrity ?? {};
+  kv('orphaned child rows', c(integrity.orphanedChildRows ? RED : GREEN, integrity.orphanedChildRows));
+  if (integrity.orphanedChildRows) bad(`orphan detail: ${JSON.stringify(integrity.orphanDetail)}`);
+  kv('students w/ >1 open enrollment', c(integrity.studentsWithMultipleOpenEnrollments ? RED : GREEN, integrity.studentsWithMultipleOpenEnrollments));
+  return v;
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -463,47 +519,70 @@ async function main() {
   const ctx = opts.target === 'pglite' ? await openPglite(opts) : await openSupabase();
   const problems = [];
   try {
+    // ── 0. PREFLIGHT — refuses everything downstream if any check fails ──────
+    const preflight = await runPreflight(ctx, { yes: opts.yes, execution: opts.execute });
+    const preflightOk = renderPreflight(preflight);
+    if (!preflightOk) {
+      line('');
+      bad('preflight failed — refusing to continue. No preview result is treated as authorisation.');
+      process.exitCode = 1;
+      return;
+    }
+    const preview = preflight.preview;
+
     // ── 1. DRY RUN ───────────────────────────────────────────────────────────
-    const before = await ctx.snapshot();
-    const preview = await ctx.rpc('preview_safe_duplicate_batch', { p_limit: 2000 });
-    const after = await ctx.snapshot();
+    // The preview already ran inside the preflight, so the zero-write proof is
+    // the digests IT captured around that call — comparing anything now would
+    // compare two post-preview states and prove nothing.
     const assertionsOk = renderPreview(preview, opts);
     if (!assertionsOk) problems.push('server-side safety assertions failed');
-
-    if (before && after) {
-      if (before.digest === after.digest) {
-        ok(`preview wrote nothing — ${before.tables.length} public tables byte-identical before and after`);
+    const snap = preflight.previewSnapshot;
+    if (snap) {
+      if (snap.before.digest === snap.after.digest) {
+        ok(`preview wrote nothing — ${snap.before.tables.length} public tables byte-identical immediately before and after the call`);
       } else {
         bad('preview MODIFIED the database');
         problems.push('preview was not read-only');
       }
+    } else {
+      // No SQL access on this target: fall back to the server's own claim.
+      ok(`preview reported dryRun=${preview.dryRun}, writesPerformed=${preview.writesPerformed} (no SQL access to digest tables on this target)`);
     }
 
     if (!opts.execute) {
+      renderVerifiedBlock(preview);
       line('');
       line(c(AMBER, '  Dry run only. Nothing was changed. Re-run with --execute --yes to merge.'));
-    } else {
-      // ── 2. EXECUTE ─────────────────────────────────────────────────────────
-      const expected = preview.summary?.safeCount ?? 0;
-      const first = await runChunks(ctx, preview, opts, 'Batch merge');
-      const post = await renderPostState(ctx);
+      return;
+    }
 
+    // ── 2. EXECUTE ───────────────────────────────────────────────────────────
+    renderVerifiedBlock(preview);
+    const expected = preview.summary?.safeCount ?? 0;
+    const first = await runChunks(ctx, preview, opts, 'Batch merge');
+    const post = await renderPostState(ctx);
+    if (post) {
       if (first.merged !== expected) problems.push(`merged ${first.merged} but the preview identified ${expected}`);
       if (first.failed > 0) problems.push(`${first.failed} pair(s) failed`);
-      if ((post.summary?.safeCount ?? 0) !== 0) problems.push(`${post.summary.safeCount} pair(s) are still eligible after the batch`);
+      if (post.authoritative?.safeEligible !== 0) problems.push(`${post.authoritative.safeEligible} pair(s) are still eligible after the batch`);
+      if (post.authoritative?.needsReview !== (preview.summary?.needsReviewCount ?? 0)) {
+        problems.push(`Needs Review changed from ${preview.summary?.needsReviewCount} to ${post.authoritative?.needsReview} — it must stay untouched`);
+      }
+      if (post.integrity?.orphanedChildRows) problems.push(`${post.integrity.orphanedChildRows} orphaned child row(s)`);
+      if (post.audits?.safeBatch !== first.merged) problems.push(`${post.audits?.safeBatch} safe_batch audit rows but ${first.merged} merges`);
+    }
 
-      // ── 3. IDEMPOTENCY ─────────────────────────────────────────────────────
-      if (opts.rerun) {
-        const again = await runChunks(ctx, preview, opts, 'Idempotency re-run (same batch id, same reviewed list)');
-        if (again.merged !== 0) problems.push(`re-run merged ${again.merged} pair(s) — the batch is NOT idempotent`);
-        else ok('re-run merged nothing: no duplicate merges, no duplicate history, no duplicate audits');
-        if (ctx.kind === 'pglite') {
-          const audits = (await ctx.query(
-            `SELECT count(*)::INT n FROM public.student_merge_audits WHERE merge_kind='safe_batch'`)).rows[0].n;
-          if (audits !== expected) problems.push(`${audits} safe_batch audit rows but ${expected} merges`);
-          else ok(`exactly ${audits} safe_batch audit rows — one per merged student`);
-        }
-        await renderPostState(ctx);
+    // ── 3. IDEMPOTENCY ───────────────────────────────────────────────────────
+    if (opts.rerun) {
+      const auditsBefore = post?.audits?.safeBatch ?? null;
+      const again = await runChunks(ctx, preview, opts, 'Idempotency re-run (same batch id, same reviewed list)');
+      const post2 = await renderPostState(ctx, 'Post-run verification after the idempotency re-run');
+      if (again.merged !== 0) problems.push(`re-run merged ${again.merged} pair(s) — the batch is NOT idempotent`);
+      else ok('re-run merged 0 newly eligible pairs: no duplicate merges, no duplicate history, no duplicate relationships');
+      if (auditsBefore !== null && post2?.audits?.safeBatch !== auditsBefore) {
+        problems.push(`safe_batch audit rows grew from ${auditsBefore} to ${post2.audits.safeBatch} on re-run`);
+      } else if (post2) {
+        ok(`exactly ${post2.audits.safeBatch} safe_batch audit rows — one per merged student, unchanged by the re-run`);
       }
     }
   } finally {
@@ -515,4 +594,27 @@ async function main() {
   if (problems.length > 0) process.exitCode = 1;
 }
 
-main().catch((e) => { console.error(c(RED, `\n${e?.message ?? e}`)); process.exit(1); });
+// Only run when invoked as a script. Under vitest this module is imported for
+// its exports (the tests must exercise the real runner code, not a copy), and
+// importing it must not boot a database or start a batch.
+const invokedDirectly =
+  typeof process.argv[1] === 'string' && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (invokedDirectly) {
+  main().catch((e) => { console.error(c(RED, `\n${e?.message ?? e}`)); process.exit(1); });
+}
+
+export {
+  parseArgs,
+  openPglite,
+  openSupabase,
+  renderPreflight,
+  renderPreview,
+  renderVerifiedBlock,
+  runChunks,
+  renderPostState,
+  main,
+  REQUIRED_RPCS,
+  runPreflight,
+  CONFIRM_PHRASE,
+};
