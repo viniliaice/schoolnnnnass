@@ -110,6 +110,7 @@ export function TeacherNotifications() {
     { key: 'announcements', label: 'School Announcements' },
     { key: 'messages', label: 'Messages' },
     { key: 'lesson_plan_reminders', label: 'Lesson Plan Reminders' },
+    { key: 'marks_entry_reminders', label: 'Marks Entry Reminders' },
     { key: 'admin_alerts', label: 'Administrative Alerts' },
   ];
 

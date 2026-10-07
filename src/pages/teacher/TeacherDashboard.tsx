@@ -6,6 +6,7 @@ import { getExamsByTeacher } from '../../lib/db/exams';
 import { InstallAppCard } from '../../components/pwa/InstallAppCard';
 import { EnableNotificationsCard } from '../../components/pwa/EnableNotificationsCard';
 import { listMyDevices } from '../../lib/db/notifications';
+import { AcademicReminderPanel } from '../../components/academic-reminders/AcademicReminderPanel';
 import { GraduationCap, FileText, Clock, CheckCircle, XCircle, BookOpen, FileBarChart } from 'lucide-react';
 
 export function TeacherDashboard({ navigate }: { navigate?: (path: string) => void }) {
@@ -84,6 +85,8 @@ export function TeacherDashboard({ navigate }: { navigate?: (path: string) => vo
           </div>
         ))}
       </div>
+
+      <AcademicReminderPanel />
 
       <div className="bg-white rounded-2xl border border-slate-200 p-6">
         <h2 className="text-lg font-bold text-slate-900 mb-4 flex items-center gap-2">

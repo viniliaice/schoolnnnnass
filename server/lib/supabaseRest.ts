@@ -65,6 +65,16 @@ export class SupabaseRest {
     }
   }
 
+  async delete(table: string, query: string): Promise<RestResult> {
+    const res = await fetch(`${this.baseUrl}/rest/v1/${table}?${query}`, {
+      method: 'DELETE',
+      headers: this.headers(),
+    });
+    const text = await res.text();
+    if (!res.ok) return { data: null, error: { message: text || res.statusText, status: res.status } };
+    return { data: null, error: null };
+  }
+
   async update(table: string, query: string, body: unknown): Promise<RestResult> {
     const res = await fetch(`${this.baseUrl}/rest/v1/${table}?${query}`, {
       method: 'PATCH',

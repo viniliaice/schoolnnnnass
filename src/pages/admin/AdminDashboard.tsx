@@ -3,6 +3,7 @@ import { getSystemStats } from '../../lib/db/stats';
 import { getStudents } from '../../lib/db/students';
 import { getExams } from '../../lib/db/exams';
 import { getUsers } from '../../lib/db/profiles';
+import { AcademicReminderPanel } from '../../components/academic-reminders/AcademicReminderPanel';
 
 import { Users, GraduationCap, FileText, CheckCircle, XCircle, Clock, TrendingUp, BookOpen, FileBarChart, CalendarRange } from 'lucide-react';
 
@@ -131,6 +132,8 @@ export function AdminDashboard({ navigate }: { navigate?: (path: string) => void
           </div>
         ))}
       </div>
+
+      <AcademicReminderPanel />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Classes Overview */}

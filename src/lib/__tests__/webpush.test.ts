@@ -115,7 +115,7 @@ describe('Web Push sender (RFC 8291/8292)', () => {
     expect(captured!.url).toBe(sub.endpoint);
     const auth = captured!.headers.Authorization;
     expect(auth.startsWith('vapid t=')).toBe(true);
-    expect(auth).toContain(`p=${vapid.publicKey}`);
+    expect(auth).toContain(`k=${vapid.publicKey}`);
     // JWT structure: header.claims.signature
     const jwt = auth.slice('vapid t='.length).split(',')[0];
     expect(jwt.split('.').length).toBe(3);

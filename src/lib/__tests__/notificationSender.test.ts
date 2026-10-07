@@ -59,8 +59,24 @@ function makeDb(state: MemoryState): NotificationDb {
     async insertNotification(row) {
       state.notifications.push(row);
     },
+    async deleteNotification(notificationId) {
+      const notificationIndex = state.notifications.findIndex((notification) => notification.id === notificationId);
+      if (notificationIndex >= 0) state.notifications.splice(notificationIndex, 1);
+      for (let index = state.recipients.length - 1; index >= 0; index -= 1) {
+        if (state.recipients[index].notification_id === notificationId) state.recipients.splice(index, 1);
+      }
+    },
     async insertRecipients(rows) {
       state.recipients.push(...rows);
+    },
+    async claimReminderRecipients(rows) {
+      const claimed = [];
+      for (const row of rows) {
+        if (state.recipients.some((recipient) => recipient.deduplication_key === row.deduplication_key)) continue;
+        state.recipients.push(row);
+        claimed.push({ id: row.id, user_id: row.user_id, deduplication_key: row.deduplication_key });
+      }
+      return claimed;
     },
     async updateRecipient(notificationId, userId, patch) {
       state.updates.push({ notificationId, userId, patch });
@@ -367,8 +383,94 @@ describe('sendTeacherNotification orchestration', () => {
       request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
       db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' }, fetchImpl,
     });
-    expect(summary).toMatchObject({ deliveryOk: true, sent: 1, devicesDelivered: 1, devicesFailed: 1 });
+    expect(summary).toMatchObject({ deliveryOk: false, sent: 1, devicesDelivered: 1, devicesFailed: 1 });
     expect(state.updates[0].patch).toMatchObject({ status: 'sent', delivered_devices: 1, failed_devices: 1 });
+  });
+
+  it('does not count a teacher whose task is already complete as a delivery failure', async () => {
+    const state = oneTeacherState(
+      [{ id: 's1', user_id: 't-incomplete', endpoint: 'https://push/device/incomplete', ...validKeys(), is_active: true }],
+      [
+        { id: 't-incomplete', name: 'Incomplete teacher' },
+        { id: 't-complete', name: 'Complete teacher' },
+      ],
+    );
+    const occurrence = 'manual:lesson-plan-test';
+    const fetchImpl = (async () => ({ status: 201, text: async () => '' }) as Response) as unknown as typeof fetch;
+    const summary = await sendTeacherNotification({
+      request: {
+        audience: 'teachers',
+        teacherIds: ['t-incomplete', 't-complete'],
+        title: 'Lesson plan reminder',
+        body: 'Your lesson plans are incomplete. Open the planner.',
+        category: 'lesson_plan_reminder',
+        reminder: {
+          reminderType: 'lesson_plan_reminder',
+          academicPeriod: 'year-2026:2026-W40',
+          reminderOccurrence: occurrence,
+          entries: {
+            't-incomplete': {
+              deduplicationKey: 'dedupe-incomplete',
+              academicPeriod: 'year-2026:2026-W40',
+              relevantEntity: '["plan-1"]',
+              reminderOccurrence: occurrence,
+            },
+          },
+          taskAlreadyCompletedTeacherIds: ['t-complete'],
+        },
+      },
+      senderId: 'admin-1',
+      db: makeDb(state),
+      vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' },
+      fetchImpl,
+    });
+
+    expect(summary).toMatchObject({ sent: 1, taskAlreadyCompleted: 1, deliveryOk: true, totalRecipients: 2 });
+    expect(summary.recipients.map((recipient) => recipient.status)).toEqual(['task_already_completed', 'sent']);
+  });
+
+  it('removes the provisional notification after a definite claim-RPC failure', async () => {
+    const state = oneTeacherState([
+      { id: 's1', user_id: 'teacher-1', endpoint: 'https://push/device/one', ...validKeys(), is_active: true },
+    ]);
+    const db = makeDb(state);
+    db.claimReminderRecipients = async () => {
+      const error = new Error('claim RPC failed') as Error & { status?: number };
+      error.status = 500;
+      throw error;
+    };
+    const fetchImpl = vi.fn(async () => ({ status: 201, text: async () => '' }) as Response) as unknown as typeof fetch;
+
+    await expect(sendTeacherNotification({
+      request: {
+        audience: 'teachers',
+        teacherIds: ['teacher-1'],
+        title: 'Lesson plan reminder',
+        body: 'Your lesson plans are incomplete. Open the planner.',
+        category: 'lesson_plan_reminder',
+        reminder: {
+          reminderType: 'lesson_plan_reminder',
+          academicPeriod: 'year-2026:2026-W40',
+          reminderOccurrence: 'manual:lesson-plan-test',
+          entries: {
+            'teacher-1': {
+              deduplicationKey: 'dedupe-teacher-1',
+              academicPeriod: 'year-2026:2026-W40',
+              relevantEntity: '["plan-1"]',
+              reminderOccurrence: 'manual:lesson-plan-test',
+            },
+          },
+        },
+      },
+      senderId: 'admin-1',
+      db,
+      vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' },
+      fetchImpl,
+    })).rejects.toThrow('claim RPC failed');
+
+    expect(state.notifications).toHaveLength(0);
+    expect(state.recipients).toHaveLength(0);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 
   it('returns an all-zero outcome for an empty audience', async () => {
@@ -377,7 +479,7 @@ describe('sendTeacherNotification orchestration', () => {
       request: { audience: 'all_teachers', title: 'T', body: 'B', category: 'general' }, senderId: 'admin',
       db: makeDb(state), vapid: { privateKey: vapid.privateKey, subject: 'mailto:a@b.c' },
     });
-    expect(summary.outcome).toEqual({ recipients: 0, devices: 0, sent: 0, failed: 0, expired: 0, rejected: 0, skipped: 0, noDevices: 0 });
+    expect(summary.outcome).toEqual({ recipients: 0, devices: 0, sent: 0, failed: 0, expired: 0, expiredRecipients: 0, rejected: 0, skipped: 0, noDevices: 0, noSubscription: 0, alreadyReminded: 0, taskAlreadyCompleted: 0 });
     expect(summary.deliveryOk).toBe(false);
   });
 });

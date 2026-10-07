@@ -60,6 +60,22 @@ describe('POST /api/notifications/send end-to-end', () => {
     expect(allowed.body.deliveryOk).toBe(true);
   });
 
+  it('rejects academic reminder categories outside the eligibility-enforcing endpoint', async () => {
+    const { network } = setup([oneDevice()]);
+    const res = await call('POST', {
+      audience: 'teachers',
+      teacherIds: ['teacher-1'],
+      title: 'Lesson plan reminder',
+      body: 'Complete a lesson plan.',
+      category: 'lesson_plan_reminder',
+      reminder: { reminderType: 'lesson_plan_reminder' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toContain('/api/academic-reminders/send');
+    expect(network.state.pushes).toHaveLength(0);
+    expect(network.state.inserts).toHaveLength(0);
+  });
+
   it('returns 405 for GET without touching subscriptions', async () => {
     const { network } = setup([oneDevice()]);
     const res = await call('GET');
@@ -188,7 +204,7 @@ describe('POST /api/notifications/send end-to-end', () => {
     });
     vi.stubGlobal('fetch', network.fetchImpl);
     const res = await call();
-    expect(res.body).toMatchObject({ deliveryOk: true, devicesDelivered: 1, devicesFailed: 1, sent: 1, failed: 0 });
+    expect(res.body).toMatchObject({ deliveryOk: false, devicesDelivered: 1, devicesFailed: 1, sent: 1, failed: 0 });
     expect(network.state.recipients[0]).toMatchObject({ status: 'sent', delivered_devices: 1, failed_devices: 1 });
   });
 
@@ -203,6 +219,6 @@ describe('POST /api/notifications/send end-to-end', () => {
     const empty = createFakeNetwork({ profiles: [], subscriptions: [] });
     vi.stubGlobal('fetch', empty.fetchImpl);
     const noRecipients = await call();
-    expect(noRecipients.body.outcome).toEqual({ recipients: 0, devices: 0, sent: 0, failed: 0, expired: 0, rejected: 0, skipped: 0, noDevices: 0 });
+    expect(noRecipients.body.outcome).toEqual({ recipients: 0, devices: 0, sent: 0, failed: 0, expired: 0, expiredRecipients: 0, rejected: 0, skipped: 0, noDevices: 0, noSubscription: 0, alreadyReminded: 0, taskAlreadyCompleted: 0 });
   });
 });

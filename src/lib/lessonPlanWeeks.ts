@@ -12,7 +12,7 @@
  * reshapes plan rows; it only describes what is already stored.
  */
 
-import { weekRangeForNumber } from '../utils/weekDates';
+import { weekRangeForNumber } from '../utils/weekDates.js';
 
 /** One row of `week_label -> number of plans`, as stored in the database. */
 export interface PlanWeekCount {

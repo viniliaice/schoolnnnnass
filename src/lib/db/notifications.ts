@@ -21,6 +21,7 @@ export interface NotificationPrefs {
   announcements: boolean;
   messages: boolean;
   lesson_plan_reminders: boolean;
+  marks_entry_reminders: boolean;
   admin_alerts: boolean;
 }
 
@@ -29,6 +30,7 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefs = {
   announcements: true,
   messages: true,
   lesson_plan_reminders: true,
+  marks_entry_reminders: true,
   admin_alerts: true,
 };
 
@@ -65,7 +67,7 @@ export async function removeDevice(userId: string, subscriptionId: string): Prom
 export async function getMyPreferences(userId: string): Promise<NotificationPrefs> {
   const { data, error } = await supabase
     .from('notification_preferences')
-    .select('push_enabled, announcements, messages, lesson_plan_reminders, admin_alerts')
+    .select('push_enabled, announcements, messages, lesson_plan_reminders, marks_entry_reminders, admin_alerts')
     .eq('user_id', userId)
     .maybeSingle();
   if (error) throw error;
@@ -80,6 +82,7 @@ export async function saveMyPreferences(userId: string, prefs: NotificationPrefs
       announcements: prefs.announcements,
       messages: prefs.messages,
       lesson_plan_reminders: prefs.lesson_plan_reminders,
+      marks_entry_reminders: prefs.marks_entry_reminders,
       admin_alerts: prefs.admin_alerts,
       updated_at: new Date().toISOString(),
     },

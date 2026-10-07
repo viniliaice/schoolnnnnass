@@ -82,6 +82,16 @@ function syntheticHost(host: string | null): boolean {
   );
 }
 
+/** A malformed or preview-only endpoint is not a physical teacher device. */
+export function isSyntheticPushEndpoint(endpoint: unknown): boolean {
+  if (typeof endpoint !== 'string' || !endpoint.trim()) return true;
+  try {
+    return syntheticHost(new URL(endpoint).hostname || null);
+  } catch {
+    return true;
+  }
+}
+
 export function inspectSubscription(row: SubscriptionDiagnosticRow): SubscriptionInspection {
   const problems: string[] = [];
   const endpoint = textOrNull(row.endpoint);
