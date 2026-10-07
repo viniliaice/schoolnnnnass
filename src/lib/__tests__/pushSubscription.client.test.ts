@@ -80,6 +80,21 @@ function makeSubscription(key: string, endpoint: string): PushSubscription {
   } as unknown as PushSubscription;
 }
 
+// Capture whatever these globals were before the suite touched them so
+// afterEach can restore them exactly — including a previous plain `undefined`
+// value, which must be redefined rather than deleted.
+const originalGlobals: { target: object; property: string; descriptor?: PropertyDescriptor }[] = [
+  { target: navigator, property: 'serviceWorker', descriptor: Object.getOwnPropertyDescriptor(navigator, 'serviceWorker') },
+  { target: window, property: 'PushManager', descriptor: Object.getOwnPropertyDescriptor(window, 'PushManager') },
+];
+
+function restoreGlobals() {
+  for (const { target, property, descriptor } of originalGlobals) {
+    if (descriptor) Object.defineProperty(target, property, descriptor);
+    else delete (target as any)[property];
+  }
+}
+
 function installBrowser(subscription: PushSubscription | null) {
   activeSubscription = subscription;
   pushManager = {
@@ -112,8 +127,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
-  delete (navigator as any).serviceWorker;
-  delete (window as any).PushManager;
+  restoreGlobals();
 });
 
 describe('push client VAPID subscription lifecycle', () => {

@@ -3,6 +3,7 @@ import { BellRing, Send, Users } from 'lucide-react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
 import { supabase, isPlaceholderEnv } from '../../lib/supabase';
+import { readCurrentAccessToken } from '../../lib/auth';
 import { getUsersByRole } from '../../lib/db/profiles';
 import { PushDiagnosticsPanel } from '../../components/admin/PushDiagnosticsPanel';
 import { CLASSES, type User } from '../../types';
@@ -178,12 +179,14 @@ export function SendTeacherNotifications() {
         setResult(summary);
         addToast({ type: 'info', title: 'Preview mode', description: 'Simulated send — deploy to Vercel for real push delivery.' });
       } else {
-        const { data: sessionData } = await supabase.auth.getSession();
-        const token = sessionData.session?.access_token;
-        if (!token) {
-          setError('Your session has expired — sign in again.');
+        const currentSession = await readCurrentAccessToken();
+        if (currentSession.status !== 'ready') {
+          setError(currentSession.status === 'unavailable'
+            ? 'Could not validate your session. Please try again.'
+            : 'Your session has expired — sign in again.');
           return;
         }
+        const token = currentSession.accessToken;
         const res = await fetch('/api/notifications/send', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },

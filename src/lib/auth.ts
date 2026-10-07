@@ -93,6 +93,24 @@ export async function recoverFromStaleSession(error: unknown): Promise<boolean> 
   return true;
 }
 
+export type CurrentAccessTokenResult =
+  | { status: 'ready'; accessToken: string }
+  | { status: 'missing' | 'stale' | 'unavailable' };
+
+/** Read the current token without leaking auth errors or using a stale token. */
+export async function readCurrentAccessToken(): Promise<CurrentAccessTokenResult> {
+  try {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) {
+      return await recoverFromStaleSession(error) ? { status: 'stale' } : { status: 'unavailable' };
+    }
+    const accessToken = data.session?.access_token;
+    return accessToken ? { status: 'ready', accessToken } : { status: 'missing' };
+  } catch (error) {
+    return await recoverFromStaleSession(error) ? { status: 'stale' } : { status: 'unavailable' };
+  }
+}
+
 export async function signUp(email: string, password: string) {
   const { data, error } = await supabase.auth.signUp({ email, password });
   if (error) throw error;

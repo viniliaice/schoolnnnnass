@@ -7,7 +7,7 @@ vi.mock('../supabase', () => ({
   supabase: { auth: authMock, from: vi.fn() },
 }));
 
-import { isUnrecoverableSessionError, recoverFromStaleSession, restoreProfileSession } from '../auth';
+import { isUnrecoverableSessionError, readCurrentAccessToken, recoverFromStaleSession, restoreProfileSession } from '../auth';
 
 describe('stale Supabase refresh-token recovery', () => {
   beforeEach(() => {
@@ -43,5 +43,28 @@ describe('stale Supabase refresh-token recovery', () => {
     });
     await expect(restoreProfileSession()).resolves.toBeNull();
     expect(authMock.signOut).toHaveBeenCalledWith({ scope: 'local' });
+  });
+
+  it('only returns a bearer token from a valid current session', async () => {
+    authMock.getSession.mockResolvedValue({ data: { session: { access_token: 'test-access-token' } }, error: null });
+    await expect(readCurrentAccessToken()).resolves.toEqual({ status: 'ready', accessToken: 'test-access-token' });
+
+    authMock.getSession.mockResolvedValue({ data: { session: null }, error: null });
+    await expect(readCurrentAccessToken()).resolves.toEqual({ status: 'missing' });
+  });
+
+  it('clears and refuses an unrecoverable refresh token before notification sends', async () => {
+    authMock.getSession.mockResolvedValue({
+      data: { session: null },
+      error: { message: 'Invalid Refresh Token: Refresh Token Not Found' },
+    });
+    await expect(readCurrentAccessToken()).resolves.toEqual({ status: 'stale' });
+    expect(authMock.signOut).toHaveBeenCalledWith({ scope: 'local' });
+  });
+
+  it('does not reuse a token when session lookup fails transiently', async () => {
+    authMock.getSession.mockRejectedValue(new Error('network unavailable'));
+    await expect(readCurrentAccessToken()).resolves.toEqual({ status: 'unavailable' });
+    expect(authMock.signOut).not.toHaveBeenCalled();
   });
 });
