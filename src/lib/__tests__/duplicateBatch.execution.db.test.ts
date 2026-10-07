@@ -324,7 +324,8 @@ describe('safe batch execution — happy path and invariants', () => {
   it('runs the existing guided workflow on a pair the batch excluded (individual review intact)', async () => {
     if (!db) return;
     // Phone conflict → excluded from the batch, still mergeable individually.
-    const { keeperId, removedId } = await seedSafePair({ bPhone: '634453468' });
+    // 615666000 is not in the authoritative registry, so the conflict stays unresolved.
+    const { keeperId, removedId } = await seedSafePair({ bPhone: '615666000' });
     const p = await preview();
     expect(p.summary.safeCount).toBe(0);
     expect(p.summary.excludedCount).toBe(1);
@@ -557,7 +558,7 @@ describe('safe batch execution — stale and race safety', () => {
     const list = reviewedList(p);
 
     // Another admin edits the duplicate: it now carries a conflicting phone.
-    await db.query('UPDATE public.students SET "parentPhone"=$1 WHERE id=$2', ['634453468', removedId]);
+    await db.query('UPDATE public.students SET "parentPhone"=$1 WHERE id=$2', ['615666000', removedId]);
 
     const res = await runBatch({ pairs: list, batchId: p.batchId });
     expect(res.totals.merged).toBe(0);

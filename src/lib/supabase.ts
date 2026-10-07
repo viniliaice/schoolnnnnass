@@ -1995,7 +1995,8 @@ function createMockSupabase(): SupabaseClient {
           student_marked_left: 'One record is marked LEFT — ambiguous enrollment state',
           gov_id_conflict: 'Gov ID conflict — two different Government IDs',
           gov_id_belongs_to_third_student: 'Gov ID could belong to a third student',
-          parent_phone_conflict: 'Parent phone conflict',
+          parent_phone_conflict: 'Parent phone conflict — the authoritative registry confirms neither number',
+          parent_phone_registry_ambiguous: 'Parent phone conflict — the authoritative registry confirms BOTH numbers, so a person must choose',
           parent_phone_belongs_to_other_family: 'The phone on the duplicate already belongs to a different family — copying it would merge two families',
           transport_conflict: 'Transport conflict',
           family_id_transfer_unproven: 'Only the duplicate has a family ID and the database cannot prove the keeper belongs to that family — individual review',
@@ -2022,7 +2023,7 @@ function createMockSupabase(): SupabaseClient {
         } as Record<string, string>,
         blockedCodes: [
           'gov_id_conflict', 'gov_id_belongs_to_third_student', 'both_parents_assigned', 'parent_conflict',
-          'parent_phone_conflict', 'transport_conflict', 'family_id_conflict', 'student_missing',
+          'parent_phone_conflict', 'parent_phone_registry_ambiguous', 'transport_conflict', 'family_id_conflict', 'student_missing',
           'parent_profile_missing', 'multiple_open_enrollments', 'enrollment_class_conflict',
           'enrollment_year_conflict', 'exam_conflict', 'attendance_conflict', 'quiz_conflict',
           'release_conflict', 'report_comment_conflict', 'unhandled_child_dependency', 'name_conflict',

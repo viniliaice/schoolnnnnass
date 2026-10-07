@@ -249,7 +249,8 @@ describe('family ID normalization guard — unreadable values', () => {
     if (!db) return;
     const policy = await db.rpc<{ exclusionCodes: Record<string, string>; blockedCodes: string[]; version: number }>(
       'safe_duplicate_batch_policy', {});
-    expect(policy.version).toBe(3);
+    // 20261009 moved the published policy to version 4 (parent-phone registry).
+    expect(policy.version).toBe(4);
     expect(policy.exclusionCodes.family_id_invalid_normalization).toMatch(/normaliz/i);
     expect(policy.blockedCodes).not.toContain('family_id_invalid_normalization');
   });

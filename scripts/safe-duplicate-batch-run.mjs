@@ -431,6 +431,26 @@ async function seedReproduction(db, opts) {
     // the --analyse normalization check exists to catch BEFORE a real merge.
     await conflict(5, 'Cabdiraxmaan Xuseen Warsame 005',
       {}, { familyId: 'HOUSE-RED' });
+    // ── Authoritative parent-phone registry (20261009) ───────────────────────
+    // 633840867, 634450007 and 634450035 are real rows in
+    // public.authoritative_parent_phones; 611111111 is deliberately not.
+    // Fixture 7 must NOT reuse fixture 6's number: a listed number that already
+    // sits on a third student still trips parent_phone_belongs_to_other_family,
+    // which is correct behaviour but would mask the ambiguous-registry case.
+    //
+    // #6: exactly ONE side endorsed (the duplicate's) → the conflict is
+    //     answered, the endorsed number is transferred onto the keeper, SAFE.
+    await conflict(6, 'Cabdiraxmaan Xuseen Warsame 006',
+      { parentPhone: '611111111' }, { parentPhone: '633840867' });
+    // #7: BOTH sides endorsed → the registry cannot pick a winner, so the pair
+    //     stays BLOCKED as parent_phone_registry_ambiguous. This is the fixture
+    //     that proves the registry narrows conflicts instead of dissolving them.
+    await conflict(7, 'Cabdiraxmaan Xuseen Warsame 007',
+      { parentPhone: '634450007' }, { parentPhone: '634450035' });
+    // #8: exactly ONE side endorsed (the KEEPER's) → conflict resolved, the
+    //     keeper keeps its own number and nothing is transferred.
+    await conflict(8, 'Cabdiraxmaan Xuseen Warsame 008',
+      { parentPhone: '634450007' }, { parentPhone: '612222222' });
   }
 
   process.stdout.write('\r  seeding done.                                          \n');
@@ -691,8 +711,18 @@ const FIELD_ROWS = {
     ['keeper only', (f) => f.state === 'keeper_only'],
     ['duplicate only → safely transferable', (f) => f.state === 'duplicate_only' && f.action === 'transfer'],
     ['identical', (f) => f.state === 'identical'],
-    ['true conflict', (f) => f.state === 'conflict'],
-    ['belongs to another family', (f) => f.state === 'duplicate_only' && f.action === 'block'],
+    // The registry (20261009) splits what used to be one opaque "conflict" row
+    // into the three outcomes an operator actually has to act on differently.
+    ['true conflict (registry endorses NEITHER number)', (f) => f.state === 'conflict'
+      && f.reason !== 'parent_phone_registry_ambiguous'],
+    ['registry endorses BOTH numbers → still blocked', (f) => f.state === 'conflict'
+      && f.reason === 'parent_phone_registry_ambiguous'],
+    ['conflict RESOLVED by registry → keeper number kept', (f) => f.state === 'conflict_resolved' && f.action === 'keep'],
+    ['conflict RESOLVED by registry → endorsed number transferred', (f) => f.state === 'conflict_resolved' && f.action === 'transfer'],
+    // Matched by reason, because it can now arrive on either the one-sided or
+    // the registry-resolved path.
+    ['belongs to another family', (f) => f.action === 'block'
+      && f.reason === 'parent_phone_belongs_to_other_family'],
   ],
   transport: [
     ['both blank', (f) => f.state === 'both_blank'],
