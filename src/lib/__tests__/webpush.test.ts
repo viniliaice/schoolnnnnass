@@ -115,9 +115,15 @@ describe('Web Push sender (RFC 8291/8292)', () => {
     expect(captured!.url).toBe(sub.endpoint);
     const auth = captured!.headers.Authorization;
     expect(auth.startsWith('vapid t=')).toBe(true);
-    expect(auth).toContain(`p=${vapid.publicKey}`);
+    // RFC 8292 §4.1 — auth-info = "vapid" 1*SP t-param [ 1*SP "," 1*SP k-param ].
+    // The public key travels as `k=`, never the pre-RFC `p=` alias, so assert on
+    // the parsed parameter names rather than on a substring that base64 could
+    // happen to contain.
+    const [tPart, kPart] = auth.slice('vapid '.length).split(',').map((part) => part.trim());
+    expect(tPart.startsWith('t=')).toBe(true);
+    expect(kPart).toBe(`k=${vapid.publicKey}`);
     // JWT structure: header.claims.signature
-    const jwt = auth.slice('vapid t='.length).split(',')[0];
+    const jwt = tPart.slice('t='.length);
     expect(jwt.split('.').length).toBe(3);
     const claims = JSON.parse(Buffer.from(jwt.split('.')[1], 'base64url').toString());
     expect(claims.aud).toBe('https://push.example.com');
