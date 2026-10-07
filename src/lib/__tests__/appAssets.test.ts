@@ -4,8 +4,8 @@
 // "/logo.png", but that file existed only in the repo-root assets/ folder --
 // which Vite does NOT copy to the output. There was no public/ entry for it,
 // so the favicon 404'd on every deploy. The in-app logos were fine (imported
-// through the bundler, and inlined by vite-plugin-singlefile); only the HTML
-// shell referenced a path that never shipped.
+// through the bundler and emitted as hashed assets); only the HTML shell
+// referenced a path that never shipped.
 
 import { describe, expect, it } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
@@ -32,9 +32,9 @@ describe('index.html favicon', () => {
     }
   });
 
-  it('inlines the favicon so it survives a single-file deploy', () => {
-    // This build uses vite-plugin-singlefile: everything is folded into one
-    // index.html. A data: URI cannot 404 regardless of how the host serves it.
+  it('inlines the favicon so it can never 404', () => {
+    // A data: URI favicon cannot 404 regardless of how the host serves the
+    // app, and it keeps the tab icon working even on offline cold starts.
     expect(html).toMatch(/rel="icon"[^>]+href="data:image\/png;base64,[A-Za-z0-9+/=]+"/);
   });
 

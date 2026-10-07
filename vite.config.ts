@@ -5,7 +5,6 @@ import { fileURLToPath } from "url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
-import { viteSingleFile } from "vite-plugin-singlefile";
 import { renderPrivacyPolicyHtml } from "./src/legal/privacyPolicy";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -18,11 +17,11 @@ const __dirname = path.dirname(__filename);
  * /privacy-policy, /privacy-policy.html and /privacy-policy/ all resolve to the
  * real page on the hosts this project could be served from.
  *
- * WHY: this build folds the whole app into one index.html, and the dev/preview
- * servers answer unknown paths with that SPA shell. The privacy-policy URL is
- * registered in Google Play, so it must resolve to a real, self-contained page
- * that still reads correctly with JavaScript disabled — which means a static
- * file that exists next to the app bundle, not only a React route.
+ * WHY: the dev/preview servers (and the Vercel SPA rewrite) answer unknown
+ * paths with the SPA shell. The privacy-policy URL is registered in Google
+ * Play, so it must resolve to a real, self-contained page that still reads
+ * correctly with JavaScript disabled — which means a static file that exists
+ * next to the app bundle, not only a React route.
  *
  * The file is written in closeBundle (after Vite copies public/), so nothing
  * else in the build can overwrite it.
@@ -53,15 +52,26 @@ function privacyPolicyStaticPage(): Plugin {
 
 /**
  * Stamps the built service worker (dist/sw.js, copied verbatim from public/)
- * with a deterministic content hash of the built index.html. The whole app is
- * inlined into index.html, so hashing it is equivalent to hashing the app
- * bundle: any code change produces a new sw.js byte sequence, which is what
- * browsers use to detect that a new service worker version exists. Without
- * this the static public/sw.js would never change and installed PWAs would
- * stay pinned to old app code forever.
+ * with:
  *
- * The source file keeps the literal placeholder __SW_BUILD_ID__ so that dev
- * servers still register a working (version 'dev') worker.
+ *  1. __SW_BUILD_ID__ — a deterministic content hash of the built app shell
+ *     (index.html bytes + the sorted list of emitted hashed asset filenames).
+ *     Hashed filenames are content-addressed, so ANY change to any chunk or
+ *     asset changes this ID, which changes sw.js's bytes — that is what
+ *     browsers use to detect that a new service worker version exists.
+ *     Without this the static public/sw.js would never change and installed
+ *     PWAs would stay pinned to old app code forever.
+ *
+ *  2. __SW_PRECACHE_ASSETS__ — the root-absolute URLs of the entry JS/CSS
+ *     that index.html actually references. The app shell is no longer a
+ *     single inlined HTML file, so the service worker must precache these
+ *     entry assets alongside '/' for the offline shell to keep working.
+ *     Only entry assets referenced by the HTML are stamped — lazy/optional
+ *     chunks (none today) are runtime-cached on demand instead, so a deploy
+ *     never re-downloads the whole application.
+ *
+ * The source file keeps the literal placeholders so that dev servers still
+ * register a working (version 'dev', empty precache) worker.
  */
 function serviceWorkerBuildId(): Plugin {
   let outDir = "dist";
@@ -79,37 +89,40 @@ function serviceWorkerBuildId(): Plugin {
       if (!fs.existsSync(swPath)) return;
 
       const indexPath = path.resolve(__dirname, outDir, "index.html");
+      const html = fs.existsSync(indexPath) ? fs.readFileSync(indexPath, "utf8") : "";
 
-      // viteSingleFile builds with a relative base, which rewrites the
-      // absolute PWA link tags to "./manifest.webmanifest" / "./icons/…".
-      // Relative URLs resolve against the *current path*, so a cold load of a
-      // deep link (/teacher/lesson-plans) would look for the manifest under
-      // /teacher/. PWA URLs must stay root-absolute.
-      if (fs.existsSync(indexPath)) {
-        let html = fs.readFileSync(indexPath, "utf8");
-        const before = html;
-        html = html
-          .replace(/href="\.\.\/manifest\.webmanifest"/g, 'href="/manifest.webmanifest"')
-          .replace(/href="\.\/manifest\.webmanifest"/g, 'href="/manifest.webmanifest"')
-          .replace(/href="\.\.\/icons\//g, 'href="/icons/')
-          .replace(/href="\.\/icons\//g, 'href="/icons/');
-        if (html !== before) fs.writeFileSync(indexPath, html, "utf8");
-      }
+      // Entry assets = every root-absolute /assets/* JS/CSS URL the shell
+      // references (script src, stylesheet href, modulepreload href).
+      const entryAssets = Array.from(
+        new Set(
+          Array.from(html.matchAll(/(?:src|href)="(\/assets\/[^"]+\.(?:js|css))"/g)).map((m) => m[1])
+        )
+      ).sort();
 
-      const source = fs.existsSync(indexPath) ? fs.readFileSync(indexPath) : Buffer.from("");
-      const buildId = crypto.createHash("sha256").update(source).digest("hex").slice(0, 16);
+      // Build ID covers the shell AND the full emitted asset manifest, so a
+      // change in any content-hashed file (even one not referenced from the
+      // HTML) produces a new worker version.
+      const assetsDir = path.resolve(__dirname, outDir, "assets");
+      const assetNames = fs.existsSync(assetsDir) ? fs.readdirSync(assetsDir).sort() : [];
+      const buildId = crypto
+        .createHash("sha256")
+        .update(html)
+        .update("\n")
+        .update(assetNames.join("\n"))
+        .digest("hex")
+        .slice(0, 16);
 
-      const sw = fs.readFileSync(swPath, "utf8");
-      if (sw.includes("__SW_BUILD_ID__")) {
-        fs.writeFileSync(swPath, sw.replace(/__SW_BUILD_ID__/g, buildId), "utf8");
-      }
+      let sw = fs.readFileSync(swPath, "utf8");
+      sw = sw.replace(/__SW_BUILD_ID__/g, buildId);
+      sw = sw.replace(/__SW_PRECACHE_ASSETS__/g, entryAssets.join(","));
+      fs.writeFileSync(swPath, sw, "utf8");
     },
   };
 }
 
 // https://vite.dev/config/
 export default defineConfig({
-  plugins: [react(), tailwindcss(), viteSingleFile(), privacyPolicyStaticPage(), serviceWorkerBuildId()],
+  plugins: [react(), tailwindcss(), privacyPolicyStaticPage(), serviceWorkerBuildId()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "src"),

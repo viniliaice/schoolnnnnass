@@ -63,14 +63,14 @@ Kormeerayaashu → Xaqiijiyaan Imtixaanno → Kahor waalidka
 Waalidku → Daawatadaan Imtixaanno → Warbixinnada
 ```
 
-### Fayl keliya oo la taageero
+### Faylal assets ah oo hash leh
 
-Pluginka `vite-plugin-singlefile` wuxuu JavaScript, CSS, iyo assets oo dhan ku daraa hal fayl oo HTML ah.
+Dhismaha wax-soo-saarku wuxuu soo saaraa `index.html` yar iyo faylal JavaScript/CSS oo magacyadoodu hash ku leeyihiin gudaha `/assets/`. Faylashaasi waxay isbeddelaan oo keliya marka nuxurkoodu isbeddelo, sidaa darteed browser-ku muddo dheer ayuu kaydin karaa.
 
 ## Isbarbardhig
 
 **Waxa la helay:**
-- Taageero fudud (hal fayl HTML)
+- Daabacaad jaban (assets hash leh oo aan isbeddelin; faylasha isbeddelay oo keliya ayaa dib loo soo dejiyaa)
 - Horumarineed degdeg ah (Vite HMR)
 - Badqabka TypeScript
 - Nabadgelyo (Supabase RLS)
