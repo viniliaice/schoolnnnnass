@@ -22,6 +22,7 @@ import type { ExpectedSubmitter } from '../../src/lib/lessonPlanSubmissionTracki
 import { makeWeekLabel, weekNumberForDate } from '../../src/utils/weekDates.js';
 import {
   sendTeacherNotification,
+  type AcademicReminderStage,
   type AcademicReminderType,
   type NotificationDb,
   type ReminderRecipientMetadata,
@@ -31,6 +32,7 @@ import {
 import type { VapidConfig } from './webpush.js';
 
 export const DEFAULT_SCHOOL_TIMEZONE = 'Africa/Mogadishu';
+export const DAILY_CRON_LOCAL_SEND_TIME = '16:00';
 export const ACADEMIC_REMINDER_TYPES: AcademicReminderType[] = [
   'lesson_plan_reminder',
   'marks_entry_reminder',
@@ -104,6 +106,10 @@ export interface MarksMonitorQuery {
 export interface AcademicReminderDataSource {
   getCurrentAcademicYear(): Promise<AcademicYearRecord | null>;
   getCurrentTerm(academicYearId: string): Promise<AcademicTermRecord | null>;
+  getAcademicPeriodForMonth?(calendarYear: number, month: string): Promise<{
+    year: AcademicYearRecord;
+    term: AcademicTermRecord | null;
+  } | null>;
   getTeacherRoster(): Promise<ReminderTeacherProfile[]>;
   getLessonPlanSnapshot(weekLabel: string): Promise<LessonPlanReminderSnapshot>;
   getMarksMonitorRows(query: MarksMonitorQuery): Promise<unknown>;
@@ -170,6 +176,7 @@ export class ReminderScopeError extends Error {
 
 export interface ReminderRunResult {
   reminderType: AcademicReminderType;
+  reminderStage: AcademicReminderStage;
   academicPeriod: string;
   periodLabel: string;
   reminderOccurrence: string;
@@ -219,6 +226,65 @@ function localDateKey(parts: LocalDateTimeParts): string {
   return `${parts.year}-${String(parts.month).padStart(2, '0')}-${String(parts.day).padStart(2, '0')}`;
 }
 
+export interface CalendarMonth {
+  year: number;
+  month: number;
+  monthName: string;
+  key: string;
+}
+
+/** Previous calendar month by the school's wall clock, including year rollover. */
+export function previousCalendarMonth(now: Date, timezone = DEFAULT_SCHOOL_TIMEZONE): CalendarMonth {
+  const local = localDateTimeParts(now, timezone);
+  const month = local.month === 1 ? 12 : local.month - 1;
+  const year = local.month === 1 ? local.year - 1 : local.year;
+  return {
+    year,
+    month,
+    monthName: MONTH_NAMES[month - 1],
+    key: `${year}-${String(month).padStart(2, '0')}`,
+  };
+}
+
+/** Day-of-month policy for the monthly marks reminder: prompt on the 5th, penalty notice on the 10th. */
+export function marksEntryReminderStageForDate(
+  now: Date,
+  timezone = DEFAULT_SCHOOL_TIMEZONE,
+): AcademicReminderStage | null {
+  const day = localDateTimeParts(now, timezone).day;
+  if (day === 5) return 'reminder';
+  if (day === 10) return 'penalty';
+  return null;
+}
+
+/** Daily Hobby-plan Cron: lesson reminders run at 16:00 Mogadishu on configured weekdays. */
+export function isLessonPlanDailyCronDue(schedule: ReminderSchedule, now: Date): boolean {
+  if (!schedule.enabled) return false;
+  if (schedule.reminder_type !== 'lesson_plan_reminder') return false;
+  const timezone = schedule.timezone || DEFAULT_SCHOOL_TIMEZONE;
+  if (timezone !== DEFAULT_SCHOOL_TIMEZONE || timeString(schedule.send_time) !== DAILY_CRON_LOCAL_SEND_TIME) {
+    throw new Error(`Lesson-plan Cron must use ${DAILY_CRON_LOCAL_SEND_TIME} ${DEFAULT_SCHOOL_TIMEZONE}.`);
+  }
+  if (!Array.isArray(schedule.days_of_week) || schedule.days_of_week.length === 0) return false;
+  const local = localDateTimeParts(now, DEFAULT_SCHOOL_TIMEZONE);
+  if (!schedule.days_of_week.includes(local.weekday)) return false;
+  const [targetHour, targetMinute] = DAILY_CRON_LOCAL_SEND_TIME.split(':').map(Number);
+  const elapsed = local.hour * 60 + local.minute - (targetHour * 60 + targetMinute);
+  // Permit a delayed Cron delivery for up to 59 minutes after its daily slot.
+  return elapsed >= 0 && elapsed < 60;
+}
+
+/** The marks schedule is daily, but only the local 5th and 10th have policy actions. */
+export function getMarksEntryReminderStage(schedule: ReminderSchedule, now: Date): AcademicReminderStage | null {
+  if (!schedule.enabled) return null;
+  if (schedule.reminder_type !== 'marks_entry_reminder') return null;
+  const timezone = schedule.timezone || DEFAULT_SCHOOL_TIMEZONE;
+  if (timezone !== DEFAULT_SCHOOL_TIMEZONE) {
+    throw new Error(`Marks-entry policy dates must use ${DEFAULT_SCHOOL_TIMEZONE}.`);
+  }
+  return marksEntryReminderStageForDate(now, DEFAULT_SCHOOL_TIMEZONE);
+}
+
 function timeString(value: string): string {
   const match = /^(\d{2}):(\d{2})(?::\d{2})?$/.exec(String(value).trim());
   if (!match) throw new Error('Reminder send_time must use HH:mm or HH:mm:ss.');
@@ -241,9 +307,14 @@ export function isReminderScheduleDue(
   return elapsed >= 0 && elapsed <= Math.max(0, graceMinutes);
 }
 
-export function scheduledReminderOccurrence(schedule: ReminderSchedule, now: Date): string {
-  const parts = localDateTimeParts(now, schedule.timezone || DEFAULT_SCHOOL_TIMEZONE);
-  return `scheduled:${schedule.reminder_type}:${localDateKey(parts)}:${timeString(schedule.send_time)}@${schedule.timezone || DEFAULT_SCHOOL_TIMEZONE}`;
+export function scheduledReminderOccurrence(
+  schedule: ReminderSchedule,
+  now: Date,
+  stage: AcademicReminderStage = 'reminder',
+): string {
+  const timezone = schedule.timezone || DEFAULT_SCHOOL_TIMEZONE;
+  const parts = localDateTimeParts(now, timezone);
+  return `scheduled:${schedule.reminder_type}:${stage}:${localDateKey(parts)}:${timeString(schedule.send_time)}@${timezone}`;
 }
 
 export function manualReminderOccurrence(reminderType: AcademicReminderType, requestId: string): string {
@@ -286,6 +357,33 @@ export async function loadAcademicPeriodContext(
     schoolDayOfWeek: local.weekday,
     year,
     term,
+  };
+}
+
+/** Context for the prior calendar month, used by the 5th/10th marks policy. */
+export async function loadPreviousMonthAcademicPeriodContext(
+  source: AcademicReminderDataSource,
+  timezone = DEFAULT_SCHOOL_TIMEZONE,
+  now = new Date(),
+): Promise<AcademicPeriodContext> {
+  const local = localDateTimeParts(now, timezone);
+  const month = previousCalendarMonth(now, timezone);
+  let period = source.getAcademicPeriodForMonth
+    ? await source.getAcademicPeriodForMonth(month.year, month.monthName)
+    : null;
+  if (!period && !source.getAcademicPeriodForMonth) {
+    const year = await source.getCurrentAcademicYear();
+    if (year) period = { year, term: await source.getCurrentTerm(year.id) };
+  }
+  if (!period?.year) throw new Error(`No academic year is configured for ${month.monthName} ${month.year}.`);
+  if (!period.term) throw new Error(`No academic term is configured for ${month.monthName} ${month.year}.`);
+  return {
+    timezone,
+    schoolDate: localDateKey(local),
+    schoolMonth: month.monthName,
+    schoolDayOfWeek: local.weekday,
+    year: period.year,
+    term: period.term,
   };
 }
 
@@ -531,15 +629,20 @@ export async function evaluateAcademicReminderTasks(input: {
   return { context, ...marks };
 }
 
-function reminderTitle(type: AcademicReminderType): string {
-  return type === 'lesson_plan_reminder' ? 'Lesson plan reminder' : 'Marks entry reminder';
+function reminderTitle(type: AcademicReminderType, stage: AcademicReminderStage): string {
+  if (type === 'lesson_plan_reminder') return 'Lesson Plan Reminder';
+  return stage === 'penalty' ? 'Marks Entry Penalty' : 'Marks Entry Reminder';
 }
 
-function reminderBody(task: AcademicReminderTask): string {
+function reminderBody(task: AcademicReminderTask, stage: AcademicReminderStage): string {
   if (task.reminderType === 'lesson_plan_reminder') {
     return `Your lesson plans for ${task.periodLabel} are incomplete. Open the planner to complete your outstanding work.`;
   }
-  return `Your marks entries for ${task.periodLabel} are incomplete. Open marks entry to finish the outstanding assignments.`;
+  const month = task.month ?? task.periodLabel;
+  if (stage === 'penalty') {
+    return `Your ${month} marks entries were not completed by the required deadline. You have been penalized for ${month}.`;
+  }
+  return `Your ${month} marks entries are incomplete. Open marks entry to complete them.`;
 }
 
 export async function runAcademicReminder(input: {
@@ -547,6 +650,7 @@ export async function runAcademicReminder(input: {
   notificationDb: NotificationDb;
   vapid: VapidConfig;
   reminderType: AcademicReminderType;
+  reminderStage?: AcademicReminderStage;
   senderId: string | null;
   reminderOccurrence: string;
   now?: Date;
@@ -559,6 +663,10 @@ export async function runAcademicReminder(input: {
   makeId?: (prefix: string) => string;
   fetchImpl?: typeof fetch;
 }): Promise<ReminderRunResult> {
+  const reminderStage = input.reminderStage ?? 'reminder';
+  if (input.reminderType === 'lesson_plan_reminder' && reminderStage !== 'reminder') {
+    throw new Error('Lesson-plan reminders do not support a penalty stage.');
+  }
   const evaluation = await evaluateAcademicReminderTasks({
     source: input.source,
     reminderType: input.reminderType,
@@ -604,12 +712,13 @@ export async function runAcademicReminder(input: {
     const request = {
       audience: 'teachers' as const,
       teacherIds: [...new Set([...eligibleTeacherIds, ...alreadyCompleteTeacherIds])],
-      title: reminderTitle(input.reminderType),
-      body: reminderBody(eligibleTasks[0]),
+      title: reminderTitle(input.reminderType, reminderStage),
+      body: reminderBody(eligibleTasks[0], reminderStage),
       category: input.reminderType,
       url: input.reminderType === 'lesson_plan_reminder' ? '/teacher/lesson-plans' : '/teacher/results',
       reminder: {
         reminderType: input.reminderType,
+        reminderStage,
         academicPeriod: eligibleTasks[0].academicPeriod,
         reminderOccurrence: input.reminderOccurrence,
         entries,
@@ -628,6 +737,7 @@ export async function runAcademicReminder(input: {
 
   return {
     reminderType: input.reminderType,
+    reminderStage,
     academicPeriod: evaluation.academicPeriod,
     periodLabel: evaluation.periodLabel,
     reminderOccurrence: input.reminderOccurrence,

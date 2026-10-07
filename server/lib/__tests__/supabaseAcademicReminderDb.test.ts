@@ -13,7 +13,8 @@ describe('Supabase academic reminder adapter', () => {
       reminder_type: 'lesson_plan_reminder',
       academic_period: 'year-1:2026-W10',
       relevant_entity: '["plan-1"]',
-      reminder_occurrence: 'scheduled:2026-10-07:15:00@Africa/Mogadishu',
+      reminder_occurrence: 'scheduled:lesson_plan_reminder:reminder:2026-10-07:16:00@Africa/Mogadishu',
+      reminder_stage: 'reminder',
       status: 'sent',
       delivered_devices: 1,
       failed_devices: 0,
@@ -30,6 +31,7 @@ describe('Supabase academic reminder adapter', () => {
     expect(table).toBe('notification_recipients');
     expect(query).toContain('user_id=in.');
     expect(query).toContain('reminder_type=in.');
+    expect(query).toContain('reminder_stage');
     expect(query).toContain('notifications(title,body,url)');
     await expect(getReminderDeliveryHistory(rest, [])).resolves.toEqual([]);
     expect(rest.select).toHaveBeenCalledTimes(1);
@@ -51,6 +53,29 @@ describe('Supabase academic reminder adapter', () => {
     expect(result.get('teacher-1')).toEqual({ activeSubscriptions: 2, realActiveSubscriptions: 1, hasRealDevice: true });
     expect(result.get('teacher-2')).toEqual({ activeSubscriptions: 1, realActiveSubscriptions: 0, hasRealDevice: false });
     expect(result.get('teacher-3')).toEqual({ activeSubscriptions: 0, realActiveSubscriptions: 0, hasRealDevice: false });
+  });
+
+  it('resolves the previous calendar month to its academic year and term', async () => {
+    const calls: Array<{ table: string; query: string }> = [];
+    const rest = {
+      select: vi.fn(async (table: string, query: string) => {
+        calls.push({ table, query });
+        if (table === 'academic_years') {
+          return { data: [{ id: 'year-2025-26', name: '2025/2026', startDate: '2025-08-01', endDate: '2026-06-30', isCurrent: true }], error: null };
+        }
+        return { data: [
+          { id: 'term-1', name: 'Term 1', academicYearId: 'year-2025-26', startDate: '2025-08-01', endDate: '2025-11-30', months: ['August', 'September', 'October', 'November'] },
+          { id: 'term-2', name: 'Term 2', academicYearId: 'year-2025-26', startDate: '2025-12-01', endDate: '2026-03-31', months: ['December', 'January', 'February', 'March'] },
+        ], error: null };
+      }),
+    } as any;
+    const source = createSupabaseAcademicReminderDataSource(rest);
+
+    const result = await source.getAcademicPeriodForMonth?.(2025, 'December');
+
+    expect(result).toMatchObject({ year: { id: 'year-2025-26' }, term: { id: 'term-2', months: ['December', 'January', 'February', 'March'] } });
+    expect(calls[0].query).toContain('2025-12-15');
+    expect(calls[1].query).toContain('academicYearId=eq.year-2025-26');
   });
 
   it('uses the authenticated monitor RPC for staff and the service-only wrapper for server evaluation', async () => {

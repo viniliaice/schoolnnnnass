@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
   const source = {
@@ -28,9 +28,12 @@ const mocks = vi.hoisted(() => {
     validateVapidConfig: vi.fn(() => ({ ok: true, problems: [] })),
     sanitizePushResponseText: vi.fn((value: unknown) => String(value ?? '')),
     loadContext: vi.fn(),
+    loadPreviousMonthContext: vi.fn(),
     evaluateTasks: vi.fn(),
     runReminder: vi.fn(),
     isScheduleDue: vi.fn(),
+    isLessonPlanDailyDue: vi.fn(),
+    getMarksStage: vi.fn(),
     manualOccurrence: vi.fn(),
     scheduledOccurrence: vi.fn(),
     createNotificationDb: vi.fn(() => ({})),
@@ -51,10 +54,14 @@ vi.mock('../../../server/lib/academicReminderHttp.js', () => ({
 vi.mock('../../../server/lib/academicReminderEngine.js', () => ({
   ACADEMIC_REMINDER_TYPES: ['lesson_plan_reminder', 'marks_entry_reminder'],
   DEFAULT_SCHOOL_TIMEZONE: 'Africa/Mogadishu',
+  DAILY_CRON_LOCAL_SEND_TIME: '16:00',
   loadAcademicPeriodContext: mocks.loadContext,
+  loadPreviousMonthAcademicPeriodContext: mocks.loadPreviousMonthContext,
   evaluateAcademicReminderTasks: mocks.evaluateTasks,
   runAcademicReminder: mocks.runReminder,
   isReminderScheduleDue: mocks.isScheduleDue,
+  isLessonPlanDailyCronDue: mocks.isLessonPlanDailyDue,
+  getMarksEntryReminderStage: mocks.getMarksStage,
   manualReminderOccurrence: mocks.manualOccurrence,
   scheduledReminderOccurrence: mocks.scheduledOccurrence,
   ReminderScopeError: class ReminderScopeError extends Error {},
@@ -124,12 +131,12 @@ const schedule = (reminderType: string, overrides: Record<string, unknown> = {})
   enabled: true,
   timezone: 'Africa/Mogadishu',
   days_of_week: [1, 2, 3, 4, 5],
-  send_time: '15:00',
+  send_time: '16:00',
   exam_scope: 'monthly',
   ...overrides,
 });
 
-function result(reminderType: string) {
+function result(reminderType: string, reminderStage: 'reminder' | 'penalty' = 'reminder') {
   const eligible = task(reminderType, 'teacher-1');
   const summary = {
     notificationId: 'notification-1',
@@ -153,6 +160,7 @@ function result(reminderType: string) {
   };
   return {
     reminderType,
+    reminderStage,
     academicPeriod: eligible.academicPeriod,
     periodLabel: eligible.periodLabel,
     reminderOccurrence: 'manual:request-12345',
@@ -167,6 +175,8 @@ function result(reminderType: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date('2026-10-05T12:00:00.000Z'));
   mocks.createSource.mockReturnValue(mocks.source);
   mocks.source.getSchedules.mockResolvedValue([
     schedule('lesson_plan_reminder'),
@@ -179,15 +189,22 @@ beforeEach(() => {
     ['teacher-1', { activeSubscriptions: 2, realActiveSubscriptions: 1, hasRealDevice: true }],
   ]));
   mocks.loadContext.mockResolvedValue({ timezone: 'Africa/Mogadishu', year: { id: 'year-2026' }, term: { id: 'term-1' } });
+  mocks.loadPreviousMonthContext.mockResolvedValue({ timezone: 'Africa/Mogadishu', schoolMonth: 'September', year: { id: 'year-2026' }, term: { id: 'term-1' } });
+  mocks.isLessonPlanDailyDue.mockReturnValue(false);
+  mocks.getMarksStage.mockReturnValue(null);
   mocks.evaluateTasks.mockImplementation(async (input: any) => ({
     academicPeriod: 'year-2026:term-1',
     periodLabel: 'October · Term 1',
     tasks: [task(input.reminderType, input.teacherId || 'teacher-1'), ...(input.teacherId ? [] : [task(input.reminderType, 'teacher-2')])],
   }));
-  mocks.runReminder.mockImplementation(async (input: any) => result(input.reminderType));
+  mocks.runReminder.mockImplementation(async (input: any) => result(input.reminderType, input.reminderStage));
   mocks.manualOccurrence.mockReturnValue('manual:marks_entry_reminder:request-12345');
-  mocks.scheduledOccurrence.mockReturnValue('scheduled:marks_entry_reminder:2026-10-07:15:00@Africa/Mogadishu');
+  mocks.scheduledOccurrence.mockReturnValue('scheduled:marks_entry_reminder:reminder:2026-10-05:16:00@Africa/Mogadishu');
   mocks.isScheduleDue.mockImplementation((item: any) => item.enabled && item.reminder_type === 'marks_entry_reminder');
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe('academic reminder API authorization and routing', () => {
@@ -265,7 +282,7 @@ describe('academic reminder API authorization and routing', () => {
         enabled: false,
         timezone: 'Africa/Mogadishu',
         daysOfWeek: [1, 3, 5],
-        sendTime: '14:30',
+        sendTime: '16:00',
         examScope: 'final',
       },
     };
@@ -276,8 +293,8 @@ describe('academic reminder API authorization and routing', () => {
     expect(mocks.source.updateSchedule).toHaveBeenCalledWith('marks_entry_reminder', {
       enabled: false,
       timezone: 'Africa/Mogadishu',
-      days_of_week: [1, 3, 5],
-      send_time: '14:30',
+      days_of_week: [0, 1, 2, 3, 4, 5, 6],
+      send_time: '16:00',
       exam_scope: 'final',
     }, 'admin-1');
 
@@ -286,8 +303,9 @@ describe('academic reminder API authorization and routing', () => {
     expect(invalid.statusCode).toBe(400);
   });
 
-  it('runs only due enabled schedules through the cron-only authorization path', async () => {
+  it('runs the 5th-day marks reminder against the previous month through the daily cron path', async () => {
     mocks.cronAuthorizationMatches.mockReturnValue(true);
+    mocks.getMarksStage.mockReturnValue('reminder');
     const req = { method: 'GET', headers: { authorization: 'Bearer cron-secret' } };
     const res = response();
     await cronHandler(req, res);
@@ -295,19 +313,35 @@ describe('academic reminder API authorization and routing', () => {
     expect(res.statusCode).toBe(200);
     expect(mocks.createSource).toHaveBeenCalledWith(expect.anything());
     expect(mocks.runReminder).toHaveBeenCalledTimes(1);
+    expect(mocks.loadPreviousMonthContext).toHaveBeenCalledWith(mocks.source, 'Africa/Mogadishu', new Date('2026-10-05T12:00:00.000Z'));
     expect(mocks.runReminder).toHaveBeenCalledWith(expect.objectContaining({
       reminderType: 'marks_entry_reminder',
+      reminderStage: 'reminder',
       senderId: null,
       timezone: 'Africa/Mogadishu',
-      reminderOccurrence: 'scheduled:marks_entry_reminder:2026-10-07:15:00@Africa/Mogadishu',
+      examScope: 'monthly',
+      reminderOccurrence: 'scheduled:marks_entry_reminder:reminder:2026-10-05:16:00@Africa/Mogadishu',
+    }));
+  });
+
+  it('runs the 10th-day marks penalty stage and preserves it in the event occurrence', async () => {
+    vi.setSystemTime(new Date('2026-10-10T12:00:00.000Z'));
+    mocks.getMarksStage.mockReturnValue('penalty');
+    mocks.scheduledOccurrence.mockReturnValue('scheduled:marks_entry_reminder:penalty:2026-10-10:16:00@Africa/Mogadishu');
+    const res = response();
+    await cronHandler({ method: 'GET', headers: { authorization: 'Bearer cron-secret' } }, res);
+
+    expect(res.statusCode).toBe(200);
+    expect(mocks.runReminder).toHaveBeenCalledWith(expect.objectContaining({
+      reminderType: 'marks_entry_reminder',
+      reminderStage: 'penalty',
+      reminderOccurrence: 'scheduled:marks_entry_reminder:penalty:2026-10-10:16:00@Africa/Mogadishu',
     }));
   });
 
   it('continues with the other reminder type when one schedule is invalid', async () => {
-    mocks.isScheduleDue.mockImplementation((item: any) => {
-      if (item.reminder_type === 'lesson_plan_reminder') throw new Error('invalid timezone');
-      return true;
-    });
+    mocks.isLessonPlanDailyDue.mockImplementation(() => { throw new Error('invalid timezone'); });
+    mocks.getMarksStage.mockReturnValue('reminder');
     const res = response();
     await cronHandler({ method: 'GET', headers: { authorization: 'Bearer cron-secret' } }, res);
 

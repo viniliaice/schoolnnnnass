@@ -50,6 +50,17 @@ export interface AcademicReminderTaskView {
     occurrence: string | null;
     title: string | null;
   } | null;
+  lastPenaltyNotice?: {
+    academicPeriod: string | null;
+    status: string;
+    attemptedAt: string;
+    deliveredDevices: number;
+    failedDevices: number;
+    expiredDevices: number;
+    lastError: string | null;
+    title: string | null;
+    body: string | null;
+  } | null;
   subscription?: {
     activeSubscriptions: number;
     realActiveSubscriptions: number;

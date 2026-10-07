@@ -131,6 +131,7 @@ describe('20261007 academic reminder migration', () => {
     expect(scheduleRows.rows).toHaveLength(2);
     expect(scheduleRows.rows.map((row: any) => row.reminder_type)).toEqual(['lesson_plan_reminder', 'marks_entry_reminder']);
     expect(scheduleRows.rows[0]).toMatchObject({ enabled: true, timezone: 'Africa/Mogadishu', exam_scope: 'monthly' });
+    expect(scheduleRows.rows.find((row: any) => row.reminder_type === 'marks_entry_reminder').days_of_week).toEqual([0, 1, 2, 3, 4, 5, 6]);
     await pg.query(`INSERT INTO public.notification_preferences (user_id) VALUES ('teacher-1')`);
     const preference = await pg.query(`SELECT marks_entry_reminders FROM public.notification_preferences WHERE user_id = 'teacher-1'`);
     expect(preference.rows).toEqual([{ marks_entry_reminders: true }]);
@@ -161,12 +162,13 @@ describe('20261007 academic reminder migration', () => {
       reminder_type: 'lesson_plan_reminder',
       academic_period: 'year-2026:2026-W10',
       relevant_entity: '["plan-1"]',
-      reminder_occurrence: 'scheduled:2026-10-07:15:00@Africa/Mogadishu',
+      reminder_occurrence: 'scheduled:lesson_plan_reminder:reminder:2026-10-07:16:00@Africa/Mogadishu',
+      reminder_stage: 'reminder',
       deduplication_key: 'dedupe-key-one',
     };
     await runAs(null, 'service_role');
-    const first = await pg.query('SELECT id,user_id,deduplication_key FROM public.claim_academic_reminder_recipients($1::jsonb)', [JSON.stringify([row])]);
-    expect(first.rows).toEqual([{ id: 'recipient-1', user_id: 'teacher-1', deduplication_key: 'dedupe-key-one' }]);
+    const first = await pg.query('SELECT id,user_id,reminder_stage,deduplication_key FROM public.claim_academic_reminder_recipients($1::jsonb)', [JSON.stringify([row])]);
+    expect(first.rows).toEqual([{ id: 'recipient-1', user_id: 'teacher-1', reminder_stage: 'reminder', deduplication_key: 'dedupe-key-one' }]);
     const retry = await pg.query('SELECT id FROM public.claim_academic_reminder_recipients($1::jsonb)', [JSON.stringify([{ ...row, id: 'recipient-2', notification_id: 'notice-2' }])]);
     expect(retry.rows).toEqual([]);
     const persisted = await pg.query(`SELECT count(*)::int AS count FROM public.notification_recipients WHERE deduplication_key = 'dedupe-key-one'`);

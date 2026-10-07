@@ -23,7 +23,7 @@
   "crons": [
     {
       "path": "/api/academic-reminders/cron",
-      "schedule": "*/5 * * * *"
+      "schedule": "0 13 * * *"
     }
   ],
   "rewrites": [

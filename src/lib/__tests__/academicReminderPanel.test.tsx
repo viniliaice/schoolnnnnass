@@ -55,8 +55,8 @@ const marksTask = (teacherId: string, eligible: boolean) => ({
 });
 
 const schedules = [
-  { reminderType: 'lesson_plan_reminder' as const, enabled: true, timezone: 'Africa/Mogadishu', daysOfWeek: [1, 2, 3, 4, 5], sendTime: '15:00', examScope: 'monthly' },
-  { reminderType: 'marks_entry_reminder' as const, enabled: true, timezone: 'Africa/Mogadishu', daysOfWeek: [1, 2, 3, 4, 5], sendTime: '15:00', examScope: 'monthly' },
+  { reminderType: 'lesson_plan_reminder' as const, enabled: true, timezone: 'Africa/Mogadishu', daysOfWeek: [1, 2, 3, 4, 5], sendTime: '16:00', examScope: 'monthly' },
+  { reminderType: 'marks_entry_reminder' as const, enabled: true, timezone: 'Africa/Mogadishu', daysOfWeek: [1, 2, 3, 4, 5], sendTime: '16:00', examScope: 'monthly' },
 ];
 
 function taskResponse(staff: boolean) {
@@ -162,6 +162,6 @@ describe('AcademicReminderPanel', () => {
     await click(findButton('Save schedule'));
     await flush(() => api.mock.calls.some(([path, init]) => path === '/api/academic-reminders/schedules' && init?.method === 'PUT'));
     const scheduleCall = api.mock.calls.filter(([path]) => path === '/api/academic-reminders/schedules').at(-1);
-    expect(JSON.parse(String(scheduleCall?.[1]?.body))).toMatchObject({ reminderType: 'marks_entry_reminder', timezone: 'Africa/Mogadishu', sendTime: '15:00' });
+    expect(JSON.parse(String(scheduleCall?.[1]?.body))).toMatchObject({ reminderType: 'marks_entry_reminder', timezone: 'Africa/Mogadishu', sendTime: '16:00' });
   });
 });

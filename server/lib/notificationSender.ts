@@ -31,6 +31,7 @@ export type NotificationCategory =
   | 'general';
 
 export type AcademicReminderType = 'lesson_plan_reminder' | 'marks_entry_reminder';
+export type AcademicReminderStage = 'reminder' | 'penalty';
 
 export interface ReminderRecipientMetadata {
   deduplicationKey: string;
@@ -41,6 +42,7 @@ export interface ReminderRecipientMetadata {
 
 export interface ReminderSendMetadata {
   reminderType: AcademicReminderType;
+  reminderStage?: AcademicReminderStage;
   academicPeriod: string;
   reminderOccurrence: string;
   entries: Record<string, ReminderRecipientMetadata>;
@@ -122,6 +124,7 @@ export interface ReminderRecipientInsert {
   reminder_type?: AcademicReminderType;
   academic_period?: string;
   relevant_entity?: string;
+  reminder_stage?: AcademicReminderStage | null;
   reminder_occurrence?: string;
   deduplication_key?: string | null;
 }
@@ -266,6 +269,12 @@ export function validateSendRequest(request: SendNotificationRequest): string | 
   const isReminderCategory = request.category === 'lesson_plan_reminder' || request.category === 'marks_entry_reminder';
   if (isReminderCategory && !request.reminder) return 'academic reminder metadata is required';
   if (request.reminder && request.reminder.reminderType !== request.category) return 'reminder type must match notification category';
+  if (request.reminder?.reminderStage !== undefined
+    && request.reminder.reminderStage !== 'reminder'
+    && request.reminder.reminderStage !== 'penalty') return 'academic reminder stage is invalid';
+  if (request.reminder?.reminderStage === 'penalty' && request.category !== 'marks_entry_reminder') {
+    return 'penalty stage is only valid for marks entry reminders';
+  }
   if (request.reminder && request.audience !== 'teachers') return 'academic reminders may target teachers only';
   if (request.reminder) {
     const { academicPeriod, reminderOccurrence, entries } = request.reminder;
@@ -380,6 +389,7 @@ export async function sendTeacherNotification(opts: {
         academic_period: entry.academicPeriod,
         relevant_entity: entry.relevantEntity,
         reminder_occurrence: entry.reminderOccurrence,
+        reminder_stage: reminder.reminderStage ?? 'reminder',
         deduplication_key: entry.deduplicationKey,
       };
     });

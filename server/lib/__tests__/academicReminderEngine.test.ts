@@ -4,8 +4,13 @@ import {
   DEFAULT_SCHOOL_TIMEZONE,
   getLessonPlanReminderTasks,
   getMarksEntryReminderTasks,
+  getMarksEntryReminderStage,
+  isLessonPlanDailyCronDue,
   isReminderScheduleDue,
   loadAcademicPeriodContext,
+  loadPreviousMonthAcademicPeriodContext,
+  marksEntryReminderStageForDate,
+  previousCalendarMonth,
   localDateTimeParts,
   makeReminderDeduplicationKey,
   manualReminderOccurrence,
@@ -72,6 +77,7 @@ function dataSource(overrides: Partial<AcademicReminderDataSource> = {}): Academ
   return {
     getCurrentAcademicYear: async () => YEAR,
     getCurrentTerm: async () => TERM,
+    getAcademicPeriodForMonth: async () => ({ year: YEAR, term: TERM }),
     getTeacherRoster: async () => [
       { id: 'teacher-1', name: 'Teacher One', role: 'teacher', assignedClasses: ['Grade 8-A', 'Grade 8-B'] },
       { id: 'teacher-2', name: 'Teacher Two', role: 'teacher', assignedClasses: ['Grade 8-C'] },
@@ -184,9 +190,47 @@ describe('academic reminder scheduling and eligibility', () => {
     expect(isReminderScheduleDue({ ...schedule, days_of_week: [2] }, NOW)).toBe(false);
   });
 
-  it('creates stable occurrence labels and separate per-type/entity deduplication keys', () => {
+  it('uses the daily Hobby cron window for lesson plans and the marks 5th/10th policy', () => {
+    const lessonSchedule: ReminderSchedule = {
+      ...schedule,
+      reminder_type: 'lesson_plan_reminder',
+      timezone: DEFAULT_SCHOOL_TIMEZONE,
+      days_of_week: [3],
+      send_time: '16:00',
+    };
+    expect(isLessonPlanDailyCronDue(lessonSchedule, new Date('2026-10-07T13:04:00.000Z'))).toBe(true);
+    expect(isLessonPlanDailyCronDue(lessonSchedule, new Date('2026-10-07T14:00:00.000Z'))).toBe(false);
+    expect(isLessonPlanDailyCronDue({ ...lessonSchedule, days_of_week: [2] }, new Date('2026-10-07T13:00:00.000Z'))).toBe(false);
+
+    expect(marksEntryReminderStageForDate(new Date('2026-10-05T12:00:00.000Z'))).toBe('reminder');
+    expect(marksEntryReminderStageForDate(new Date('2026-10-10T12:00:00.000Z'))).toBe('penalty');
+    expect(marksEntryReminderStageForDate(new Date('2026-10-06T12:00:00.000Z'))).toBeNull();
+    expect(getMarksEntryReminderStage({ ...schedule, days_of_week: [0] }, new Date('2026-10-05T12:00:00.000Z'))).toBe('reminder');
+    expect(getMarksEntryReminderStage({ ...schedule, enabled: false }, new Date('2026-10-05T12:00:00.000Z'))).toBeNull();
+  });
+
+  it('resolves the previous calendar month in Africa/Mogadishu, including January rollover', async () => {
+    expect(previousCalendarMonth(new Date('2026-01-05T12:00:00.000Z'))).toEqual({
+      year: 2025, month: 12, monthName: 'December', key: '2025-12',
+    });
+    expect(previousCalendarMonth(new Date('2026-03-05T12:00:00.000Z'))).toMatchObject({
+      year: 2026, month: 2, monthName: 'February', key: '2026-02',
+    });
+    const requested: Array<[number, string]> = [];
+    const source = dataSource({
+      getAcademicPeriodForMonth: async (year, month) => {
+        requested.push([year, month]);
+        return { year: YEAR, term: TERM };
+      },
+    });
+    const context = await loadPreviousMonthAcademicPeriodContext(source, DEFAULT_SCHOOL_TIMEZONE, NOW);
+    expect(requested).toEqual([[2026, 'September']]);
+    expect(context).toMatchObject({ schoolMonth: 'September', year: YEAR, term: TERM, schoolDate: '2026-10-07' });
+  });
+
+  it('creates stable occurrence labels and separate per-type/entity/stage deduplication keys', () => {
     const occurrence = scheduledReminderOccurrence(schedule, NOW);
-    expect(occurrence).toBe('scheduled:marks_entry_reminder:2026-10-07:12:00@Africa/Mogadishu');
+    expect(occurrence).toBe('scheduled:marks_entry_reminder:reminder:2026-10-07:12:00@Africa/Mogadishu');
     expect(manualReminderOccurrence('lesson_plan_reminder', 'request-12345'))
       .toBe('manual:lesson_plan_reminder:request-12345');
     const base = {
@@ -203,6 +247,9 @@ describe('academic reminder scheduling and eligibility', () => {
     expect(makeReminderDeduplicationKey({ ...base, teacherId: 'teacher-2' })).not.toBe(key);
     expect(makeReminderDeduplicationKey({ ...base, academicPeriod: 'year-2026:2026-W11' })).not.toBe(key);
     expect(makeReminderDeduplicationKey({ ...base, reminderOccurrence: 'manual:lesson_plan_reminder:request-99999' })).not.toBe(key);
+    const penaltyOccurrence = scheduledReminderOccurrence(schedule, NOW, 'penalty');
+    expect(penaltyOccurrence).not.toBe(occurrence);
+    expect(makeReminderDeduplicationKey({ ...base, reminderOccurrence: penaltyOccurrence })).not.toBe(key);
   });
 
   it('does not remind merely because a teacher has assigned classes without a current-week plan', async () => {
@@ -299,7 +346,7 @@ describe('academic reminder send orchestration', () => {
       reminder_type: 'marks_entry_reminder',
       status: 'sent',
       academic_period: 'year-2026:term-1:monthly:October',
-      reminder_occurrence: 'scheduled:marks_entry_reminder:2026-10-07:12:00@Africa/Mogadishu',
+      reminder_occurrence: 'scheduled:marks_entry_reminder:reminder:2026-10-07:12:00@Africa/Mogadishu',
     });
 
     const completedSource = dataSource({ getMarksMonitorRows: async () => [{
@@ -317,6 +364,58 @@ describe('academic reminder send orchestration', () => {
     const complete = await runAcademicReminder({ ...options, source: completedSource });
     expect(complete.eligibleTeacherIds).toEqual([]);
     expect(complete.summary).toBeNull();
+    expect(pushCount).toBe(1);
+  });
+
+  it('sends a previous-month penalty notice only while marks remain incomplete and records the penalty stage', async () => {
+    const now = new Date('2026-10-10T13:00:00.000Z'); // October 10, 16:00 Africa/Mogadishu
+    const context = await loadPreviousMonthAcademicPeriodContext(dataSource(), DEFAULT_SCHOOL_TIMEZONE, now);
+    const sub: PushSubRow = {
+      id: 'sub-1',
+      user_id: 'teacher-1',
+      endpoint: 'https://push.example.test/device/one',
+      ...deviceKeys(),
+      is_active: true,
+    };
+    const memory = memoryNotificationDb([{ id: 'teacher-1', name: 'Teacher One' }], [sub]);
+    let pushCount = 0;
+    const fetchImpl = (async () => {
+      pushCount += 1;
+      return new Response('', { status: 201 });
+    }) as typeof fetch;
+    const options = {
+      source: dataSource(),
+      notificationDb: memory.db,
+      vapid: { privateKey: generateVapidKeys().privateKey, subject: 'mailto:reminders@example.school' },
+      reminderType: 'marks_entry_reminder' as const,
+      reminderStage: 'penalty' as const,
+      senderId: null,
+      reminderOccurrence: scheduledReminderOccurrence(schedule, now, 'penalty'),
+      now,
+      timezone: DEFAULT_SCHOOL_TIMEZONE,
+      context,
+      examScope: 'monthly' as const,
+      makeId: memory.makeId,
+      fetchImpl,
+    };
+
+    const result = await runAcademicReminder(options);
+    expect(result.academicPeriod).toBe('year-2026:term-1:monthly:September');
+    expect(memory.notifications[0]).toMatchObject({
+      title: 'Marks Entry Penalty',
+      body: 'Your September marks entries were not completed by the required deadline. You have been penalized for September.',
+    });
+    expect(memory.recipients[0]).toMatchObject({ reminder_stage: 'penalty', status: 'sent' });
+    expect(result.summary).toMatchObject({ sent: 1, deliveryOk: true });
+
+    const completeMemory = memoryNotificationDb([{ id: 'teacher-1', name: 'Teacher One' }], [sub]);
+    const completed = await runAcademicReminder({
+      ...options,
+      source: dataSource({ getMarksMonitorRows: async () => [completeMarkRow] }),
+      notificationDb: completeMemory.db,
+    });
+    expect(completed.eligibleTeacherIds).toEqual([]);
+    expect(completed.summary).toBeNull();
     expect(pushCount).toBe(1);
   });
 

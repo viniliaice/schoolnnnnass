@@ -92,9 +92,18 @@ export default async function handler(req: any, res: any) {
       if (!latestByTypePeriodTeacher.has(key)) latestByTypePeriodTeacher.set(key, row);
     }
 
+    const latestPenaltyByTeacher = new Map<string, (typeof history)[number]>();
+    for (const row of history) {
+      if (row.reminder_type === 'marks_entry_reminder' && row.reminder_stage === 'penalty'
+        && !latestPenaltyByTeacher.has(row.user_id)) {
+        latestPenaltyByTeacher.set(row.user_id, row);
+      }
+    }
+
     const enrich = (task: any) => {
       const key = `${task.reminderType}\u0000${task.academicPeriod}\u0000${task.teacherId}`;
       const last = latestByTypePeriodTeacher.get(key);
+      const lastPenalty = task.reminderType === 'marks_entry_reminder' ? latestPenaltyByTeacher.get(task.teacherId) : undefined;
       const subscription = subscriptions.get(task.teacherId);
       return {
         ...task,
@@ -108,6 +117,19 @@ export default async function handler(req: any, res: any) {
           occurrence: last.reminder_occurrence,
           title: last.notifications?.title ?? null,
         } : null,
+        ...(task.reminderType === 'marks_entry_reminder' ? {
+          lastPenaltyNotice: lastPenalty ? {
+            academicPeriod: lastPenalty.academic_period,
+            status: lastPenalty.status,
+            attemptedAt: lastPenalty.created_at,
+            deliveredDevices: Number(lastPenalty.delivered_devices) || 0,
+            failedDevices: Number(lastPenalty.failed_devices) || 0,
+            expiredDevices: Number(lastPenalty.expired_devices) || 0,
+            lastError: lastPenalty.last_error ? sanitizePushResponseText(lastPenalty.last_error, 200) : null,
+            title: lastPenalty.notifications?.title ?? null,
+            body: lastPenalty.notifications?.body ?? null,
+          } : null,
+        } : {}),
         ...(isAdminOrSupervisor(role) ? {
           subscription: subscription ?? { activeSubscriptions: 0, realActiveSubscriptions: 0, hasRealDevice: false },
         } : {}),

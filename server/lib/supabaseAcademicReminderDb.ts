@@ -11,7 +11,12 @@ import type {
 } from './academicReminderEngine.js';
 import { isSyntheticPushEndpoint } from './pushDiagnostics.js';
 import { inFilter, SupabaseRest } from './supabaseRest.js';
-import type { AcademicReminderType } from './notificationSender.js';
+import type { AcademicReminderStage, AcademicReminderType } from './notificationSender.js';
+
+const MONTH_NUMBER: Record<string, string> = {
+  January: '01', February: '02', March: '03', April: '04', May: '05', June: '06',
+  July: '07', August: '08', September: '09', October: '10', November: '11', December: '12',
+};
 
 interface RawTeacherProfile {
   id: string;
@@ -54,7 +59,7 @@ function parseSchedule(row: any): ReminderSchedule {
     enabled: row.enabled === true,
     timezone: row.timezone || 'Africa/Mogadishu',
     days_of_week: Array.isArray(row.days_of_week) ? row.days_of_week.map(Number) : [],
-    send_time: String(row.send_time ?? '15:00:00').slice(0, 5),
+    send_time: String(row.send_time ?? '16:00:00').slice(0, 5),
     exam_scope: row.exam_scope ?? 'monthly',
     updated_by: row.updated_by ?? null,
     updated_at: row.updated_at ?? null,
@@ -109,6 +114,38 @@ export function createSupabaseAcademicReminderDataSource(
         ...term,
         months: Array.isArray(term.months) ? term.months : [],
       };
+    },
+
+    async getAcademicPeriodForMonth(calendarYear, month) {
+      const monthNumber = MONTH_NUMBER[month];
+      if (!monthNumber) throw new Error(`Unsupported calendar month: ${month}.`);
+      const anchorDate = `${calendarYear}-${monthNumber}-15`;
+      const yearResult = await serviceRest.select<AcademicYearRecord[]>(
+        'academic_years',
+        `select=id,name,startDate,endDate,isCurrent&startDate=lte.${anchorDate}&endDate=gte.${anchorDate}&order=startDate.desc&limit=1`,
+      );
+      if (yearResult.error) throw new Error(`getAcademicPeriodForMonth year: ${yearResult.error.message}`);
+      const year = yearResult.data?.[0];
+      if (!year) return null;
+
+      const termResult = await serviceRest.select<AcademicTermRecord[]>(
+        'terms',
+        `select=id,name,academicYearId,startDate,endDate,months,isCurrent&academicYearId=eq.${encodeURIComponent(year.id)}&order=startDate.asc&limit=50`,
+      );
+      if (termResult.error) throw new Error(`getAcademicPeriodForMonth terms: ${termResult.error.message}`);
+      const terms = (termResult.data ?? []).map((term) => ({
+        ...term,
+        months: Array.isArray(term.months) ? term.months : [],
+      }));
+      const monthTerms = terms.filter((term) => term.months.some(
+        (termMonth) => termMonth.trim().toLocaleLowerCase() === month.toLocaleLowerCase(),
+      ));
+      const containingDate = terms.find((term) => term.startDate <= anchorDate && term.endDate >= anchorDate);
+      const term = monthTerms.find((candidate) => candidate.startDate <= anchorDate && candidate.endDate >= anchorDate)
+        ?? monthTerms[0]
+        ?? containingDate
+        ?? null;
+      return { year, term };
     },
 
     getTeacherRoster: loadTeacherRoster,
@@ -219,6 +256,7 @@ export interface ReminderDeliveryHistoryRow {
   academic_period: string | null;
   relevant_entity: string | null;
   reminder_occurrence: string | null;
+  reminder_stage: AcademicReminderStage | null;
   status: string;
   delivered_devices: number;
   failed_devices: number;
@@ -236,7 +274,7 @@ export async function getReminderDeliveryHistory(
   if (userIds.length === 0) return [];
   const { data, error } = await rest.select<ReminderDeliveryHistoryRow[]>(
     'notification_recipients',
-    `select=id,user_id,reminder_type,academic_period,relevant_entity,reminder_occurrence,status,delivered_devices,failed_devices,expired_devices,last_error,created_at,notifications(title,body,url)&user_id=${encodeURIComponent(`in.${inFilter(userIds)}`)}&reminder_type=in.(${encodeURIComponent('"lesson_plan_reminder","marks_entry_reminder"')})&order=created_at.desc&limit=10000`,
+    `select=id,user_id,reminder_type,academic_period,relevant_entity,reminder_occurrence,reminder_stage,status,delivered_devices,failed_devices,expired_devices,last_error,created_at,notifications(title,body,url)&user_id=${encodeURIComponent(`in.${inFilter(userIds)}`)}&reminder_type=in.(${encodeURIComponent('"lesson_plan_reminder","marks_entry_reminder"')})&order=created_at.desc&limit=10000`,
   );
   if (error) throw new Error(`getReminderDeliveryHistory: ${error.message}`);
   return data ?? [];

@@ -1,8 +1,10 @@
 /** Vercel Cron entrypoint; CRON_SECRET bearer auth is mandatory. */
 
 import {
-  isReminderScheduleDue,
+  getMarksEntryReminderStage,
+  isLessonPlanDailyCronDue,
   loadAcademicPeriodContext,
+  loadPreviousMonthAcademicPeriodContext,
   runAcademicReminder,
   scheduledReminderOccurrence,
 } from '../../server/lib/academicReminderEngine.js';
@@ -33,12 +35,17 @@ export default async function handler(req: any, res: any) {
     const serviceRest = new SupabaseRest(config.url, config.serviceKey, config.serviceKey);
     const source = createSupabaseAcademicReminderDataSource(serviceRest);
     const schedules = await source.getSchedules();
-    const due = [] as typeof schedules;
+    const due: Array<{ schedule: (typeof schedules)[number]; stage: 'reminder' | 'penalty' }> = [];
     const results: Array<Record<string, unknown>> = [];
     const failures: string[] = [];
     for (const schedule of schedules) {
       try {
-        if (isReminderScheduleDue(schedule, now)) due.push(schedule);
+        if (schedule.reminder_type === 'lesson_plan_reminder') {
+          if (isLessonPlanDailyCronDue(schedule, now)) due.push({ schedule, stage: 'reminder' });
+        } else {
+          const stage = getMarksEntryReminderStage(schedule, now);
+          if (stage) due.push({ schedule, stage });
+        }
       } catch (err) {
         const detail = safeInternalError(err) || 'invalid schedule';
         console.error(`[academic-reminders/cron] ${schedule.reminder_type} schedule invalid:`, detail);
@@ -60,23 +67,28 @@ export default async function handler(req: any, res: any) {
     }
 
     const notificationDb = createSupabaseNotificationDb(serviceRest);
-    for (const schedule of due) {
+    for (const dueReminder of due) {
+      const { schedule, stage } = dueReminder;
       try {
-        const context = await loadAcademicPeriodContext(source, schedule.timezone, now);
+        const context = schedule.reminder_type === 'marks_entry_reminder'
+          ? await loadPreviousMonthAcademicPeriodContext(source, schedule.timezone, now)
+          : await loadAcademicPeriodContext(source, schedule.timezone, now);
         const result = await runAcademicReminder({
           source,
           notificationDb,
           vapid,
           reminderType: schedule.reminder_type,
+          reminderStage: stage,
           senderId: null,
-          reminderOccurrence: scheduledReminderOccurrence(schedule, now),
+          reminderOccurrence: scheduledReminderOccurrence(schedule, now, stage),
           now,
           timezone: schedule.timezone,
           context,
-          examScope: schedule.exam_scope,
+          examScope: schedule.reminder_type === 'marks_entry_reminder' ? 'monthly' : schedule.exam_scope,
         });
         results.push({
           reminderType: result.reminderType,
+          reminderStage: result.reminderStage,
           academicPeriod: result.academicPeriod,
           reminderOccurrence: result.reminderOccurrence,
           eligible: result.eligibleTeacherIds.length,
@@ -98,9 +110,9 @@ export default async function handler(req: any, res: any) {
 
     res.setHeader('Cache-Control', 'no-store');
     if (failures.length > 0) {
-      return res.status(502).json({ ok: false, due: due.map((item) => item.reminder_type), results, failures });
+      return res.status(502).json({ ok: false, due: due.map((item) => item.schedule.reminder_type), results, failures });
     }
-    return res.status(200).json({ ok: true, due: due.map((item) => item.reminder_type), results, checkedAt: now.toISOString() });
+    return res.status(200).json({ ok: true, due: due.map((item) => item.schedule.reminder_type), results, checkedAt: now.toISOString() });
   } catch (err) {
     console.error('[academic-reminders/cron] failed:', safeInternalError(err) || 'unknown error');
     return res.status(500).json({ error: 'Scheduled academic reminders could not be run.' });

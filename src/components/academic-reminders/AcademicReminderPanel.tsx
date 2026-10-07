@@ -176,6 +176,17 @@ function TaskCard({
         </div>
       )}
 
+      {task.reminderType === 'marks_entry_reminder' && task.lastPenaltyNotice && (
+        <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-950" data-testid={`academic-reminder-penalty-${task.teacherId}`}>
+          <p className="font-semibold">Penalty notice recorded · {task.lastPenaltyNotice.title ?? 'Marks Entry Penalty'}</p>
+          <p className="mt-1">Delivery outcome: {task.lastPenaltyNotice.status.replace(/_/g, ' ')} · {task.lastPenaltyNotice.deliveredDevices} accepted / {task.lastPenaltyNotice.failedDevices} failed / {task.lastPenaltyNotice.expiredDevices} expired.</p>
+          {task.lastPenaltyNotice.body && <p className="mt-1">{task.lastPenaltyNotice.body}</p>}
+          <p className="mt-1">No numeric deduction is configured in the app.</p>
+          <time className="mt-1 block text-amber-800" dateTime={task.lastPenaltyNotice.attemptedAt}>{formattedDate(task.lastPenaltyNotice.attemptedAt)}</time>
+          {task.lastPenaltyNotice.lastError && <p className="mt-1 break-words text-rose-700">{task.lastPenaltyNotice.lastError}</p>}
+        </div>
+      )}
+
       {canManage && task.subscription && (
         <p className="mt-2 flex items-center gap-1.5 text-xs text-slate-500">
           <Smartphone className="h-3.5 w-3.5" aria-hidden />
@@ -446,37 +457,38 @@ export function AcademicReminderPanel() {
                     <input type="checkbox" checked={currentSchedule.enabled} onChange={(event) => patchDraft({ enabled: event.target.checked })} className="h-4 w-4 rounded border-slate-300 text-indigo-600" />
                     Scheduled sending enabled
                   </label>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <label className="text-xs font-semibold text-slate-600">School timezone
-                      <input value={currentSchedule.timezone} onChange={(event) => patchDraft({ timezone: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-800" placeholder="Africa/Mogadishu" />
-                    </label>
-                    <label className="text-xs font-semibold text-slate-600">Local send time
-                      <input type="time" value={currentSchedule.sendTime} onChange={(event) => patchDraft({ sendTime: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-normal text-slate-800" />
-                    </label>
+                  <div className="rounded-lg border border-sky-100 bg-sky-50 px-3 py-2 text-xs text-sky-900">
+                    The daily Vercel Cron runs at 16:00 Africa/Mogadishu.
                   </div>
-                  <fieldset>
-                    <legend className="mb-2 text-xs font-semibold text-slate-600">Days of week</legend>
-                    <div className="flex flex-wrap gap-2">
-                      {DAY_OPTIONS.map((day) => {
-                        const selected = currentSchedule.daysOfWeek.includes(day.value);
-                        return (
-                          <label key={day.value} className={`cursor-pointer rounded-lg border px-3 py-1.5 text-xs font-semibold ${selected ? 'border-indigo-300 bg-indigo-100 text-indigo-800' : 'border-slate-200 bg-white text-slate-500'}`}>
-                            <input type="checkbox" checked={selected} onChange={() => patchDraft({ daysOfWeek: selected ? currentSchedule.daysOfWeek.filter((value) => value !== day.value) : [...currentSchedule.daysOfWeek, day.value].sort((a, b) => a - b) })} className="sr-only" />
-                            {day.label}
-                          </label>
-                        );
-                      })}
+                  {reminderType === 'lesson_plan_reminder' ? (
+                    <fieldset>
+                      <legend className="mb-2 text-xs font-semibold text-slate-600">Lesson-plan reminder days</legend>
+                      <div className="flex flex-wrap gap-2">
+                        {DAY_OPTIONS.map((day) => {
+                          const selected = currentSchedule.daysOfWeek.includes(day.value);
+                          return (
+                            <label key={day.value} className={`cursor-pointer rounded-lg border px-3 py-1.5 text-xs font-semibold ${selected ? 'border-indigo-300 bg-indigo-100 text-indigo-800' : 'border-slate-200 bg-white text-slate-500'}`}>
+                              <input type="checkbox" checked={selected} onChange={() => patchDraft({ daysOfWeek: selected ? currentSchedule.daysOfWeek.filter((value) => value !== day.value) : [...currentSchedule.daysOfWeek, day.value].sort((a, b) => a - b) })} className="sr-only" />
+                              {day.label}
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </fieldset>
+                  ) : (
+                    <div className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                      Scheduled monthly marks checks run on the 5th for the previous month; penalty notices run on the 10th only if entries remain incomplete. No numeric deduction is calculated.
                     </div>
-                  </fieldset>
+                  )}
                   {reminderType === 'marks_entry_reminder' && (
-                    <label className="block text-xs font-semibold text-slate-600">Marks scope
+                    <label className="block text-xs font-semibold text-slate-600">Scope for manual sends
                       <select value={currentSchedule.examScope} onChange={(event) => patchDraft({ examScope: event.target.value })} className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-normal text-slate-800 sm:max-w-md">
                         {MARKS_EXAM_SCOPES.map((scope) => <option key={scope} value={scope}>{SCOPE_LABELS[scope] ?? scope}</option>)}
                       </select>
                     </label>
                   )}
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="flex items-center gap-1.5 text-xs text-slate-500"><ShieldCheck className="h-3.5 w-3.5" />Vercel Cron checks schedules every five minutes; sends use this local timezone.</p>
+                    <p className="flex items-center gap-1.5 text-xs text-slate-500"><ShieldCheck className="h-3.5 w-3.5" />Cron is daily at 16:00 Africa/Mogadishu; this reminder type has its own enable/policy settings.</p>
                     <button type="button" onClick={() => saveScheduleMutation.mutate(currentSchedule)} disabled={saveScheduleMutation.isPending} className="inline-flex items-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
                       {saveScheduleMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
                       Save schedule

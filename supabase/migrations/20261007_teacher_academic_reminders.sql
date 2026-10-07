@@ -9,6 +9,7 @@ ALTER TABLE public.notification_recipients
   ADD COLUMN IF NOT EXISTS academic_period TEXT,
   ADD COLUMN IF NOT EXISTS relevant_entity TEXT,
   ADD COLUMN IF NOT EXISTS reminder_occurrence TEXT,
+  ADD COLUMN IF NOT EXISTS reminder_stage TEXT,
   ADD COLUMN IF NOT EXISTS deduplication_key TEXT,
   ADD COLUMN IF NOT EXISTS expired_devices INTEGER NOT NULL DEFAULT 0;
 
@@ -20,8 +21,16 @@ COMMENT ON COLUMN public.notification_recipients.relevant_entity IS
   'Canonical lesson-plan/class-subject entity set represented by this reminder.';
 COMMENT ON COLUMN public.notification_recipients.reminder_occurrence IS
   'Stable scheduled occurrence or manual idempotency event key.';
+COMMENT ON COLUMN public.notification_recipients.reminder_stage IS
+  'Academic reminder stage: reminder or penalty; NULL for ordinary notifications.';
 COMMENT ON COLUMN public.notification_recipients.deduplication_key IS
   'SHA-256 key over teacher, type, academic period, entity, and occurrence.';
+
+ALTER TABLE public.notification_recipients
+  DROP CONSTRAINT IF EXISTS notification_recipients_reminder_stage_check;
+ALTER TABLE public.notification_recipients
+  ADD CONSTRAINT notification_recipients_reminder_stage_check
+  CHECK (reminder_stage IS NULL OR reminder_stage IN ('reminder', 'penalty'));
 
 -- Nullable unique values permit ordinary notifications while the partial
 -- unique index makes a reminder event claim atomic without locking history.
@@ -49,7 +58,7 @@ CREATE TABLE IF NOT EXISTS public.academic_reminder_schedules (
   enabled BOOLEAN NOT NULL DEFAULT TRUE,
   timezone TEXT NOT NULL DEFAULT 'Africa/Mogadishu',
   days_of_week SMALLINT[] NOT NULL DEFAULT ARRAY[2]::SMALLINT[],
-  send_time TIME NOT NULL DEFAULT TIME '15:00',
+  send_time TIME NOT NULL DEFAULT TIME '16:00',
   exam_scope TEXT NOT NULL DEFAULT 'monthly'
     CHECK (exam_scope IN (
       'monthly', 'midterm', 'final', 'ca', 'homework', 'classwork',
@@ -65,8 +74,8 @@ CREATE TABLE IF NOT EXISTS public.academic_reminder_schedules (
 INSERT INTO public.academic_reminder_schedules
   (reminder_type, enabled, timezone, days_of_week, send_time, exam_scope)
 VALUES
-  ('lesson_plan_reminder', TRUE, 'Africa/Mogadishu', ARRAY[2]::SMALLINT[], TIME '15:00', 'monthly'),
-  ('marks_entry_reminder', TRUE, 'Africa/Mogadishu', ARRAY[2]::SMALLINT[], TIME '15:00', 'monthly')
+  ('lesson_plan_reminder', TRUE, 'Africa/Mogadishu', ARRAY[2]::SMALLINT[], TIME '16:00', 'monthly'),
+  ('marks_entry_reminder', TRUE, 'Africa/Mogadishu', ARRAY[0,1,2,3,4,5,6]::SMALLINT[], TIME '16:00', 'monthly')
 ON CONFLICT (reminder_type) DO NOTHING;
 
 ALTER TABLE public.academic_reminder_schedules ENABLE ROW LEVEL SECURITY;
@@ -106,12 +115,12 @@ BEGIN
   RETURN QUERY
   INSERT INTO public.notification_recipients (
     id, notification_id, user_id, status, reminder_type, academic_period,
-    relevant_entity, reminder_occurrence, deduplication_key
+    relevant_entity, reminder_occurrence, reminder_stage, deduplication_key
   )
   SELECT
     r.id, r.notification_id, r.user_id, r.status, r.reminder_type,
     r.academic_period, r.relevant_entity, r.reminder_occurrence,
-    r.deduplication_key
+    r.reminder_stage, r.deduplication_key
   FROM jsonb_to_recordset(p_rows) AS r(
     id TEXT,
     notification_id TEXT,
@@ -121,6 +130,7 @@ BEGIN
     academic_period TEXT,
     relevant_entity TEXT,
     reminder_occurrence TEXT,
+    reminder_stage TEXT,
     deduplication_key TEXT
   )
   ON CONFLICT (deduplication_key)

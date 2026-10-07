@@ -1,6 +1,7 @@
 /** GET/PUT /api/academic-reminders/schedules — staff-only schedule controls. */
 
 import { MARKS_EXAM_SCOPES, type MarksExamScope } from '../../src/lib/marksEntryTracking.js';
+import { DAILY_CRON_LOCAL_SEND_TIME, DEFAULT_SCHOOL_TIMEZONE } from '../../server/lib/academicReminderEngine.js';
 import { authenticateServerProfile, isAdminOrSupervisor, parseJsonBody, safeInternalError } from '../../server/lib/academicReminderHttp.js';
 import { createSupabaseAcademicReminderDataSource, isReminderType } from '../../server/lib/supabaseAcademicReminderDb.js';
 
@@ -50,9 +51,15 @@ export default async function handler(req: any, res: any) {
     if (!body) return res.status(400).json({ error: 'Request body must be a JSON object.' });
     if (!isReminderType(body.reminderType)) return res.status(400).json({ error: 'Unknown reminder type.' });
     if (typeof body.enabled !== 'boolean') return res.status(400).json({ error: 'enabled must be boolean.' });
-    if (!validTimezone(body.timezone)) return res.status(400).json({ error: 'timezone must be a valid IANA timezone.' });
-    if (!validDays(body.daysOfWeek)) return res.status(400).json({ error: 'daysOfWeek must contain unique weekday numbers from 0 to 6.' });
-    if (!validSendTime(body.sendTime)) return res.status(400).json({ error: 'sendTime must use HH:mm (24-hour time).' });
+    if (!validTimezone(body.timezone) || body.timezone !== DEFAULT_SCHOOL_TIMEZONE) {
+      return res.status(400).json({ error: `The Hobby-compatible daily Cron uses the fixed ${DEFAULT_SCHOOL_TIMEZONE} timezone.` });
+    }
+    if (!validSendTime(body.sendTime) || body.sendTime !== DAILY_CRON_LOCAL_SEND_TIME) {
+      return res.status(400).json({ error: `The Hobby-compatible daily Cron runs at ${DAILY_CRON_LOCAL_SEND_TIME} ${DEFAULT_SCHOOL_TIMEZONE}.` });
+    }
+    if (body.reminderType === 'lesson_plan_reminder' && !validDays(body.daysOfWeek)) {
+      return res.status(400).json({ error: 'daysOfWeek must contain unique weekday numbers from 0 to 6.' });
+    }
 
     const existing = (await source.getSchedules()).find((item) => item.reminder_type === body.reminderType);
     if (!existing) return res.status(404).json({ error: 'Reminder schedule has not been configured in the database.' });
@@ -63,11 +70,14 @@ export default async function handler(req: any, res: any) {
       return res.status(400).json({ error: 'Unsupported marks entry scope.' });
     }
 
+    const daysOfWeek: number[] = body.reminderType === 'lesson_plan_reminder'
+      ? body.daysOfWeek as number[]
+      : [0, 1, 2, 3, 4, 5, 6];
     const schedule = await source.updateSchedule(body.reminderType, {
       enabled: body.enabled,
-      timezone: body.timezone,
-      days_of_week: body.daysOfWeek,
-      send_time: body.sendTime,
+      timezone: DEFAULT_SCHOOL_TIMEZONE,
+      days_of_week: daysOfWeek,
+      send_time: DAILY_CRON_LOCAL_SEND_TIME,
       exam_scope: scope as MarksExamScope,
     }, auth.profile.profileId);
     res.setHeader('Cache-Control', 'no-store');
