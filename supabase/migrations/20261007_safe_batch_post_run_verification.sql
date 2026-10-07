@@ -40,6 +40,14 @@ DECLARE
   v_orphan_total BIGINT := 0;
   v_cnt BIGINT;
   v_rows JSONB;
+  -- Data-preservation check. `removed_profile` holds the deleted record's RAW
+  -- profile values, which is the only way to prove nothing vanished: after the
+  -- merge the duplicate row is gone, and transferred_fields alone cannot help
+  -- because a value the policy never understood was never listed for transfer.
+  v_lost JSONB := '[]'::jsonb;
+  v_lost_total BIGINT := 0;
+  v_fam_checked BIGINT := 0;
+  v_fam_unverifiable BIGINT := 0;
 BEGIN
   IF v_role IS NULL OR v_role <> 'admin' THEN
     RAISE EXCEPTION 'Only administrators may verify the safe duplicate batch state.'
@@ -99,6 +107,53 @@ BEGIN
     HAVING count(*) > 1
   ) x;
 
+  -- 4. HARD INVARIANT — no safe-batch merge may destroy a non-empty raw Family
+  --    ID. A value survives if it is either still on the keeper, or was
+  --    explicitly recorded as a validated transfer. Checking transferred_fields
+  --    alone is NOT sufficient: a family ID that normalize_family_id() erased was
+  --    invisible to the policy, so it never entered the transfer list and the
+  --    naive check reported a false "0 values missing". This compares against the
+  --    RAW source value instead.
+  SELECT COALESCE(jsonb_agg(jsonb_build_object(
+             'auditId', z.audit_id,
+             'keeperId', z.keeper_id,
+             'removedId', z.removed_id,
+             'removedRawFamilyId', z.raw_fam,
+             'removedNormalizedFamilyId', public.normalize_family_id(z.raw_fam),
+             'keeperFamilyIdNow', z.keeper_fam,
+             'transferredFamilyId', z.transferred_fam
+           )), '[]'::jsonb),
+         COALESCE(count(*), 0)
+    INTO v_lost, v_lost_total
+  FROM (
+    SELECT a.id AS audit_id,
+           a.canonical_id AS keeper_id,
+           a.duplicate_id AS removed_id,
+           btrim(COALESCE(a.removed_profile->>'familyId', '')) AS raw_fam,
+           btrim(COALESCE(k."familyId", '')) AS keeper_fam,
+           btrim(COALESCE(a.transferred_fields->>'familyId', '')) AS transferred_fam
+      FROM public.student_merge_audits a
+      JOIN public.students k ON k.id = a.canonical_id
+     WHERE a.merge_kind = 'safe_batch'
+       AND a.removed_profile IS NOT NULL
+       AND btrim(COALESCE(a.removed_profile->>'familyId', '')) <> ''
+  ) z
+  -- NOTE: no normalize_family_id() filter here, deliberately. Filtering on the
+  -- NORMALIZED value would exclude exactly the rows this check exists for — an
+  -- unreadable id normalizes to '' and would sail straight past the WHERE.
+  -- The invariant is stated on the RAW value and nothing else.
+  WHERE z.raw_fam IS DISTINCT FROM z.keeper_fam
+    AND z.raw_fam IS DISTINCT FROM z.transferred_fam;
+
+  -- How many were actually checkable. Reporting this is what stops an empty
+  -- result from being mistaken for a clean one: audits written before
+  -- removed_profile existed carry no raw source value and cannot be verified.
+  SELECT count(*) FILTER (WHERE btrim(COALESCE(a.removed_profile->>'familyId','')) <> ''),
+         count(*) FILTER (WHERE a.removed_profile IS NULL)
+    INTO v_fam_checked, v_fam_unverifiable
+  FROM public.student_merge_audits a
+  WHERE a.merge_kind = 'safe_batch';
+
   RETURN jsonb_build_object(
     'authoritative', jsonb_build_object(
       'candidatePairs', v_summary->'candidatePairs',
@@ -123,6 +178,14 @@ BEGIN
       'orphanDetail', v_orphans,
       'studentsWithMultipleOpenEnrollments', v_cnt,
       'multipleOpenEnrollmentDetail', v_rows),
+    'dataPreservation', jsonb_build_object(
+      -- MUST be 0. Any value here is a Family ID destroyed by a safe-batch merge.
+      'lostFamilyIds', v_lost_total,
+      'lostFamilyDetail', v_lost,
+      'familyIdsChecked', COALESCE(v_fam_checked, 0),
+      -- Audits predating removed_profile: no raw source value, so NOT verified.
+      -- A non-zero number here means "unknown", never "clean".
+      'auditsUnverifiable', COALESCE(v_fam_unverifiable, 0)),
     'generatedAt', now()
   );
 END;

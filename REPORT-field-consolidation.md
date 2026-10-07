@@ -141,6 +141,48 @@ cannot and does not promote them.
 
 ---
 
+## 4b. Family ID normalization guard (policy v3)
+
+`normalize_family_id()` is `regexp_replace(raw,'\D','','g')`
+(`20260802_family_ids.sql:55`), so a raw family ID containing **no digit at all**
+— `HOUSE-RED`, `FAM-ABC` — normalizes to `''`. Policy v2 compared only the
+normalized values, so it saw blank on that side, classified the pair
+`both_blank`, marked it **SAFE**, transferred nothing, and the merge then
+**deleted the duplicate** — destroying the value without it ever appearing in
+`transferred_fields`. The "transferred values missing from keeper = 0" check
+passed vacuously, because it only ever inspected values the policy knew it was
+transferring.
+
+Fixed in policy **v3**, without touching `normalize_family_id()`:
+
+- A raw non-empty `familyId` that normalizes to `''` is **never** treated as
+  blank. The pair goes to **individual review** with the stable code
+  `family_id_invalid_normalization`. Not SAFE. Not blocked either — an unreadable
+  value is not a proven family conflict.
+- **Exception:** if both sides hold *byte-identical* raw values, the keeper
+  survives holding them, so nothing can be lost and there is nothing to compare
+  → `same_family_id`, SAFE. Without this the review workflow could never merge a
+  pair it had just corrected by copying the value across.
+- Every existing rule is unchanged: same → keep, proven → transfer, conflicting →
+  blocked, unprovable → review.
+- New audit column `student_merge_audits.removed_profile` retains the removed
+  record's raw `familyId` / `parentPhone` / `transport` / `govId`, which is the
+  only way to prove nothing vanished once the row is gone.
+- `verify_safe_duplicate_batch_state()` gained a `dataPreservation` block that
+  compares the removed record's **raw** family ID against the survivor and the
+  transfer list. It deliberately applies **no** normalization filter — filtering
+  on the normalized value would exclude exactly the rows it exists to catch. It
+  also reports `familyIdsChecked` and `auditsUnverifiable`, so an empty result
+  can never be mistaken for a clean one.
+
+Measured on the rehearsal with the deliberately invalid fixture: the pair moved
+from SAFE to **REVIEW** (safe 295 → 294, review 25 → 26), the batch merged 294
+with `RAW family IDs lost = 0`, and the idempotent re-run merged 0.
+
+Regression coverage: `duplicateBatch.familyIdNormalization.db.test.ts`, 17
+real-PostgreSQL tests including a **negative control** that hand-writes the old
+bug into an audit row and asserts the invariant reports `lostFamilyIds = 1`.
+
 ## 5. Per-field policy and the evidence behind it
 
 ### parentPhone

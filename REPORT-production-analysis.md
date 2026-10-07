@@ -341,9 +341,17 @@ deliberately not re-fixed.
 
 **DO NOT MERGE YET.**
 
-Two things must happen first, in order:
+> **UPDATE — the Family ID normalization exposure described in section 3 has
+> since been FIXED** (policy v3, see `REPORT-field-consolidation.md` §4b). A raw
+> family ID that `normalize_family_id()` would erase now forces **individual
+> review** instead of merging, and `verify_safe_duplicate_batch_state()` detects
+> the loss class directly against the removed record's raw value. Item 1 below is
+> therefore no longer blocking; it remains worth running as a data-quality check.
+> **Item 2 is still blocking** — nothing has been measured on production data.
 
-**1. Resolve the Family ID normalization exposure (blocking).**
+Two things were identified, in order:
+
+**1. Resolve the Family ID normalization exposure (now fixed in code).**
 Run `supabase/tests/family-id-normalization-audit.sql` against production. If
 section 2 reports **any** record whose `familyId` normalizes to blank, the batch
 will delete that value silently. Either correct the data, or let me add the

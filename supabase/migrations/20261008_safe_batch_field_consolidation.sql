@@ -67,13 +67,17 @@
 -- ── Audit columns for the transferred-field record ──────────────────────────
 ALTER TABLE public.student_merge_audits ADD COLUMN IF NOT EXISTS transferred_fields JSONB;
 ALTER TABLE public.student_merge_audits ADD COLUMN IF NOT EXISTS field_states JSONB;
+-- The removed record's RAW profile values as they stood at merge time. Without
+-- this the duplicate's original familyId is unrecoverable once the row is gone,
+-- which is exactly what made a silently-erased family ID undetectable.
+ALTER TABLE public.student_merge_audits ADD COLUMN IF NOT EXISTS removed_profile JSONB;
 
 CREATE OR REPLACE FUNCTION public.safe_duplicate_batch_policy()
 RETURNS JSONB
 LANGUAGE sql IMMUTABLE SET search_path = public AS $$
   SELECT jsonb_build_object(
     'policyId', 'safe_batch_parent_assigned_keeper',
-    'version', 2,
+    'version', 3,
     'nameEn', 'Merge All Safe Duplicates',
     'nameAr', 'دمج جميع سجلات الطلاب الآمنة المكررة',
     'keeperRuleEn', 'The parent-assigned record will be kept. The unassigned duplicate will be merged into it.',
@@ -130,6 +134,7 @@ LANGUAGE sql IMMUTABLE SET search_path = public AS $$
       'parent_phone_belongs_to_other_family', 'The phone on the duplicate already belongs to a DIFFERENT parent''s family — copying it would fuse two families',
       'transport_conflict', 'Transport conflict — two different non-empty values; a human must choose',
       'family_id_conflict', 'Family ID conflict — the two records, or the keeper''s parent''s siblings, already carry a different family ID',
+      'family_id_invalid_normalization', 'A raw Family ID is present but contains no digit, so normalize_family_id() erases it — the family relationship cannot be read, individual review',
       'family_id_transfer_unproven', 'Only the duplicate has a family ID and the database cannot prove the keeper belongs to that family — individual review, never guessed',
       'multiple_open_enrollments', 'Ambiguous enrollment state — more than one open enrollment',
       'no_open_enrollment', 'Ambiguous enrollment state — no open enrollment to keep',
@@ -166,7 +171,8 @@ LANGUAGE sql IMMUTABLE SET search_path = public AS $$
       'ruleEn', 'Safe union: keeper value → preserve; only keeper → preserve; only duplicate → transfer; identical → keep one; different → block. Missing data on one side is never treated as a conflict.',
       'ruleAr', 'الاتحاد الآمن: قيمة السجل المحتفظ به تُحفظ، والقيمة الموجودة في السجل المكرر فقط تُنقل، والمتطابقة يُحتفظ بواحدة، والمختلفة تُمنع. نقص البيانات في طرف واحد لا يُعتبر تعارضًا.',
       'precondition', 'Consolidation is NEVER the basis for a merge. Strong duplicate identity from the authoritative policy (normalized name + class, one parent-assigned keeper, no history conflict) is still required first.',
-      'auditedBy', 'student_merge_audits.transferred_fields + .field_states — every value copied off the removed record is recorded with its field name'
+      'auditedBy', 'student_merge_audits.transferred_fields + .field_states + .removed_profile — every value copied off the removed record is recorded with its field name, and the removed record''s raw profile is retained',
+      'normalizationGuard', 'A raw familyId that normalize_family_id() would erase (no digit at all) is never treated as blank: the pair goes to individual review rather than merging and deleting an unreadable value'
     ),
     'invariants', jsonb_build_array(
       'keeper: exactly 1 open enrollment after the merge',
@@ -198,6 +204,10 @@ DECLARE
   v_ph_k TEXT; v_ph_r TEXT;
   v_tr_k TEXT; v_tr_r TEXT;
   v_fam_k TEXT; v_fam_r TEXT;
+  -- The RAW stored values, kept separately because normalize_family_id() can
+  -- erase them: a raw id with no digit at all normalizes to ''. Comparing only
+  -- the normalized values would make a populated field look blank.
+  v_fam_raw_k TEXT; v_fam_raw_r TEXT;
   v_gov_choice TEXT := 'canonical';
   v_phone_choice TEXT := 'canonical';
   v_transport_choice TEXT := 'canonical';
@@ -475,7 +485,43 @@ BEGIN
   -- being merged on a guess. A family relationship is never replaced silently.
   v_fam_k := COALESCE(public.normalize_family_id(v_keeper."familyId"), '');
   v_fam_r := COALESCE(public.normalize_family_id(v_removed."familyId"), '');
-  IF v_fam_k <> '' AND v_fam_r <> '' AND v_fam_k = v_fam_r THEN
+  v_fam_raw_k := btrim(COALESCE(v_keeper."familyId", ''));
+  v_fam_raw_r := btrim(COALESCE(v_removed."familyId", ''));
+
+  -- ── GUARD: normalization must never silently erase a family ID ───────────
+  -- normalize_family_id() is regexp_replace(raw, '\D', '', 'g') (20260802:55),
+  -- so a raw family id containing no digit — 'HOUSE-RED', 'FAM-ABC' — normalizes
+  -- to ''. Without this guard the chain below sees '' on that side, classifies
+  -- the pair "both_blank", marks it SAFE, transfers nothing, and then the merge
+  -- DELETES the duplicate: the value is destroyed and never appears in
+  -- transferred_fields, so the usual "nothing was lost" check passes vacuously.
+  --
+  -- The policy cannot reason about a family relationship it cannot read, so the
+  -- pair goes to INDIVIDUAL REVIEW. Not SAFE. Not blocked either — this is not a
+  -- proven family conflict, the information is simply unreadable. Every existing
+  -- family rule below (same → keep, proven → transfer, conflicting → blocked,
+  -- unprovable → review) is unchanged and still runs for readable values.
+  IF (v_fam_raw_k <> '' AND v_fam_k = '') OR (v_fam_raw_r <> '' AND v_fam_r = '') THEN
+    IF v_fam_raw_k <> '' AND v_fam_raw_k = v_fam_raw_r THEN
+      -- Both sides hold byte-identical raw values. The keeper survives holding
+      -- them, so nothing can be lost and there is nothing to compare: this is
+      -- the same-family case, reached by raw comparison instead of normalized.
+      -- Without this, the individual-review workflow could never merge a pair it
+      -- had just corrected by copying the value across.
+      v_ok := array_append(v_ok, 'same_family_id');
+      v_field_states := v_field_states || jsonb_build_object(
+        'familyId', jsonb_build_object('state','identical','action','keep',
+          'raw', v_fam_raw_k, 'comparedBy','raw'));
+    ELSE
+      v_codes := array_append(v_codes, 'family_id_invalid_normalization'); v_review := true;
+      v_field_states := v_field_states || jsonb_build_object(
+        'familyId', jsonb_build_object(
+          'state','invalid_normalization','action','review',
+          'reason','family_id_invalid_normalization',
+          'keeperRaw', NULLIF(v_fam_raw_k, ''), 'removedRaw', NULLIF(v_fam_raw_r, ''),
+          'keeperNormalized', NULLIF(v_fam_k, ''), 'removedNormalized', NULLIF(v_fam_r, '')));
+    END IF;
+  ELSIF v_fam_k <> '' AND v_fam_r <> '' AND v_fam_k = v_fam_r THEN
     v_ok := array_append(v_ok, 'same_family_id');
     v_field_states := v_field_states || jsonb_build_object(
       'familyId', jsonb_build_object('state','identical','action','keep'));
@@ -1083,7 +1129,14 @@ BEGIN
              -- Every value copied off the removed record, with its field name.
              -- "Nothing was lost" must be answerable from the audit alone.
              transferred_fields = COALESCE(v_eval->'transfers', '{}'::jsonb),
-             field_states = COALESCE(v_eval->'fieldStates', '{}'::jsonb)
+             field_states = COALESCE(v_eval->'fieldStates', '{}'::jsonb),
+             -- Raw bytes of the record about to be deleted, so a later audit can
+             -- prove every non-empty value survived somewhere.
+             removed_profile = jsonb_build_object(
+               'familyId', v_removed."familyId",
+               'parentPhone', v_removed."parentPhone",
+               'transport', v_removed.transport,
+               'govId', v_removed."govId")
        WHERE id = v_audit;
 
       v_merged := v_merged || jsonb_build_object(
@@ -1363,7 +1416,7 @@ DECLARE v_p JSONB;
 BEGIN
   v_p := public.safe_duplicate_batch_policy();
   IF (v_p->>'policyId') <> 'safe_batch_parent_assigned_keeper'
-     OR (v_p->>'version')::int <> 2 THEN
+     OR (v_p->>'version')::int <> 3 THEN
     RAISE EXCEPTION 'safe_batch: unexpected policy identity %', v_p->>'policyId';
   END IF;
   IF NOT (v_p->'blockedCodes' @> '["parent_phone_belongs_to_other_family"]'::jsonb) THEN
@@ -1378,10 +1431,17 @@ BEGIN
      OR NOT (v_p->'blockedCodes' @> '["family_id_conflict"]'::jsonb) THEN
     RAISE EXCEPTION 'safe_batch: conservative family-id codes must be present';
   END IF;
+  IF NOT (v_p->'exclusionCodes' ? 'family_id_invalid_normalization') THEN
+    RAISE EXCEPTION 'safe_batch: the normalization guard code must be published';
+  END IF;
+  IF (v_p->'blockedCodes' @> '["family_id_invalid_normalization"]'::jsonb) THEN
+    RAISE EXCEPTION 'safe_batch: an unreadable family ID must be review, never blocked';
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM information_schema.columns
                   WHERE table_schema='public' AND table_name='student_merge_audits'
-                    AND column_name='transferred_fields') THEN
-    RAISE EXCEPTION 'safe_batch: transferred_fields audit column missing';
+                    AND column_name IN ('transferred_fields','removed_profile')
+                  HAVING count(*) = 2) THEN
+    RAISE EXCEPTION 'safe_batch: transferred_fields and removed_profile audit columns missing';
   END IF;
-  RAISE NOTICE 'safe_batch field consolidation: policy v2 installed';
+  RAISE NOTICE 'safe_batch field consolidation: policy v3 installed (family id normalization guard)';
 END $$;

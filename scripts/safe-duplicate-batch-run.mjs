@@ -641,6 +641,24 @@ async function renderPostState(ctx, label = 'Post-run verification (read back fr
     kv('  transferred values missing from the keeper', c(lostN ? RED : GREEN, lostN));
     if (lostN) bad(`${lostN} transferred value(s) did not survive on the keeper`);
     else ok('every transferred value is present on the surviving Student ID — nothing was discarded');
+
+    // The check above only covers values the policy KNEW it was transferring.
+    // The server-side invariant also compares the removed record's RAW family ID
+    // against the survivor, which is what catches a value the normalizer erased.
+    const dp = v.dataPreservation;
+    if (dp) {
+      kv('  raw family IDs checked', dp.familyIdsChecked ?? 0);
+      kv('  RAW family IDs lost', c((dp.lostFamilyIds ?? 0) ? RED : GREEN, dp.lostFamilyIds ?? 0));
+      if ((dp.lostFamilyIds ?? 0) > 0) {
+        bad(`${dp.lostFamilyIds} raw Family ID(s) were destroyed by the batch`);
+        bad(`detail: ${JSON.stringify(dp.lostFamilyDetail)}`);
+      }
+      if ((dp.auditsUnverifiable ?? 0) > 0) {
+        warn(`${dp.auditsUnverifiable} audit row(s) predate removed_profile — NOT verified, "0 lost" is unknown for them`);
+      } else if ((dp.lostFamilyIds ?? 0) === 0) {
+        ok('no raw Family ID was lost — verified against the removed record\'s own stored value');
+      }
+    }
   }
   return v;
 }
@@ -691,6 +709,8 @@ const FIELD_ROWS = {
     ['identical', (f) => f.state === 'identical'],
     ['conflicting family IDs', (f) => f.state === 'conflict'
       || (f.state === 'duplicate_only' && f.action === 'block')],
+    // A raw value the normalizer erases — unreadable, so never merged.
+    ['invalid normalization (unreadable → review)', (f) => f.state === 'invalid_normalization'],
   ],
   govId: [
     ['both blank', (f) => f.state === 'both_blank'],
