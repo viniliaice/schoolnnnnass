@@ -6,7 +6,7 @@
  * and VAPID configuration is valid. The service-role client is read-only.
  */
 
-import { inspectSubscription, summarizeDiagnostics, type DiagnosticPushAttempt } from '../../server/lib/pushDiagnostics.js';
+import { inspectSubscription, isSyntheticPushEndpoint, summarizeDiagnostics, type DiagnosticPushAttempt } from '../../server/lib/pushDiagnostics.js';
 import { SupabaseRest } from '../../server/lib/supabaseRest.js';
 import {
   base64UrlDecode,
@@ -131,7 +131,7 @@ async function handleDiagnostics(req: any, res: any) {
   if (!dryRun) {
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
-      if (!row.is_active) continue;
+      if (!row.is_active || isSyntheticPushEndpoint(row.endpoint)) continue;
       try {
         const result = await sendWebPush({
           endpoint: row.endpoint,

@@ -4,6 +4,7 @@ import { useRole } from '../../context/RoleContext';
 import { getTeacherExamProgress, getSupervisorDashboardData } from '@/lib/db';
 import { MONTHS, TeacherExamProgress } from '../../types';
 import HeatMap from '../../components/HeatMap/HeatMap';
+import { AcademicReminderPanel } from '../../components/academic-reminders/AcademicReminderPanel';
 
 const getCardTintClasses = (percent: number) => {
   if (percent <= 30) return 'bg-rose-50/90 border-rose-200 text-rose-900';
@@ -164,6 +165,8 @@ export function SupervisorDashboard() {
         <h1 className="text-2xl font-bold text-slate-900">Supervisor Dashboard</h1>
         <p className="text-slate-500 mt-1">Monitor teacher monthly exam entry completion.</p>
       </div>
+
+      <AcademicReminderPanel />
 
       <div className="flex flex-col gap-4 lg:flex-row lg:items-center">
           <div className="flex flex-wrap gap-2 bg-white rounded-lg p-1 shadow-sm">

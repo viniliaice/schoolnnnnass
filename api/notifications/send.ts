@@ -19,15 +19,8 @@
 import { sendTeacherNotification, validateSendRequest } from '../../server/lib/notificationSender.js';
 import { createSupabaseNotificationDb } from '../../server/lib/supabaseNotificationDb.js';
 import { SupabaseRest } from '../../server/lib/supabaseRest.js';
-import {
-  generateVapidKeys,
-  sanitizePushResponseText,
-  validateVapidConfig,
-  type VapidConfig,
-  type VapidConfigCheck,
-} from '../../server/lib/webpush.js';
-
-let devVapid: VapidConfig | null = null;
+import { sanitizePushResponseText, validateVapidConfig, type VapidConfigCheck } from '../../server/lib/webpush.js';
+import { resolveVapidConfig } from '../../server/lib/notificationRuntime.js';
 
 /**
  * Last-resort error responder: guarantees a readable JSON body instead of
@@ -53,23 +46,6 @@ function sendJsonError(res: any, err: unknown, scope: string) {
     /* nothing else we can do */
   }
   return undefined;
-}
-
-function resolveVapidConfig(): VapidConfig {
-  if (process.env.NODE_ENV !== 'production' && !process.env.VAPID_PRIVATE_KEY) {
-    if (!devVapid) {
-      const keys = generateVapidKeys();
-      devVapid = { privateKey: keys.privateKey, subject: 'mailto:dev@localhost' };
-    }
-    return devVapid;
-  }
-  return {
-    privateKey: process.env.VAPID_PRIVATE_KEY || '',
-    // In production VAPID_SUBJECT is required and validated. Falling back to a
-    // default here would hide the same misconfiguration that /api/push/health
-    // is intended to report.
-    subject: process.env.VAPID_SUBJECT ?? '',
-  };
 }
 
 function sendVapidConfigError(res: any, check: VapidConfigCheck) {
@@ -123,6 +99,11 @@ async function handleSend(req: any, res: any) {
 
   // ── Validate + send ──────────────────────────────────────────────────────
   const request = (req.body || {}) as any;
+  if (request?.category === 'lesson_plan_reminder'
+    || request?.category === 'marks_entry_reminder'
+    || request?.reminder) {
+    return res.status(400).json({ error: 'Academic reminders must use /api/academic-reminders/send so eligibility and deduplication are enforced.' });
+  }
   const invalid = validateSendRequest(request);
   if (invalid) return res.status(400).json({ error: invalid });
 

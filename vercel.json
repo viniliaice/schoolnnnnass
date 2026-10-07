@@ -20,6 +20,12 @@
       "headers": [{ "key": "Cache-Control", "value": "public, max-age=604800, immutable" }]
     }
   ],
+  "crons": [
+    {
+      "path": "/api/academic-reminders/cron",
+      "schedule": "0 13 * * *"
+    }
+  ],
   "rewrites": [
     {
       "source": "/(.*)",

@@ -12,10 +12,10 @@
  * result. Keeping it pure makes the accountability maths directly testable.
  */
 
-import type { PlanStatus } from '../types';
-import type { PlanWeekCount } from './lessonPlanWeeks';
-import { buildPlanWeeks } from './lessonPlanWeeks';
-import { makeWeekLabel, weekNumberForDate, weekRangeForNumber } from '../utils/weekDates';
+import type { PlanStatus } from '../types/index.js';
+import type { PlanWeekCount } from './lessonPlanWeeks.js';
+import { buildPlanWeeks } from './lessonPlanWeeks.js';
+import { makeWeekLabel, weekNumberForDate, weekRangeForNumber } from '../utils/weekDates.js';
 
 /**
  * A plan counts as a submission in every state where the teacher has handed

@@ -29,6 +29,7 @@ A complete school management system built with React, Vite, and Supabase. Manage
 - [Record student attendance](how-tos/record-attendance.md)
 - [Generate student reports](how-tos/generate-reports.md)
 - [Use the AI lesson planner](how-tos/use-ai-lesson-planner.md)
+- [Deploy and verify academic reminders](how-tos/academic-reminders.md)
 
 ### Explanations
 

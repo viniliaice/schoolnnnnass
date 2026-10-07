@@ -373,11 +373,11 @@ export function SendTeacherNotifications() {
             {error && <p className="text-sm text-rose-600">{error}</p>}
             {result && (
               <div
-                className={`rounded-lg border p-3 text-sm ${result.deliveryOk || result.devicesDelivered > 0 ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : result.devicesFailed > 0 ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-sky-200 bg-sky-50 text-sky-800'}`}
+                className={`rounded-lg border p-3 text-sm ${result.deliveryOk ? 'border-emerald-200 bg-emerald-50 text-emerald-800' : result.devicesDelivered > 0 ? 'border-amber-200 bg-amber-50 text-amber-900' : result.devicesFailed > 0 ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-sky-200 bg-sky-50 text-sky-800'}`}
                 data-testid="send-result-summary"
               >
                 <p className="font-semibold">
-                  {result.deliveryOk || result.devicesDelivered > 0 ? 'Delivery accepted' : result.devicesFailed > 0 ? 'Not delivered' : 'Nothing sent'} · {result.sent}/{result.totalRecipients} teacher(s) delivered.
+                  {result.deliveryOk ? 'Delivery accepted on every active device' : result.devicesDelivered > 0 ? 'Partial delivery' : result.devicesFailed > 0 ? 'Not delivered' : 'Nothing sent'} · {result.sent}/{result.totalRecipients} teacher(s) delivered.
                 </p>
                 <p className="mt-1">
                   Devices: {result.devicesDelivered} delivered · {result.devicesFailed} failed · {result.devicesExpired} expired · {result.devicesRejected} rejected · {result.noDevices} no devices · {result.skipped} skipped.
@@ -492,7 +492,11 @@ async function previewSimulatedSend(
     sent: targets.length,
     skipped: 0,
     noDevices: 0,
+    noSubscription: 0,
+    alreadyReminded: 0,
+    taskAlreadyCompleted: 0,
     failed: 0,
+    expired: 0,
     devicesDelivered: targets.length,
     devicesFailed: 0,
     devicesExpired: 0,
@@ -513,9 +517,13 @@ async function previewSimulatedSend(
       sent: targets.length,
       failed: 0,
       expired: 0,
+      expiredRecipients: 0,
       rejected: 0,
       skipped: 0,
       noDevices: 0,
+      noSubscription: 0,
+      alreadyReminded: 0,
+      taskAlreadyCompleted: 0,
     },
     recipients: targets.map((t) => ({
       userId: t.id,
