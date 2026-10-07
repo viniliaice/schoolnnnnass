@@ -47,7 +47,7 @@ The full reference documentation lives in `.kb/` — 170 concept files covering 
 - **Frontend:** React 19, Vite 7, Tailwind CSS 4, React Router 7
 - **Backend:** Supabase (PostgreSQL, Auth, RLS, Edge Functions)
 - **State:** TanStack React Query
-- **Build:** Single-file output via vite-plugin-singlefile
+- **Build:** Vite production build with content-hashed `/assets/*` JS/CSS (long-term cacheable)
 
 ## Getting started
 

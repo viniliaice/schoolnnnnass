@@ -12,7 +12,7 @@ Schools need a centralized system to manage students, teachers, exams, and repor
 
 **Why React:** Component-based UI fits the dashboard pattern — each role has different views, but they share common UI elements (tables, forms, modals). React's composition model makes this natural.
 
-**Why Vite:** Fast dev server, single-file output via `vite-plugin-singlefile`. The single HTML file deployment means the app can be hosted anywhere — even a static file server — without a build pipeline.
+**Why Vite:** Fast dev server, standard production build with content-hashed `/assets/*` JS/CSS. Hashed filenames are immutable, so browsers and the CDN cache them long-term and a deploy only re-downloads what actually changed. (The project originally shipped as one inlined HTML file via `vite-plugin-singlefile`; that was removed once the app grew serverless API routes and a service worker, which already require a real host.)
 
 **Why Tailwind CSS:** Utility-first CSS eliminates the need for a custom design system. The theming system (Acanthus, Baroque, Aurora) uses CSS custom properties that Tailwind's `@theme` directive can reference.
 
@@ -70,19 +70,19 @@ Parents → view Exam results → on Reports
 
 This flow determines the entire data model and UI structure.
 
-### Single-file deployment
+### Hashed-asset deployment
 
-The `vite-plugin-singlefile` plugin inlines all JavaScript, CSS, and assets into a single HTML file. This means:
+The production build emits a small `index.html` plus content-hashed files under `/assets/`. This means:
 
-- No CDN or asset server needed
-- Can be emailed as an attachment
-- Works offline after first load
-- Simple deployment: just serve the HTML file
+- `index.html` stays tiny and always revalidates, so deploys propagate immediately
+- `/assets/*` filenames change only when their content changes, so they are cached as immutable (browser + CDN)
+- A small code change re-downloads only the changed chunk, not the whole app
+- The service worker precaches the entry JS/CSS (stamped at build time), so offline-after-first-load still works
 
 ## Trade-offs
 
 **What was gained:**
-- Simple deployment (single HTML file)
+- Cheap deploys (immutable hashed assets; only changed files re-download)
 - Fast development (Vite HMR)
 - Type safety (TypeScript throughout)
 - Security (Supabase RLS)

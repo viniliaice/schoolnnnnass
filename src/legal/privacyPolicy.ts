@@ -2,7 +2,7 @@
 //
 // WHY: the policy URL goes into Google Play Console, so the page has to work
 // (a) as a real page of this website for anyone who opens /privacy-policy, and
-// (b) without JavaScript at all. The website is a single-file SPA, so a
+// (b) without JavaScript at all. The website is a JS-rendered SPA, so a
 // React-only page would only exist while the bundle runs.
 //
 // This module holds the content once and renders it twice:

@@ -11,23 +11,35 @@
  *    never intercepted: they use the browser default fetch, so no student or
  *    teacher data is ever written to a cache that another user could read.
  *  - Navigations use network-first: the cached shell is ONLY a fallback for
- *    when the network is unreachable, and the shell contains no user data
- *    (the whole app bundle is inlined into index.html by the build).
+ *    when the network is unreachable, and the shell contains no user data.
+ *  - Hashed /assets/* files are content-addressed (the filename changes when
+ *    the content changes), so they are served cache-first: a cached copy can
+ *    never be stale for its URL.
  *
  * The `__SW_BUILD_ID__` token is replaced with a content hash of the built
- * app by the `pwaServiceWorkerVersion` Vite plugin, so every real deploy
- * changes this file's bytes and browsers detect the new worker.
+ * app (index.html + the emitted asset manifest) by the Vite build plugin in
+ * vite.config.ts, so every real deploy changes this file's bytes and
+ * browsers detect the new worker. `__SW_PRECACHE_ASSETS__` is replaced with
+ * the entry /assets/*.js and /assets/*.css URLs referenced by index.html.
  */
 
 const RAW_BUILD_ID = '__SW_BUILD_ID__';
 const BUILD_ID = RAW_BUILD_ID.startsWith('__') ? 'dev' : RAW_BUILD_ID;
 
+// Entry JS/CSS emitted by the build (empty in dev, where modules are served
+// individually and offline support is not meaningful).
+const RAW_PRECACHE_ASSETS = '__SW_PRECACHE_ASSETS__';
+const PRECACHE_ASSETS = RAW_PRECACHE_ASSETS.startsWith('__')
+  ? []
+  : RAW_PRECACHE_ASSETS.split(',').filter(Boolean);
+
 const STATIC_CACHE = 'mbk-static-' + BUILD_ID;
 const RUNTIME_CACHE = 'mbk-runtime-' + BUILD_ID;
 
-// The build inlines all JS/CSS into index.html, so caching the document plus
-// the manifest/icons gives a complete offline app shell. ('/' and
-// '/index.html' are the same ~6 MB document — cache it once under '/'.)
+// The offline app shell = the document plus the entry JS/CSS it references
+// plus the manifest/icons. ('/' and '/index.html' are the same document —
+// cache it once under '/'.) Lazy/optional chunks are NOT precached; they are
+// runtime-cached on first use so a deploy never re-downloads the whole app.
 const PRECACHE_URLS = [
   '/',
   '/manifest.webmanifest',
@@ -35,6 +47,7 @@ const PRECACHE_URLS = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
   '/icons/icon-maskable-512.png',
+  ...PRECACHE_ASSETS,
 ];
 
 const CHANNEL_NAME = 'mbk-pwa';
@@ -101,6 +114,27 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) return;
   // Never cache server endpoints.
   if (url.pathname.startsWith('/api/')) return;
+
+  // Hashed build assets: cache-first. The filename embeds a content hash, so
+  // a cached entry is immutable for its URL; anything not already cached
+  // (e.g. a future lazily-loaded chunk) is fetched once and kept in the
+  // versioned runtime cache. This also keeps the offline shell working for
+  // assets fetched after install.
+  if (url.pathname.startsWith('/assets/')) {
+    event.respondWith(
+      (async () => {
+        const cached = await caches.match(request.url);
+        if (cached) return cached;
+        const response = await fetch(request);
+        if (response && response.ok) {
+          const cache = await caches.open(RUNTIME_CACHE);
+          cache.put(request.url, response.clone());
+        }
+        return response;
+      })()
+    );
+    return;
+  }
 
   // App navigations: network-first with offline shell fallback.
   if (request.mode === 'navigate' || (request.headers.get('accept') || '').includes('text/html')) {
