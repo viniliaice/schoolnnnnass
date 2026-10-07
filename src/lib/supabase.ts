@@ -1996,11 +1996,14 @@ function createMockSupabase(): SupabaseClient {
           gov_id_conflict: 'Gov ID conflict — two different Government IDs',
           gov_id_belongs_to_third_student: 'Gov ID could belong to a third student',
           parent_phone_conflict: 'Parent phone conflict',
-          parent_phone_only_on_unassigned: 'Only the unassigned record has a parent phone — not authoritative for the batch',
+          parent_phone_belongs_to_other_family: 'The phone on the duplicate already belongs to a different family — copying it would merge two families',
           transport_conflict: 'Transport conflict',
-          transport_only_on_unassigned: 'Only the unassigned record has a transport value — not authoritative for the batch',
+          family_id_transfer_unproven: 'Only the duplicate has a family ID and the database cannot prove the keeper belongs to that family — individual review',
           family_id_conflict: 'Family ID conflict',
-          family_id_only_on_unassigned: 'Only the unassigned record has a family ID',
+          parent_phone_from_removed_preserved: 'Parent phone can be safely transferred to the keeper',
+          transport_from_removed_preserved: 'Transport can be safely transferred to the keeper',
+          family_id_from_removed_preserved: 'Family ID can be safely transferred to the keeper',
+          gov_id_from_removed_preserved: 'Gov ID can be safely transferred to the keeper',
           multiple_open_enrollments: 'Ambiguous enrollment state — more than one open enrollment',
           no_open_enrollment: 'Ambiguous enrollment state — no open enrollment to keep',
           enrollment_class_conflict: 'Enrollment class differs from the current class',
@@ -2109,27 +2112,116 @@ function createMockSupabase(): SupabaseClient {
           if (third) addBlocked('gov_id_belongs_to_third_student');
         }
 
-        // Parent phone: never silently discard a conflicting number.
+        // Policy v2 (20261008) — SAFE UNION per field. This mock mirrors the
+        // database so the screen never contradicts it; the server verdict is
+        // still the only one that authorises a merge.
+        //   both blank -> keep | identical -> keep | keeper only -> keep
+        //   duplicate only -> TRANSFER | both different -> BLOCK
+        const transfers: Record<string, string | null> = {};
+        const fieldStates: Record<string, { state: string; action: string; value?: string | null; proof?: string }> = {};
+        let phoneChoice = 'canonical';
+        let transportChoice = 'canonical';
+
+        // Parent phone. A one-sided phone transfers, but never onto a keeper
+        // whose parent differs from another family already using that number.
         const phK = bPhoneKey(keeper?.parentPhone); const phR = bPhoneKey(removed?.parentPhone);
-        if (phK !== '' && phR !== '' && phK === phR) okCodes.push('same_parent_phone');
-        else if (phK !== '' && phR !== '') addBlocked('parent_phone_conflict');
-        else if (phK !== '') okCodes.push('parent_phone_keeper_only');
-        else if (phR !== '') addReview('parent_phone_only_on_unassigned');
-        else okCodes.push('no_parent_phone');
+        if (phK !== '' && phR !== '' && phK === phR) {
+          okCodes.push('same_parent_phone');
+          fieldStates.parentPhone = { state: 'identical', action: 'keep' };
+        } else if (phK !== '' && phR !== '') {
+          addBlocked('parent_phone_conflict');
+          fieldStates.parentPhone = { state: 'conflict', action: 'block', value: removed?.parentPhone ?? null };
+        } else if (phK !== '') {
+          okCodes.push('parent_phone_keeper_only');
+          fieldStates.parentPhone = { state: 'keeper_only', action: 'keep' };
+        } else if (phR !== '') {
+          const otherFamily = (mockTables.students as any[]).some(
+            (st: any) => st.id !== keeper?.id && st.id !== removed?.id
+              && bPhoneKey(st.parentPhone) === phR
+              && !bBlank(st.parentId) && String(st.parentId) !== String(keeper?.parentId ?? ''));
+          if (otherFamily) {
+            addBlocked('parent_phone_belongs_to_other_family');
+            fieldStates.parentPhone = { state: 'duplicate_only', action: 'block', value: removed?.parentPhone ?? null };
+          } else {
+            okCodes.push('parent_phone_from_removed_preserved');
+            phoneChoice = 'duplicate';
+            transfers.parentPhone = removed?.parentPhone ?? null;
+            fieldStates.parentPhone = { state: 'duplicate_only', action: 'transfer', value: removed?.parentPhone ?? null };
+          }
+        } else {
+          okCodes.push('no_parent_phone');
+          fieldStates.parentPhone = { state: 'both_blank', action: 'keep' };
+        }
 
+        // Transport: a scalar (WALKER | CAR | bus number); the only relational
+        // link, authorized_pickup_students, is moved by the merge itself.
         const trK = String(keeper?.transport ?? '').trim(); const trR = String(removed?.transport ?? '').trim();
-        if (trK !== '' && trR !== '' && trK === trR) okCodes.push('same_transport');
-        else if (trK !== '' && trR !== '') addBlocked('transport_conflict');
-        else if (trK !== '') okCodes.push('transport_keeper_only');
-        else if (trR !== '') addReview('transport_only_on_unassigned');
-        else okCodes.push('no_transport');
+        if (trK !== '' && trR !== '' && trK.toUpperCase() === trR.toUpperCase()) {
+          okCodes.push('same_transport');
+          fieldStates.transport = { state: 'identical', action: 'keep' };
+        } else if (trK !== '' && trR !== '') {
+          addBlocked('transport_conflict');
+          fieldStates.transport = { state: 'conflict', action: 'block', value: removed?.transport ?? null };
+        } else if (trK !== '') {
+          okCodes.push('transport_keeper_only');
+          fieldStates.transport = { state: 'keeper_only', action: 'keep' };
+        } else if (trR !== '') {
+          okCodes.push('transport_from_removed_preserved');
+          transportChoice = 'duplicate';
+          transfers.transport = removed?.transport ?? null;
+          fieldStates.transport = { state: 'duplicate_only', action: 'transfer', value: removed?.transport ?? null };
+        } else {
+          okCodes.push('no_transport');
+          fieldStates.transport = { state: 'both_blank', action: 'keep' };
+        }
 
+        // Family ID: the conservative one. Transfer only on sibling proof.
         const famK = bFamKey(keeper?.familyId); const famR = bFamKey(removed?.familyId);
-        if (famK !== '' && famR !== '' && famK === famR) okCodes.push('same_family_id');
-        else if (famK !== '' && famR !== '') addBlocked('family_id_conflict');
-        else if (famK !== '') okCodes.push('family_id_keeper_only');
-        else if (famR !== '') addReview('family_id_only_on_unassigned');
-        else okCodes.push('no_family_id');
+        if (famK !== '' && famR !== '' && famK === famR) {
+          okCodes.push('same_family_id');
+          fieldStates.familyId = { state: 'identical', action: 'keep' };
+        } else if (famK !== '' && famR !== '') {
+          addBlocked('family_id_conflict');
+          fieldStates.familyId = { state: 'conflict', action: 'block', value: removed?.familyId ?? null };
+        } else if (famK !== '') {
+          okCodes.push('family_id_keeper_only');
+          fieldStates.familyId = { state: 'keeper_only', action: 'keep' };
+        } else if (famR !== '') {
+          const sibs = (mockTables.students as any[]).filter(
+            (st: any) => st.id !== keeper?.id && st.id !== removed?.id
+              && !bBlank(keeper?.parentId) && String(st.parentId ?? '') === String(keeper?.parentId));
+          const otherFam = sibs.some((st: any) => bFamKey(st.familyId) !== '' && bFamKey(st.familyId) !== famR);
+          const sameFam = sibs.filter((st: any) => bFamKey(st.familyId) === famR);
+          if (otherFam) {
+            addBlocked('family_id_conflict');
+            fieldStates.familyId = { state: 'duplicate_only', action: 'block', value: removed?.familyId ?? null };
+          } else if (sameFam.length > 0) {
+            okCodes.push('family_id_from_removed_preserved');
+            transfers.familyId = removed?.familyId ?? null;
+            fieldStates.familyId = {
+              state: 'duplicate_only', action: 'transfer', value: removed?.familyId ?? null,
+              proof: 'keeper_parent_sibling_holds_same_family_id',
+            };
+          } else {
+            addReview('family_id_transfer_unproven');
+            fieldStates.familyId = { state: 'duplicate_only', action: 'review', value: removed?.familyId ?? null };
+          }
+        } else {
+          okCodes.push('no_family_id');
+          fieldStates.familyId = { state: 'both_blank', action: 'keep' };
+        }
+        if (gkR !== '' && govChoice === 'duplicate') {
+          transfers.govId = removed?.govId ?? null;
+          fieldStates.govId = { state: 'duplicate_only', action: 'transfer', value: removed?.govId ?? null };
+        } else if (gkK !== '' && gkR !== '' && gkK === gkR) {
+          fieldStates.govId = { state: 'identical', action: 'keep' };
+        } else if (gkK !== '' && gkR !== '') {
+          fieldStates.govId = { state: 'conflict', action: 'block' };
+        } else if (gkK !== '') {
+          fieldStates.govId = { state: 'keeper_only', action: 'keep' };
+        } else {
+          fieldStates.govId = { state: 'both_blank', action: 'keep' };
+        }
 
         if (!bBlank(keeper?.parentId)) {
           if (!bProfile(keeper.parentId)) addBlocked('parent_profile_missing');
@@ -2198,7 +2290,8 @@ function createMockSupabase(): SupabaseClient {
               String(openK.length), String(openR.length), String(bHistory(kId)), String(bHistory(rId)),
               enrK?.id ?? '', enrR?.id ?? '', enrK?.className ?? '', enrR?.className ?? '',
               enrK?.academicYearId ?? '', enrR?.academicYearId ?? '',
-              JSON.stringify(history), enrollAction ?? '', govChoice, 'canonical', 'canonical',
+              JSON.stringify(history), enrollAction ?? '', govChoice, phoneChoice, transportChoice,
+              JSON.stringify(transfers),
             ].join('|'));
           }
         }
@@ -2224,16 +2317,18 @@ function createMockSupabase(): SupabaseClient {
           severity: eligible ? null : (blocked ? 'blocked' : 'review'),
           exclusionCodes: codes,
           eligibilityCodes: okCodes,
+          fieldStates,
+          transfers,
           keeperIsParentAssigned: !bBlank(keeper?.parentId),
           keeper: side(keeper),
           removed: side(removed),
           parentName: bProfile(keeper?.parentId)?.name ?? null,
           resolution: {
-            summary: { govId: govChoice, parentPhone: 'canonical', transport: 'canonical', enrollment: enrollAction ?? 'none' },
+            summary: { govId: govChoice, parentPhone: phoneChoice, transport: transportChoice, enrollment: enrollAction ?? 'none' },
             mergeResolution: {
               profile_resolution: {
                 name: 'canonical', class_name: 'canonical', gov_id: govChoice,
-                parent_id: 'canonical', parent_phone: 'canonical', transport: 'canonical',
+                parent_id: 'canonical', parent_phone: phoneChoice, transport: transportChoice,
               },
               exam_resolution: [], attendance_resolution: [], quiz_resolution: [],
               release_resolution: [], report_comment_resolution: [],
@@ -2501,8 +2596,11 @@ function createMockSupabase(): SupabaseClient {
             assertions: {
               noGovIdConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['gov_id_conflict', 'gov_id_belongs_to_third_student'].includes(c))),
               noParentConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['both_parents_assigned', 'parent_conflict', 'both_parents_unassigned', 'parent_profile_missing'].includes(c))),
-              noPhoneConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['parent_phone_conflict', 'parent_phone_only_on_unassigned'].includes(c))),
-              noTransportConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['transport_conflict', 'transport_only_on_unassigned'].includes(c))),
+              // One-sided values are transfers, not conflicts, so only genuine
+              // conflicts may appear here.
+              noPhoneConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['parent_phone_conflict', 'parent_phone_belongs_to_other_family'].includes(c))),
+              noTransportConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => c === 'transport_conflict')),
+              noFamilyConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => c === 'family_id_conflict')),
               noClassConflicts: rows.every((r: any) => !r.exclusionCodes.some((c: string) => ['class_conflict', 'enrollment_class_conflict'].includes(c))),
               noExamConflicts: rows.every((r: any) => !r.exclusionCodes.includes('exam_conflict')),
               noAttendanceConflicts: rows.every((r: any) => !r.exclusionCodes.includes('attendance_conflict')),

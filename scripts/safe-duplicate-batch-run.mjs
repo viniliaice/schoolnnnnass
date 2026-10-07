@@ -16,6 +16,16 @@
  *   verify_safe_duplicate_batch_state()   → read-only post-run verification
  *
  * ── Targets ────────────────────────────────────────────────────────────────
+ *   --analyse           Read-only breakdown of exactly what the database is
+ *                       excluding and why, per profile field. Works against
+ *                       either target. Writes nothing.
+ *   --allow-blocked N   Tolerate N already-reviewed blocked pairs in preflight.
+ *                       Blocked pairs stay excluded from the batch regardless.
+ *   --consolidation-fixtures N
+ *                       (pglite only) also seed N pairs whose keeper is missing
+ *                       a value the duplicate holds, plus the counter-examples,
+ *                       so one run exercises the transfer path end to end.
+ *
  *   --target pglite     (default) Real PostgreSQL (PGlite, in-process WASM)
  *                       with the SHIPPED migrations applied and a
  *                       reproducible reproduction of the reported screen
@@ -90,6 +100,9 @@ function parseArgs(argv) {
     seed: 254,
     review: 24,
     merged: 8,
+    analyse: false,
+    consolidationFixtures: 0,
+    allowBlocked: 0,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
@@ -106,6 +119,9 @@ function parseArgs(argv) {
       case '--seed': out.seed = Number(next()); break;
       case '--review': out.review = Number(next()); break;
       case '--merged': out.merged = Number(next()); break;
+      case '--analyse': case '--analyze': out.analyse = true; break;
+      case '--consolidation-fixtures': out.consolidationFixtures = Number(next()); break;
+      case '--allow-blocked': out.allowBlocked = Number(next()); break;
       case '-h': case '--help': out.help = true; break;
       default: throw new Error(`Unknown option: ${a}`);
     }
@@ -340,6 +356,76 @@ async function seedReproduction(db, opts) {
       [`audit-pre-${m}`, `s-merged-${m}`, `s-gone-${m}`],
     );
   }
+  // ── OPT-IN: one-sided-data pairs (migration 20261008 field consolidation) ──
+  // The 254 pairs above deliberately leave every duplicate record BLANK, so the
+  // default rehearsal cannot exercise the transfer path at all. These fixtures
+  // add exactly that shape: the keeper is missing a value the duplicate holds.
+  // They also add the counter-examples, so one run proves BOTH directions — that
+  // one-sided data now transfers AND that true conflicts still block.
+  if (opts.consolidationFixtures > 0) {
+    const n = opts.consolidationFixtures;
+    const shapes = ['phone', 'transport', 'family', 'gov'];
+    for (let k = 1; k <= n; k += 1) {
+      step('consolidation pairs');
+      const className = cls(k + 7);
+      const name = `Ismaaciil Faarax Jaamac ${String(k).padStart(3, '0')}`;
+      const keeper = `s-cons-${k}-k`;
+      const removed = `s-cons-${k}-r`;
+      const shape = shapes[k % shapes.length];
+      await seedProfile(db, `cparent-${k}`, 'parent', `Consol Parent ${k}`);
+      // The keeper is parent-assigned but BLANK on the field under test.
+      await seedStudent(db, {
+        id: keeper, name, className, parentId: `cparent-${k}`, createdAt: '2026-05-01T08:00:00Z',
+      });
+      const dup = { id: removed, name, className, createdAt: '2026-06-15T08:00:00Z' };
+      if (shape === 'phone') dup.parentPhone = `+25261700${String(k).padStart(4, '0')}`;
+      if (shape === 'transport') dup.transport = String(100 + k);
+      if (shape === 'gov') dup.govId = `CF-${String(k).padStart(6, '0')}`;
+      if (shape === 'family') dup.familyId = `CFAM-${k}`;
+      await seedStudent(db, dup);
+      if (shape === 'family') {
+        // The ONLY evidence the policy accepts for a family transfer: a sibling
+        // already assigned to the KEEPER'S OWN parent holds that exact family id.
+        await seedStudent(db, {
+          id: `s-cons-${k}-sib`, name: `Walaal Kale ${String(k).padStart(3, '0')}`,
+          className: 'Grade 8-Z', parentId: `cparent-${k}`, familyId: `CFAM-${k}`,
+          createdAt: '2026-04-01T08:00:00Z',
+        });
+      }
+      await seedEnrollment(db, { id: `enr-${keeper}`, studentId: keeper, className, academicYearId: 'ay-2026' });
+      await seedEnrollment(db, { id: `enr-${removed}`, studentId: removed, className, academicYearId: 'ay-2026' });
+    }
+
+    // ── Counter-examples: the new policy must STILL refuse these ──────────────
+    const conflict = async (k, name, keep, dupv, extra) => {
+      const className = cls(k + 9);
+      const keeper = `s-conf-${k}-k`;
+      const removed = `s-conf-${k}-r`;
+      await seedProfile(db, `xparent-${k}`, 'parent', `Conflict Parent ${k}`);
+      await seedStudent(db, { id: keeper, name, className, parentId: `xparent-${k}`, createdAt: '2026-05-01T08:00:00Z', ...keep });
+      await seedStudent(db, { id: removed, name, className, createdAt: '2026-06-15T08:00:00Z', ...dupv });
+      await seedEnrollment(db, { id: `enr-${keeper}`, studentId: keeper, className, academicYearId: 'ay-2026' });
+      if (extra) await seedStudent(db, extra);
+    };
+    // A true phone conflict: both records populated, different numbers.
+    await conflict(1, 'Cabdiraxmaan Xuseen Warsame 001',
+      { parentPhone: '611111111' }, { parentPhone: '622222222' });
+    // A true transport conflict: WALKER vs a bus number.
+    await conflict(2, 'Cabdiraxmaan Xuseen Warsame 002',
+      { transport: 'WALKER' }, { transport: '9' });
+    // A phone that already belongs to ANOTHER parent's family.
+    await conflict(3, 'Cabdiraxmaan Xuseen Warsame 003',
+      {}, { parentPhone: '634453468' },
+      { id: 's-conf-3-other', name: 'Qof Kale Oo Gebi Ahaan', className: 'Grade 9-Z',
+        parentId: 'staff-1', parentPhone: '634453468', createdAt: '2026-04-01T08:00:00Z' });
+    // A family id the database cannot prove belongs to the keeper's family.
+    // NOTE: normalize_family_id() is regexp_replace(raw,'\D','','g'), so the id
+    // MUST contain digits — an alphabetic id normalizes to '' and is treated as
+    // blank, which would silently skip the very check this fixture exists for.
+    await conflict(4, 'Cabdiraxmaan Xuseen Warsame 004',
+      {}, { familyId: '99990001' });
+  }
+
   process.stdout.write('\r  seeding done.                                          \n');
   await db.setAuthUid(ADMIN_UID);
   return 'admin-1 (profiles.role = admin, auth uid set in this PGlite session)';
@@ -504,7 +590,207 @@ async function renderPostState(ctx, label = 'Post-run verification (read back fr
   kv('orphaned child rows', c(integrity.orphanedChildRows ? RED : GREEN, integrity.orphanedChildRows));
   if (integrity.orphanedChildRows) bad(`orphan detail: ${JSON.stringify(integrity.orphanDetail)}`);
   kv('students w/ >1 open enrollment', c(integrity.studentsWithMultipleOpenEnrollments ? RED : GREEN, integrity.studentsWithMultipleOpenEnrollments));
+
+  // ── Field consolidation: prove nothing was discarded ──────────────────────
+  // Every value copied off a removed record is stamped on its audit row, and the
+  // value must still be readable ON THE KEEPER. This is the "no transferred data
+  // is lost" check, read back from the server rather than taken on trust.
+  line('');
+  line(c(BOLD, '  Field consolidation (values carried from the removed record onto the keeper)'));
+  if (typeof ctx.query !== 'function') {
+    line(c(DIM, '    not verifiable on this target — no direct SQL access; read student_merge_audits.transferred_fields'));
+  } else {
+    const { rows } = await ctx.query(`
+      SELECT
+        count(*) FILTER (WHERE a.transferred_fields IS NOT NULL
+                           AND a.transferred_fields <> '{}'::jsonb)::text AS with_transfers,
+        count(*)::text AS safe_audits
+      FROM public.student_merge_audits a
+      WHERE a.merge_kind = 'safe_batch'`);
+    kv('  safe_batch audits', rows[0]?.safe_audits ?? '?');
+    kv('  └ carrying a transfer', rows[0]?.with_transfers ?? '?');
+    const { rows: fields } = await ctx.query(`
+      SELECT f.key AS field, count(*)::text AS n
+      FROM public.student_merge_audits a,
+           LATERAL jsonb_each(a.transferred_fields) AS f
+      WHERE a.merge_kind = 'safe_batch'
+      GROUP BY f.key ORDER BY f.key`);
+    for (const r of fields) kv(`    ${r.field}`, r.n);
+    // The decisive check: is each transferred value STILL on the surviving row?
+    const { rows: lost } = await ctx.query(`
+      SELECT count(*)::text AS n
+      FROM public.student_merge_audits a
+      JOIN public.students k ON k.id = a.canonical_id
+      CROSS JOIN LATERAL jsonb_each_text(a.transferred_fields) AS f(key, value)
+      WHERE a.merge_kind = 'safe_batch'
+        AND f.value IS NOT NULL
+        AND CASE f.key
+              WHEN 'parentPhone' THEN k."parentPhone"
+              WHEN 'transport'   THEN k.transport
+              WHEN 'familyId'    THEN k."familyId"
+              WHEN 'govId'       THEN k."govId"
+            END IS DISTINCT FROM f.value`);
+    const lostN = Number(lost[0]?.n ?? 0);
+    kv('  transferred values missing from the keeper', c(lostN ? RED : GREEN, lostN));
+    if (lostN) bad(`${lostN} transferred value(s) did not survive on the keeper`);
+    else ok('every transferred value is present on the surviving Student ID — nothing was discarded');
+  }
   return v;
+}
+
+// ── Analysis mode ────────────────────────────────────────────────────────────
+// Answers "what exactly is the database excluding, and why?" against ANY target
+// (PGlite rehearsal or the live Supabase project). It is read-only: it calls the
+// same get_safe_duplicate_batch() RPC the screen calls, pages through every
+// candidate pair, and tallies the per-field classification the policy publishes
+// in `fieldStates`. It never writes and never changes eligibility.
+//
+// The key number is `newlySafeByTransfer`: pairs that policy v2 marks SAFE only
+// because one-sided data is now transferred instead of excluded. Those are
+// exactly the pairs policy v1 would have pushed into Needs Review, so this is
+// the honest "how many more become safely mergeable" figure — measured by the
+// database, not assumed.
+
+const FIELDS = ['parentPhone', 'transport', 'familyId', 'govId'];
+const STATES = ['both_blank', 'keeper_only', 'duplicate_only', 'identical', 'conflict'];
+const ACTIONS = ['keep', 'transfer', 'block', 'review'];
+
+async function runAnalysis(ctx, opts) {
+  const pageSize = opts.chunk && opts.chunk > 0 ? Math.min(opts.chunk, 500) : 200;
+  const rows = [];
+  const excluded = [];
+  let summary = null;
+  let exclusionReasons = {};
+  let policy = null;
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await ctx.rpc('get_safe_duplicate_batch', {
+      p_limit: pageSize, p_offset: offset, p_include_excluded: true,
+    });
+    summary = page?.summary ?? summary;
+    exclusionReasons = page?.exclusionReasons ?? exclusionReasons;
+    policy = page?.policy ?? policy;
+    const r = page?.rows ?? [];
+    const x = page?.excludedRows ?? [];
+    rows.push(...r);
+    excluded.push(...x);
+    if (r.length < pageSize && x.length < pageSize) break;
+    if (offset > 200000) break; // hard stop; a candidate set this size is a data problem
+  }
+
+  // Per-field state × action matrix over EVERY candidate pair.
+  const matrix = {};
+  for (const f of FIELDS) matrix[f] = { state: {}, action: {} };
+  const tally = (bucket, key) => { bucket[key] = (bucket[key] ?? 0) + 1; };
+  const transfers = {};          // field -> count of values that WILL be copied
+  let newlySafe = 0;             // safe pairs whose verdict depends on a transfer
+  let plainSafe = 0;             // safe pairs with nothing to consolidate
+  for (const row of [...rows, ...excluded]) {
+    const fs = row?.fieldStates ?? {};
+    let anyTransfer = false;
+    for (const f of FIELDS) {
+      const cell = fs[f];
+      if (!cell) continue;
+      tally(matrix[f].state, cell.state ?? '?');
+      tally(matrix[f].action, cell.action ?? '?');
+      if (cell.action === 'transfer') { anyTransfer = true; transfers[f] = (transfers[f] ?? 0) + 1; }
+    }
+    if (row?.eligible) { if (anyTransfer) newlySafe += 1; else plainSafe += 1; }
+  }
+
+  const reasonsFor = (sev) => {
+    const counts = {};
+    for (const r of excluded) {
+      if (r?.severity !== sev) continue;
+      for (const code of r?.exclusionCodes ?? []) tally(counts, code);
+    }
+    return counts;
+  };
+
+  return {
+    policy,
+    summary,
+    candidatePairs: summary?.candidatePairs ?? rows.length + excluded.length,
+    safeCount: summary?.safeCount ?? rows.length,
+    blockedCount: summary?.blockedCount ?? 0,
+    needsReviewCount: summary?.needsReviewCount ?? 0,
+    exclusionReasons,
+    plainSafe,
+    newlySafe,
+    transfers,
+    matrix,
+    blockedReasons: reasonsFor('blocked'),
+    reviewReasons: reasonsFor('review'),
+    rowsCollected: rows.length,
+    excludedCollected: excluded.length,
+  };
+}
+
+function renderAnalysis(a, opts) {
+  h1('Field consolidation analysis — computed by the database, read-only');
+  kv('policy', `${a.policy?.policyId ?? '?'} v${a.policy?.version ?? '?'}`);
+  kv('candidate pairs examined', a.candidatePairs);
+  line('');
+  line(c(BOLD, '  Verdict'));
+  kv('SAFE (batch-mergeable)', c(GREEN, a.safeCount));
+  kv('  └ nothing to consolidate', a.plainSafe);
+  kv('  └ safe BECAUSE one-sided data transfers', c(GREEN, a.newlySafe));
+  kv('BLOCKED (a true conflict)', c(RED, a.blockedCount));
+  kv('NEEDS REVIEW', c(AMBER, a.needsReviewCount));
+  if (a.rowsCollected + a.excludedCollected !== a.candidatePairs) {
+    warn(`paged ${a.rowsCollected + a.excludedCollected} of ${a.candidatePairs} pairs — the per-field matrix below covers the paged subset`);
+  }
+
+  line('');
+  line(c(BOLD, '  Per-field state across all examined pairs (the safe union)'));
+  line(`    ${'field'.padEnd(13)} ${STATES.map((x) => x.padEnd(14)).join('')}`);
+  for (const f of FIELDS) {
+    const cells = STATES.map((st) => String(a.matrix[f].state[st] ?? 0).padEnd(14)).join('');
+    line(`    ${f.padEnd(13)} ${cells}`);
+  }
+
+  line('');
+  line(c(BOLD, '  What the policy DOES with each field'));
+  line(`    ${'field'.padEnd(13)} ${ACTIONS.map((x) => x.padEnd(11)).join('')}`);
+  for (const f of FIELDS) {
+    const cells = ACTIONS.map((ac) => String(a.matrix[f].action[ac] ?? 0).padEnd(11)).join('');
+    line(`    ${f.padEnd(13)} ${cells}`);
+  }
+
+  const tEntries = Object.entries(a.transfers);
+  line('');
+  line(c(BOLD, '  Values that will be transferred from the duplicate onto the keeper'));
+  if (tEntries.length === 0) {
+    line(c(DIM, '    none — every examined pair already agrees on every populated field'));
+  } else {
+    for (const [f, n] of tEntries.sort((x, y) => y[1] - x[1])) kv(`  ${f}`, c(GREEN, n));
+    line(c(DIM, '    each is recorded per merge in student_merge_audits.transferred_fields'));
+  }
+
+  const dump = (title, obj, colour) => {
+    line('');
+    line(c(BOLD, `  ${title}`));
+    const entries = Object.entries(obj).sort((x, y) => y[1] - x[1]);
+    if (entries.length === 0) { line(c(DIM, '    none')); return; }
+    for (const [code, n] of entries) {
+      const desc = a.policy?.exclusionCodes?.[code] ?? '';
+      kv(`  ${code}`, `${c(colour, n)}${desc ? c(DIM, `  ${desc}`) : ''}`);
+    }
+  };
+  dump('Why pairs are BLOCKED', a.blockedReasons, RED);
+  dump('Why pairs stay in individual review', a.reviewReasons, AMBER);
+
+  if (opts.json) {
+    line('');
+    line(JSON.stringify({
+      policy: a.policy?.policyId, version: a.policy?.version,
+      candidatePairs: a.candidatePairs, safe: a.safeCount,
+      plainSafe: a.plainSafe, newlySafeByTransfer: a.newlySafe,
+      blocked: a.blockedCount, needsReview: a.needsReviewCount,
+      transfers: a.transfers, matrix: a.matrix,
+      blockedReasons: a.blockedReasons, reviewReasons: a.reviewReasons,
+      exclusionReasons: a.exclusionReasons,
+    }, null, 2));
+  }
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -519,8 +805,29 @@ async function main() {
   const ctx = opts.target === 'pglite' ? await openPglite(opts) : await openSupabase();
   const problems = [];
   try {
+    // ── 0a. ANALYSIS (read-only, deliberately before the preflight gate) ──────
+    // This is the tool an operator uses to find out WHY pairs are blocked, so
+    // gating it behind "no blocked records" would defeat its purpose. It writes
+    // nothing and changes no eligibility, and the RPC it calls still enforces
+    // admin-only access server-side, so a non-administrator is refused there.
+    if (opts.analyse) {
+      try {
+        renderAnalysis(await runAnalysis(ctx, opts), opts);
+      } catch (e) {
+        bad(`analysis failed: ${e?.message ?? e}`);
+        problems.push('analysis could not be produced');
+      }
+    }
+
     // ── 0. PREFLIGHT — refuses everything downstream if any check fails ──────
-    const preflight = await runPreflight(ctx, { yes: opts.yes, execution: opts.execute });
+    const preflight = await runPreflight(ctx, {
+      yes: opts.yes,
+      execution: opts.execute,
+      // Non-zero ONLY when the operator states a number of known, already
+      // reviewed blocked pairs. It never lowers a safety rule: blocked pairs are
+      // still excluded from the batch by the database either way.
+      blockedTolerance: opts.allowBlocked,
+    });
     const preflightOk = renderPreflight(preflight);
     if (!preflightOk) {
       line('');
@@ -616,5 +923,8 @@ export {
   main,
   REQUIRED_RPCS,
   runPreflight,
+  runAnalysis,
+  renderAnalysis,
+  FIELDS,
   CONFIRM_PHRASE,
 };
