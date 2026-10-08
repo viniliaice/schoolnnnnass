@@ -6,6 +6,7 @@ import { ToastContainer } from './components/ui/Toast';
 import { applyStoredAppearance } from './components/ui/ThemeSwitcher';
 import { LoginPage } from './components/landing/LoginPage';
 import { DashboardLayout } from './components/layout/DashboardLayout';
+import { AdminSidebar } from './components/layout/AdminSidebar';
 import { queryClient } from './lib/queryClient';
 import { I18nProvider } from './lib/i18n/AppLanguageContext';
 
@@ -137,7 +138,17 @@ function AppContent() {
   }
 
   return (
-    <DashboardLayout fullscreenPaths={['/gate']}>
+    <DashboardLayout
+      fullscreenPaths={['/gate']}
+      renderSidebar={
+        // Admin gets the grouped, responsive AdminSidebar. Every other role
+        // (supervisor, teacher, office) keeps the original shared Sidebar —
+        // renderSidebar stays undefined for them.
+        session.role === 'admin'
+          ? (currentPath, navigate) => <AdminSidebar currentPath={currentPath} onNavigate={navigate} />
+          : undefined
+      }
+    >
       {(currentPath, navigate) => {
         // Single enforcement point for ROUTE_ACCESS. Previously canAccessRoute()
         // was exported and unit-tested but never called, so the per-role

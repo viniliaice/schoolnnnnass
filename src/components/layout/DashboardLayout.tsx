@@ -11,6 +11,13 @@ interface DashboardLayoutProps {
   initialPath?: string;
   /** Paths rendered without sidebar/footer chrome (e.g. the mobile gate). */
   fullscreenPaths?: string[];
+  /**
+   * Optional sidebar override, used by the Admin role to render the grouped
+   * AdminSidebar. When omitted (teacher, supervisor, office) the original
+   * shared Sidebar renders exactly as before. It receives the same
+   * currentPath/navigate contract, so routing behaviour is identical.
+   */
+  renderSidebar?: (currentPath: string, navigate: (path: string) => void) => ReactNode;
 }
 
 const LANGUAGE_LABELS: Record<AppLanguage, { short: string; key: string }> = {
@@ -50,7 +57,7 @@ export function LanguageSwitcher() {
   );
 }
 
-export function DashboardLayout({ children, initialPath = '/dashboard', fullscreenPaths = [] }: DashboardLayoutProps) {
+export function DashboardLayout({ children, initialPath = '/dashboard', fullscreenPaths = [], renderSidebar }: DashboardLayoutProps) {
   // Deep links: when a notification click (or a cold PWA launch) opens the
   // app on a known route such as /teacher/lesson-plans, honour the URL
   // instead of always landing on the dashboard.
@@ -96,7 +103,7 @@ export function DashboardLayout({ children, initialPath = '/dashboard', fullscre
     <div className="app-shell flex min-h-screen bg-slate-50">
       <OfflineIndicator />
       <UpdateBanner />
-      <Sidebar currentPath={currentPath} onNavigate={navigate} />
+      {renderSidebar ? renderSidebar(currentPath, navigate) : <Sidebar currentPath={currentPath} onNavigate={navigate} />}
       <main className="relative flex-1 min-w-0 flex flex-col">
         <LanguageSwitcher />
         <div className="p-4 lg:p-8 pt-20 lg:pt-20 max-w-7xl mx-auto flex-1 w-full">
