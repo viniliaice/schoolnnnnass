@@ -125,4 +125,19 @@ describe('Admin sidebar wiring (admin only — other roles untouched)', () => {
     expect(css).toMatch(/width:\s*var\(--asb-width\)/);        // main content resizes via flex width
     expect(css).toMatch(/\.admin-sidebar-desktop\[data-collapsed="true"\]/);
   });
+
+  it('hides the mobile toggle + drawer with its own desktop media query (layer-proof)', () => {
+    const css = cssSource();
+    // Tailwind v4 puts utilities in @layer utilities; the toggle's unlayered
+    // `display: grid` would otherwise override the layered `lg:hidden` at
+    // ≥1024px (the reported tablet/laptop bug). Hiding must therefore live
+    // in an unlayered min-width media query.
+    const mediaBlock = css.match(/@media \(min-width: 64rem\)\s*\{[^@]*?\.admin-sidebar-toggle[^}]*\}[^}]*\}/s)?.[0] ?? '';
+    expect(mediaBlock, 'expected a min-width:64rem block hiding the toggle').not.toBe('');
+    expect(mediaBlock).toContain('display: none');
+    expect(mediaBlock).toContain('.admin-sidebar-mobile-root');
+    // And the base rule must keep the button visible below the breakpoint.
+    const baseRule = css.match(/\.admin-sidebar-toggle\s*\{[^}]*\}/s)?.[0] ?? '';
+    expect(baseRule).toContain('display: grid');
+  });
 });

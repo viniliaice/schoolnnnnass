@@ -1068,6 +1068,18 @@ html[data-mode="dark"] .admin-sidebar {
 }
 .admin-sidebar-toggle:hover { color: var(--text); }
 
+/* Hide the mobile chrome at the desktop breakpoint here — NOT via the
+   `lg:hidden` utility alone. These rules are unlayered CSS, and unlayered
+   declarations override Tailwind's layered utilities at any viewport width,
+   so `display: grid` above would otherwise beat `lg:hidden` and keep the
+   hamburger visible on laptops. 64rem = Tailwind `lg` (1024px). */
+@media (min-width: 64rem) {
+  .admin-sidebar-toggle,
+  .admin-sidebar-mobile-root {
+    display: none;
+  }
+}
+
 /* ── Mobile drawer + backdrop ──────────────────────────────────────────── */
 .admin-sidebar-backdrop {
   position: fixed;
