@@ -1,10 +1,22 @@
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
-import { Languages } from 'lucide-react';
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
+import { Menu, Search } from 'lucide-react';
 import { Sidebar } from './Sidebar';
-import { useI18n, type AppLanguage } from '../../lib/i18n/AppLanguageContext';
+import { useRole } from '../../context/RoleContext';
+import { useI18n } from '../../lib/i18n/AppLanguageContext';
 import { initialPathFromLocation, onNavigationRequest } from '../../lib/pwa/navigationBus';
 import { OfflineIndicator } from '../pwa/OfflineIndicator';
 import { UpdateBanner } from '../pwa/UpdateBanner';
+import { LanguageSwitcher } from './LanguageSwitcher';
+import {
+  buildNavigation,
+  findActiveItem,
+  flattenNavigation,
+  shouldShowSearch,
+} from './navigation';
+
+// Kept as a re-export: ParentAppShell (and older imports) read the switcher
+// from this module.
+export { LanguageSwitcher } from './LanguageSwitcher';
 
 interface DashboardLayoutProps {
   children: (currentPath: string, navigate: (path: string) => void) => ReactNode;
@@ -13,52 +25,20 @@ interface DashboardLayoutProps {
   fullscreenPaths?: string[];
 }
 
-const LANGUAGE_LABELS: Record<AppLanguage, { short: string; key: string }> = {
-  en: { short: 'EN', key: 'language.english' },
-  ar: { short: 'عربي', key: 'language.arabic' },
-};
-
-/** Floating EN/ع switcher — used by DashboardLayout and the parent desktop layout. */
-export function LanguageSwitcher() {
-  const { language, setLanguage, t } = useI18n();
-
-  return (
-    <div className="fixed right-4 top-4 z-40 rounded-2xl border border-slate-200 bg-white/95 p-1.5 shadow-lg backdrop-blur lg:right-6 lg:top-6">
-      <div className="flex items-center gap-1.5" role="group" aria-label={t('language.switch')}>
-        <Languages className="ml-1 h-4 w-4 text-slate-400" />
-        {(['en', 'ar'] as const).map((key) => {
-          const selected = language === key;
-          return (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setLanguage(key)}
-              aria-pressed={selected}
-              title={`${t('language.switchTo')} ${t(LANGUAGE_LABELS[key].key)}`}
-              className={
-                selected
-                  ? 'min-h-9 rounded-xl bg-indigo-600 px-3 text-xs font-bold text-white shadow-sm transition'
-                  : 'min-h-9 rounded-xl px-3 text-xs font-bold text-slate-500 transition hover:bg-slate-100 hover:text-slate-800'
-              }
-            >
-              {LANGUAGE_LABELS[key].short}
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 export function DashboardLayout({ children, initialPath = '/dashboard', fullscreenPaths = [] }: DashboardLayoutProps) {
   // Deep links: when a notification click (or a cold PWA launch) opens the
   // app on a known route such as /teacher/lesson-plans, honour the URL
   // instead of always landing on the dashboard.
   const [currentPath, setCurrentPath] = useState(() => initialPathFromLocation() ?? initialPath);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const [searchSignal, setSearchSignal] = useState(0);
   const { t } = useI18n();
+  const { session } = useRole();
 
   const applyPath = useCallback((path: string, updateUrl: boolean) => {
     setCurrentPath(path);
+    // Any navigation closes the mobile drawer (a link inside it was chosen).
+    setMobileNavOpen(false);
     if (updateUrl) {
       try {
         window.history.pushState({}, '', path);
@@ -76,12 +56,61 @@ export function DashboardLayout({ children, initialPath = '/dashboard', fullscre
 
   // Keep in-app state in sync with browser back/forward.
   useEffect(() => {
-    const onPopState = () => setCurrentPath(initialPathFromLocation() ?? '/dashboard');
+    const onPopState = () => {
+      setCurrentPath(initialPathFromLocation() ?? '/dashboard');
+      setMobileNavOpen(false);
+    };
     window.addEventListener('popstate', onPopState);
     return () => window.removeEventListener('popstate', onPopState);
   }, []);
 
-  // Mobile-first full-screen routes (no sidebar, no footer, edge-to-edge).
+  // Ctrl/Cmd+K opens the page search. The sidebar's own breakpoint decides
+  // where: at lg+ the desktop column exists, so it un-collapses and takes the
+  // caret; below that the slide-in drawer opens instead. Opening the drawer at
+  // desktop widths would mount an invisible dialog and its scroll lock.
+  useEffect(() => {
+    const isDesktop = () =>
+      typeof window.matchMedia === 'function'
+        ? window.matchMedia('(min-width: 1024px)').matches
+        : true;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault();
+        if (!isDesktop()) setMobileNavOpen(true);
+        setSearchSignal(signal => signal + 1);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
+
+  // A phone drawer must not survive a resize into the desktop layout: it would
+  // stay mounted (invisible, but still holding the scroll lock and the focus
+  // trap) behind the column that just appeared.
+  useEffect(() => {
+    if (typeof window.matchMedia !== 'function') return;
+    const desktop = window.matchMedia('(min-width: 1024px)');
+    const onChange = () => {
+      if (desktop.matches) setMobileNavOpen(false);
+    };
+    desktop.addEventListener('change', onChange);
+    return () => desktop.removeEventListener('change', onChange);
+  }, []);
+
+  // Current page title for the mobile top bar — derived from the same nav
+  // config the sidebar renders, so the bar can never disagree with the menu.
+  const pageTitle = useMemo(() => {
+    if (!session) return '';
+    const sections = buildNavigation(session.role);
+    const active = findActiveItem(sections, currentPath);
+    return active ? t(active.labelKey, active.fallback) : t('nav.Dashboard', 'Dashboard');
+  }, [currentPath, session, t]);
+
+  const hasSearch = useMemo(() => {
+    if (!session) return false;
+    return shouldShowSearch(flattenNavigation(buildNavigation(session.role)));
+  }, [session]);
+
   if (fullscreenPaths.includes(currentPath)) {
     return (
       <>
@@ -96,10 +125,49 @@ export function DashboardLayout({ children, initialPath = '/dashboard', fullscre
     <div className="app-shell flex min-h-screen bg-slate-50">
       <OfflineIndicator />
       <UpdateBanner />
-      <Sidebar currentPath={currentPath} onNavigate={navigate} />
+      <Sidebar
+        currentPath={currentPath}
+        onNavigate={navigate}
+        mobileOpen={mobileNavOpen}
+        onMobileOpenChange={setMobileNavOpen}
+        focusSearchSignal={searchSignal}
+      />
       <main className="relative flex-1 min-w-0 flex flex-col">
-        <LanguageSwitcher />
-        <div className="p-4 lg:p-8 pt-20 lg:pt-20 max-w-7xl mx-auto flex-1 w-full">
+        {/* Mobile chrome: menu button, current page, page search. Tablet and
+            desktop keep the floating language switcher instead. */}
+        <header className="app-mobile-bar lg:hidden">
+          <button
+            type="button"
+            onClick={() => setMobileNavOpen(true)}
+            aria-label={t('nav.openMenu', 'Open menu')}
+            aria-expanded={mobileNavOpen}
+            aria-controls="app-mobile-nav"
+            data-testid="mobile-menu-button"
+            className="app-mobile-bar-button"
+          >
+            <Menu className="h-5 w-5" aria-hidden="true" />
+          </button>
+          <p className="app-mobile-bar-title" data-testid="mobile-page-title">
+            {pageTitle}
+          </p>
+          {hasSearch && (
+            <button
+              type="button"
+              onClick={() => {
+                setMobileNavOpen(true);
+                setSearchSignal(signal => signal + 1);
+              }}
+              aria-label={t('nav.search', 'Search pages')}
+              data-testid="mobile-search-button"
+              className="app-mobile-bar-button"
+            >
+              <Search className="h-[18px] w-[18px]" aria-hidden="true" />
+            </button>
+          )}
+        </header>
+
+        <LanguageSwitcher className="hidden lg:block" />
+        <div className="p-4 lg:p-8 pt-4 lg:pt-20 max-w-7xl mx-auto flex-1 w-full">
           {children(currentPath, navigate)}
         </div>
         <footer className="border-t border-slate-200 py-3 px-4 text-center">

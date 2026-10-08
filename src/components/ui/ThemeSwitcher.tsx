@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { Moon, Palette, Sun } from 'lucide-react';
 import { cn } from '../../utils/cn';
 
@@ -47,6 +47,10 @@ function getInitialMode(): AppearanceMode {
 }
 
 export function ThemeSwitcher({ compact }: { compact?: boolean }) {
+  // useId(): the switcher can be mounted twice at once (desktop sidebar column
+  // + open mobile drawer, one of which is hidden). A hard-coded id would be a
+  // duplicate in the DOM.
+  const selectId = useId();
   const [theme, setTheme] = useState<ThemeId>(getInitialTheme);
   const [mode, setMode] = useState<AppearanceMode>(getInitialMode);
   const selectedTheme = useMemo(() => THEMES.find(item => item.id === theme) ?? THEMES[0], [theme]);
@@ -70,7 +74,7 @@ export function ThemeSwitcher({ compact }: { compact?: boolean }) {
 
       <div className={cn("flex items-center gap-1", compact ? "mb-1" : "mb-3")}>
         <select
-          id="theme-select"
+          id={selectId}
           value={theme}
           onChange={event => setTheme(event.target.value as ThemeId)}
           className={cn("flex-1 rounded-lg border font-semibold", compact ? "px-1.5 py-1 text-[10px]" : "px-3 py-2 text-sm")}
