@@ -159,12 +159,28 @@ async function waitFor(host: HTMLElement, predicate: () => boolean, label: strin
 }
 
 async function clickNav(host: HTMLElement, label: string) {
-  const button = [...host.querySelectorAll('button')].find(
-    (candidate) => candidate.textContent?.trim() === label
-  );
+  const findButton = () =>
+    [...host.querySelectorAll('button')].find(
+      (candidate) => candidate.textContent?.trim() === label
+    );
+  let button = findButton();
+  if (!button) {
+    // The admin sidebar (AdminSidebar) groups its links under collapsible
+    // categories. Expand every category, then look for the entry again —
+    // the requirement under test (the entry exists and opens the right
+    // page) is unchanged.
+    for (const toggle of [...host.querySelectorAll('.admin-sidebar__group-toggle')]) {
+      if (toggle.getAttribute('aria-expanded') === 'false') {
+        await act(async () => {
+          toggle.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        });
+      }
+    }
+    button = findButton();
+  }
   if (!button) throw new Error(`no sidebar entry labelled "${label}"`);
   await act(async () => {
-    button.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    button!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
   });
 }
 

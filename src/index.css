@@ -791,3 +791,314 @@ main > div, .max-w-5xl, .rounded-2xl, .rounded-3xl, article { animation: themeFa
     transition-duration: 0.001ms !important;
   }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   Admin sidebar (AdminSidebar.tsx — admin role only)
+   ══════════════════════════════════════════════════════════════════════════
+   Deliberately NOT using the shared Sidebar's `.theme-sidebar` hook: the
+   theme engine above force-overrides `.theme-sidebar` descendants with
+   `!important` (strips gradient backgrounds, remaps every text-white/*
+   utility in light mode), which is exactly what made earlier sidebar
+   restyling attempts appear to "not work". This block instead styles the
+   admin sidebar through its own class namespace on the theme's CSS custom
+   properties, so it follows the active theme + light/dark mode without
+   fighting the engine.
+
+   All placement uses logical properties (inset-inline-start,
+   border-inline-end, …) so the sidebar mirrors correctly in the Arabic RTL
+   layout, and mobile chrome respects the device safe areas. */
+
+.admin-sidebar {
+  --asb-width: 17rem;          /* 272px expanded */
+  --asb-rail-width: 4.75rem;   /* 76px collapsed rail */
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  color: var(--text);
+  background:
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--primary) 34%, transparent), transparent 42%),
+    color-mix(in srgb, var(--surface) 94%, var(--bg) 6%);
+  border-inline-end: 1px solid var(--border);
+}
+
+html[data-mode="dark"] .admin-sidebar {
+  background:
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--primary) 42%, transparent), transparent 46%),
+    color-mix(in srgb, var(--surface) 72%, black 28%);
+}
+
+/* ── Brand header ──────────────────────────────────────────────────────── */
+.admin-sidebar__header {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.9rem 0.9rem 0.65rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+}
+
+.admin-sidebar__logo { width: 2.6rem; height: 2.6rem; object-fit: contain; flex-shrink: 0; }
+.admin-sidebar__logo--rail { width: 2.2rem; height: 2.2rem; margin-inline: auto; }
+.admin-sidebar--rail .admin-sidebar__header { flex-direction: column; gap: 0.5rem; padding-inline: 0.5rem; }
+
+.admin-sidebar__brand { min-width: 0; flex: 1 1 auto; }
+.admin-sidebar__school {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  line-height: 1.25;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-sidebar__role {
+  display: inline-block;
+  margin-top: 0.2rem;
+  font-size: 0.625rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--accent);
+}
+
+/* Small square icon buttons (collapse, close, logout) — 40px+ targets */
+.admin-sidebar__icon-button {
+  display: grid;
+  place-items: center;
+  width: 2.5rem;
+  height: 2.5rem;
+  flex-shrink: 0;
+  border-radius: 0.6rem;
+  border: 1px solid transparent;
+  background: transparent;
+  color: color-mix(in srgb, var(--text) 72%, transparent);
+  cursor: pointer;
+}
+.admin-sidebar__icon-button:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
+
+/* ── Navigation scroll region ──────────────────────────────────────────── */
+.admin-sidebar__nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.6rem 0.65rem 0.9rem;
+}
+
+/* Nav links — ≥44px touch targets, clear hover + focus + active states.
+   The neutralizer rules keep the global `nav button:hover` chrome out of
+   this sidebar; active styling below owns its own shadow. */
+.admin-sidebar__nav button:hover { border-color: transparent; box-shadow: none; }
+
+.admin-sidebar__item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  width: 100%;
+  min-height: 2.75rem; /* 44px */
+  padding: 0 0.7rem;
+  border-radius: 0.65rem;
+  border: 1px solid transparent;
+  background: transparent;
+  text-align: start;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: color-mix(in srgb, var(--text) 76%, transparent);
+  cursor: pointer;
+}
+.admin-sidebar__item:hover {
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+  color: var(--text);
+}
+.admin-sidebar__item:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 1px;
+}
+.admin-sidebar__item-icon { width: 1.15rem; height: 1.15rem; flex-shrink: 0; opacity: 0.9; }
+.admin-sidebar__item-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.admin-sidebar__item--active {
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  color: #fff;
+  font-weight: 600;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 6px 16px color-mix(in srgb, var(--primary) 38%, transparent);
+}
+.admin-sidebar__item--active:hover { color: #fff; }
+.admin-sidebar__item--active::before {
+  content: "";
+  position: absolute;
+  inset-inline-start: -0.65rem;
+  top: 50%;
+  translate: 0 -50%;
+  width: 3px;
+  height: 1.35rem;
+  border-radius: 999px;
+  background: var(--accent);
+}
+/* Grouped actives: center the indicator on the category guide line. */
+.admin-sidebar__group-items .admin-sidebar__item--active::before { inset-inline-start: -0.45rem; }
+
+.admin-sidebar__group { display: flex; flex-direction: column; gap: 0.15rem; }
+
+/* Category heading — quiet uppercase label, whole row toggles */
+.admin-sidebar__group-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 2.25rem;
+  margin-top: 0.55rem;
+  padding: 0 0.5rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: transparent;
+  cursor: pointer;
+  text-transform: uppercase;
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--muted);
+}
+.admin-sidebar__group-toggle:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 8%, transparent); }
+.admin-sidebar__group-toggle:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 1px; }
+.admin-sidebar__chevron { width: 0.9rem; height: 0.9rem; flex-shrink: 0; transition: transform 180ms ease; }
+.admin-sidebar__group-toggle[aria-expanded="true"] .admin-sidebar__chevron { transform: rotate(180deg); }
+
+/* Expanded group body — guide rail + indented items */
+.admin-sidebar__group-items {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-inline-start: 1rem;
+  padding-inline-start: 0.45rem;
+  border-inline-start: 1px solid color-mix(in srgb, var(--border) 85%, transparent);
+}
+.admin-sidebar__group-items .admin-sidebar__item { font-size: 0.8425rem; }
+
+/* Collapsed desktop rail */
+.admin-sidebar--rail .admin-sidebar__nav { padding-inline: 0.6rem; }
+.admin-sidebar__rail-section { display: flex; flex-direction: column; gap: 0.15rem; }
+.admin-sidebar__rail-divider {
+  height: 1px;
+  margin: 0.45rem 0.2rem;
+  background: color-mix(in srgb, var(--border) 90%, transparent);
+}
+.admin-sidebar__item--rail { justify-content: center; padding: 0; }
+
+/* ── Footer (profile + logout + appearance) ────────────────────────────── */
+.admin-sidebar__footer {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.65rem;
+  padding-bottom: max(0.65rem, calc(env(safe-area-inset-bottom, 0px) + 0.65rem));
+  border-top: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  background: color-mix(in srgb, var(--surface-2) 42%, transparent);
+}
+.admin-sidebar__user { display: flex; align-items: center; gap: 0.6rem; min-width: 0; }
+.admin-sidebar__avatar {
+  display: grid;
+  place-items: center;
+  width: 2.25rem;
+  height: 2.25rem;
+  flex-shrink: 0;
+  border-radius: 999px;
+  background: linear-gradient(135deg, var(--primary), var(--primary-2));
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.admin-sidebar__user-meta { display: flex; flex-direction: column; min-width: 0; flex: 1 1 auto; }
+.admin-sidebar__user-name {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-sidebar__user-role { font-size: 0.6875rem; color: var(--muted); }
+.admin-sidebar__logout:hover { background: color-mix(in srgb, var(--danger-text) 16%, transparent); color: var(--danger-text); }
+.admin-sidebar__footer-rail { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
+
+/* ── Desktop column ──────────────────────────────────────────────────────
+   Flex sibling of <main>; collapsing animates the width and the main
+   content reflows automatically (both are flex children). */
+.admin-sidebar-desktop {
+  width: var(--asb-width);
+  transition: width 200ms ease;
+}
+.admin-sidebar-desktop[data-collapsed="true"] { width: var(--asb-rail-width); }
+
+/* ── Mobile menu button ────────────────────────────────────────────────── */
+.admin-sidebar-toggle {
+  position: fixed;
+  z-index: 50;
+  top: calc(env(safe-area-inset-top, 0px) + 0.85rem);
+  inset-inline-start: 1rem;
+  display: grid;
+  place-items: center;
+  width: 2.75rem;  /* 44px target */
+  height: 2.75rem; /* 44px target */
+  border-radius: 0.8rem;
+  border: 1px solid var(--border);
+  background: var(--surface-glass);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+  color: var(--text);
+  box-shadow: var(--shadow);
+  cursor: pointer;
+}
+.admin-sidebar-toggle:hover { color: var(--text); }
+
+/* ── Mobile drawer + backdrop ──────────────────────────────────────────── */
+.admin-sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 59;
+  background: rgba(2, 6, 12, 0.62);
+  animation: asb-fade 200ms ease;
+}
+.admin-sidebar-drawer {
+  position: fixed;
+  z-index: 60;
+  inset-block: 0;
+  inset-inline-start: 0;
+  width: min(19.5rem, 86vw); /* 312px, shrinks for 320px phones */
+  height: 100vh;
+  height: 100dvh;
+  outline: none;
+  box-shadow: var(--shadow-hover);
+  animation: asb-slide-in 220ms ease-out;
+}
+html[dir="rtl"] .admin-sidebar-drawer { animation-name: asb-slide-in-rtl; }
+
+@keyframes asb-slide-in {
+  from { transform: translateX(-100%); }
+  to { transform: none; }
+}
+@keyframes asb-slide-in-rtl {
+  from { transform: translateX(100%); }
+  to { transform: none; }
+}
+@keyframes asb-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
