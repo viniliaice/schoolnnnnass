@@ -33,9 +33,12 @@ export interface AdminNavGroup {
   items: AdminNavItem[];
 }
 
-/** Items pinned above every group — Dashboard first. */
+/** Items pinned above every group — Dashboard first, Manage Users beside it. */
 export const ADMIN_STANDALONE_ITEMS: AdminNavItem[] = [
   { label: 'Dashboard', path: '/dashboard', icon: LayoutDashboard },
+  // Pinned next to Dashboard, above the Students category (product request):
+  // user/role management is a top-of-sidebar action, not buried in Administration.
+  { label: 'Manage Users', path: '/admin/users', icon: UsersRound },
 ];
 
 export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
@@ -106,7 +109,6 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
     labelKey: 'navGroup.administration',
     label: 'Administration',
     items: [
-      { label: 'Manage Users', path: '/admin/users', icon: UsersRound },
       { label: 'Monitor Teacher', path: '/admin/monitor', icon: Eye },
       { label: 'Promote Classes', path: '/admin/promotion', icon: ArrowUpDown },
       { label: 'AI Review Logs', path: '/admin/ai-logs', icon: Bot },

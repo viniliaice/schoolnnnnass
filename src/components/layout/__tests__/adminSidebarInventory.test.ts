@@ -79,8 +79,12 @@ describe('Admin sidebar inventory', () => {
       'transport',
       'administration',
     ]);
-    // Dashboard is intentionally a standalone item above the groups.
+    // Standalone pinning: Dashboard first, Manage Users beside it (above the
+    // Students category) — Manage Users must NOT also live in Administration.
     expect(ADMIN_NAV_PATHS[0]).toBe('/dashboard');
+    expect(ADMIN_NAV_PATHS[1]).toBe('/admin/users');
+    const administration = ADMIN_NAV_GROUPS.find(group => group.id === 'administration')!;
+    expect(administration.items.map(item => item.path)).not.toContain('/admin/users');
   });
 });
 

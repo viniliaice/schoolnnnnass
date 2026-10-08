@@ -103,6 +103,22 @@ describe('AdminSidebar — navigation inventory renders', () => {
     expect(dashboard).not.toBeNull();
     expect(dashboard!.getAttribute('aria-current')).toBe('page');
   });
+
+  it('pins Manage Users next to Dashboard and above the Students category', async () => {
+    const host = await mountSidebar('/dashboard');
+    // Rendered without expanding any category…
+    const dashboard = host.querySelector('[data-path="/dashboard"]')!;
+    const manageUsers = host.querySelector('[data-path="/admin/users"]');
+    expect(manageUsers).not.toBeNull();
+    expect(manageUsers!.getAttribute('aria-current')).toBeNull();
+    // …immediately after Dashboard (both are direct children of the nav)…
+    expect(manageUsers!.previousElementSibling).toBe(dashboard);
+    // …and before the first category heading in document order.
+    const studentsToggle = host.querySelector('[data-testid="admin-nav-group-students"]')!;
+    expect(
+      manageUsers!.compareDocumentPosition(studentsToggle) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 });
 
 describe('AdminSidebar — active route highlighting', () => {
