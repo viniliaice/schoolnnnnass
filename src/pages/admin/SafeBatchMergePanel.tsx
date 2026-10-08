@@ -300,6 +300,16 @@ export function SafeBatchMergePanel({ onBatchSettled }: Props) {
               : t('duplicateBatch.status.none')}
           </p>
 
+          {/* Zero-write proof. The preview is informational only — it is never
+              treated as authorisation, and the server recomputes everything
+              again at execution time. */}
+          <p
+            data-testid="safe-batch-no-writes"
+            className="rounded-xl border border-emerald-200 bg-emerald-50 p-3 text-xs font-semibold text-emerald-800"
+          >
+            {t('duplicateBatch.previewNoWrites', 'Safe preview completed. No records were modified.')}
+          </p>
+
           {/* Policy */}
           {policy && (
             <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 space-y-2">

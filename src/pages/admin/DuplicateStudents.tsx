@@ -36,6 +36,8 @@ import {
   getMergeConflicts,
   mergeWithResolution,
   normalizeNameForDuplicate,
+  getSafeDuplicateBatch,
+  type SafeBatchSummary,
   type DuplicatePair,
   type DuplicateGroup,
   type MergePreview,
@@ -47,9 +49,25 @@ import {
   type MergeResolution,
 } from '../../lib/db/duplicateStudents';
 
-function SummaryCard({ label, value, accent, icon: Icon }: { label: string; value: number | string; accent: string; icon: typeof UsersRound }) {
+function SummaryCard({ label, value, accent, icon: Icon, hint, testId, emphasis }: {
+  label: string;
+  value: number | string;
+  accent: string;
+  icon: typeof UsersRound;
+  /** Small print under the label — used to say where the number comes from. */
+  hint?: string;
+  testId?: string;
+  /** Highlights the one card whose number actually controls batch execution. */
+  emphasis?: boolean;
+}) {
   return (
-    <div className="bg-white rounded-2xl border border-slate-200 p-4 shadow-sm">
+    <div
+      data-testid={testId}
+      className={cn(
+        'bg-white rounded-2xl border p-4 shadow-sm',
+        emphasis ? 'border-emerald-400 ring-1 ring-emerald-200' : 'border-slate-200',
+      )}
+    >
       <div className="flex items-center justify-between">
         <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center', accent)}>
           <Icon className="w-5 h-5" />
@@ -57,6 +75,7 @@ function SummaryCard({ label, value, accent, icon: Icon }: { label: string; valu
         <span className="text-2xl font-bold text-slate-900">{value}</span>
       </div>
       <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mt-3">{label}</p>
+      {hint && <p data-testid={testId ? `${testId}-hint` : undefined} className="text-[11px] leading-snug text-slate-400 mt-1">{hint}</p>}
     </div>
   );
 }
@@ -118,6 +137,34 @@ export function DuplicateStudents() {
   const EXAM_PAGE_SIZE = 10;
 
 
+  /**
+   * The AUTHORITATIVE safe-merge count, straight from the database.
+   *
+   * The "High Confidence" number below is computed in this file by
+   * evaluatePair() — a client-side classifier that cannot see attendance,
+   * exams, quiz attempts, enrollment state or the size of a candidate group.
+   * It is a reading aid for a human scanning a list. It does NOT and cannot
+   * authorise a merge: only get_safe_duplicate_batch() / preview_safe_duplicate_batch()
+   * decide what "Merge All Safe Duplicates" is allowed to touch, and the server
+   * recomputes that again at execution time.
+   *
+   * limit 1 + includeExcluded false: we want the summary, not the pair list.
+   */
+  const [serverSummary, setServerSummary] = useState<SafeBatchSummary | null>(null);
+  const [serverSummaryError, setServerSummaryError] = useState<string | null>(null);
+
+  const loadServerSummary = async () => {
+    try {
+      const report = await getSafeDuplicateBatch({ limit: 1, offset: 0, includeExcluded: false });
+      setServerSummary(report.summary ?? null);
+      setServerSummaryError(null);
+    } catch (e: any) {
+      // Never fatal: the individual guided review below does not depend on it.
+      setServerSummary(null);
+      setServerSummaryError(e?.message || 'The database could not report the safe-merge count.');
+    }
+  };
+
   const load = async () => {
     setLoading(true);
     setError(null);
@@ -132,6 +179,9 @@ export function DuplicateStudents() {
         for (const p of (data || []) as any[]) map.set(p.id, p.name);
         setParentNames(map);
       }
+      // Authoritative count last, and never fatal: the guided review below must
+      // still work if the batch RPC is unavailable or the caller is not admin.
+      await loadServerSummary();
     } catch (e: any) {
       setError(e.message || 'Failed to load duplicates');
     } finally {
@@ -1034,14 +1084,76 @@ export function DuplicateStudents() {
           guided review below is unchanged. */}
       <SafeBatchMergePanel onBatchSettled={async () => { await load(); }} />
 
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-        <SummaryCard label="Potential Duplicates" value={summary.totalGroups} accent="bg-indigo-50 text-indigo-600" icon={UsersRound} />
-        <SummaryCard label="Ready to Review" value={summary.ready} accent="bg-sky-50 text-sky-600" icon={Eye} />
-        <SummaryCard label="High Confidence" value={summary.highConfidence} accent="bg-emerald-50 text-emerald-600" icon={CheckCircle2} />
-        <SummaryCard label="Needs Review" value={summary.needsReview} accent="bg-amber-50 text-amber-600" icon={Clock} />
-        <SummaryCard label="Blocked" value={summary.blocked} accent="bg-red-50 text-red-600" icon={XCircle} />
-        <SummaryCard label="Merged" value={summary.merged} accent="bg-slate-50 text-slate-600" icon={GitMerge} />
+      {/* ── SERVER-AUTHORITATIVE ───────────────────────────────────────────
+          This is the ONLY number that controls what "Merge All Safe
+          Duplicates" is allowed to touch. It comes from
+          get_safe_duplicate_batch() (SECURITY DEFINER), is recomputed at
+          execution time, and is deliberately rendered apart from the
+          client-side classification below so nobody can mistake one for the
+          other. */}
+      <div
+        data-testid="server-safe-count"
+        className="rounded-2xl border border-emerald-300 bg-emerald-50/70 p-4 shadow-sm"
+      >
+        <div className="flex flex-wrap items-center gap-x-6 gap-y-3">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 shrink-0 rounded-xl bg-emerald-100 text-emerald-700 flex items-center justify-center">
+              <ShieldCheck className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-xs font-bold uppercase tracking-wide text-emerald-800">
+                Safe to Merge — server verified
+              </p>
+              <p className="text-[11px] leading-snug text-emerald-800/70">
+                Computed by the database (SECURITY DEFINER). This is the only number that controls batch execution.
+              </p>
+            </div>
+          </div>
+          <div
+            data-testid="server-safe-count-value"
+            className="text-4xl font-bold text-emerald-800 tabular-nums"
+          >
+            {serverSummary ? serverSummary.safeCount : '—'}
+          </div>
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm">
+            <span data-testid="server-needs-review">
+              <b className="text-amber-700 tabular-nums">{serverSummary ? serverSummary.needsReviewCount : '—'}</b>{' '}
+              <span className="text-slate-600">need individual review</span>
+            </span>
+            <span data-testid="server-blocked">
+              <b className="text-red-700 tabular-nums">{serverSummary ? serverSummary.blockedCount : '—'}</b>{' '}
+              <span className="text-slate-600">blocked</span>
+            </span>
+            <span data-testid="server-candidate-pairs">
+              <b className="text-slate-700 tabular-nums">{serverSummary ? serverSummary.candidatePairs : '—'}</b>{' '}
+              <span className="text-slate-600">candidate pairs</span>
+            </span>
+          </div>
+        </div>
+        {serverSummaryError && (
+          <p data-testid="server-safe-count-error" className="mt-3 text-xs text-red-700">
+            {serverSummaryError} The counts below are a client-side estimate and cannot authorise a batch merge.
+          </p>
+        )}
       </div>
+
+      {/* ── CLIENT-SIDE CLASSIFICATION (advisory only) ─────────────────────
+          evaluatePair() runs in the browser and cannot see attendance, exams,
+          quiz attempts, enrollment state or candidate-group size, so these
+          numbers can and do differ from the server verdict above. */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <SummaryCard label="Potential Duplicates" value={summary.totalGroups} accent="bg-indigo-50 text-indigo-600" icon={UsersRound} hint="name + class groups" testId="card-potential" />
+        <SummaryCard label="Ready to Review" value={summary.ready} accent="bg-sky-50 text-sky-600" icon={Eye} hint="page estimate" testId="card-ready" />
+        <SummaryCard label="High Confidence" value={summary.highConfidence} accent="bg-emerald-50 text-emerald-600" icon={CheckCircle2} hint="page estimate — not the batch count" testId="card-high-confidence" />
+        <SummaryCard label="Needs Review" value={summary.needsReview} accent="bg-amber-50 text-amber-600" icon={Clock} hint="page estimate" testId="card-needs-review" />
+        <SummaryCard label="Blocked" value={summary.blocked} accent="bg-red-50 text-red-600" icon={XCircle} hint="page estimate" testId="card-blocked" />
+        <SummaryCard label="Merged" value={summary.merged} accent="bg-slate-50 text-slate-600" icon={GitMerge} hint="audit rows" testId="card-merged" />
+      </div>
+      <p className="text-[11px] text-slate-400 -mt-1">
+        The six cards above are a client-side classification for scanning the list. They are not eligibility and they
+        never authorise a merge — <span data-testid="authoritative-note" className="font-semibold text-slate-500">“Safe to Merge — server verified” is the number the batch uses</span>, and the
+        database recomputes it again the moment you confirm.
+      </p>
 
       <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
         <div className="flex flex-col gap-3 xl:flex-row xl:items-center">

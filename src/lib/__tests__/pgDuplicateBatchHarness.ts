@@ -11,6 +11,7 @@
 //   * the ACTUAL shipped migration 20260924_duplicate_merge_resolution.sql
 //   * the ACTUAL shipped migration 20260925_safe_duplicate_batch.sql
 //   * the ACTUAL shipped migration 20260926_fix_get_merge_conflicts_exam_identity.sql
+//   * the ACTUAL shipped migration 20261007_safe_batch_post_run_verification.sql
 //
 // Nothing here talks to a live/production database: PGlite is an in-process
 // WASM Postgres that is created and destroyed inside the test run, so the batch
@@ -309,6 +310,9 @@ export async function createDuplicateBatchTestDb(): Promise<PgDuplicateDb> {
   await pg.exec(readMigration('20260924_duplicate_merge_resolution.sql'));
   await pg.exec(readMigration('20260925_safe_duplicate_batch.sql'));
   await pg.exec(readMigration('20260926_fix_get_merge_conflicts_exam_identity.sql'));
+  await pg.exec(readMigration('20261007_safe_batch_post_run_verification.sql'));
+  await pg.exec(readMigration('20261008_safe_batch_field_consolidation.sql'));
+  await pg.exec(readMigration('20261009_authoritative_parent_phone_registry.sql'));
 
   const client: PgDuplicateDb = {
     query: async (sql, params) => {

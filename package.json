@@ -12,6 +12,8 @@
     "preview": "vite preview",
     "test": "vitest",
     "test:ci": "vitest --run --reporter dot",
+    "safe-batch": "node scripts/safe-duplicate-batch-run.mjs",
+    "safe-batch:rehearse": "node scripts/safe-duplicate-batch-run.mjs --execute --yes --rerun",
     "typecheck": "tsc --noEmit",
     "typecheck:api": "tsc -p tsconfig.api.json",
     "validate": "npm run typecheck && npm run typecheck:api && npm run test:ci && npm run build"
