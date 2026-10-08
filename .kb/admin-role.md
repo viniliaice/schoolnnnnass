@@ -9,7 +9,7 @@ timestamp: 2026-07-27T00:00:00Z
 
 # Admin Role — Feature Map
 
-The admin role has access to 19 features across 9 knowledge bundles:
+The admin role has access to 21 features across 9 knowledge bundles:
 
 | # | Feature | Bundle | Concept |
 |---|---------|--------|---------|
@@ -32,6 +32,8 @@ The admin role has access to 19 features across 9 knowledge bundles:
 | 17 | Monitor Teachers | [exams](exams/) | [MonitorTeachers](exams/ui/monitor-teachers.md) |
 | 18 | Exam Reports | [exams](exams/) | [ExamReport](exams/ui/exam-report.md) |
 | 19 | Lesson Plan Review | [lesson-plans](lesson-plans/) | [LessonPlanReview](lesson-plans/ui/lesson-plan-review.md) |
+| 20 | Student Cleanup | [admin-tools](admin-tools/) | [FormerStudentCleanup](admin-tools/ui/former-student-cleanup.md) |
+| 21 | Former Students | [admin-tools](admin-tools/) | [FormerStudents](admin-tools/ui/former-students.md) |
 
 **Data model**: See [core/data-model/](core/data-model/) for all core tables.
 **Security**: See [core/security/](core/security/) for RLS policies.

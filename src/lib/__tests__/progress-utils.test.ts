@@ -13,10 +13,23 @@ import { getClassStudentSubjectProgress } from '../db/progress';
 const mockFrom = supabase.from as unknown as ReturnType<typeof vi.fn>;
 const mockRpc = supabase.rpc as unknown as ReturnType<typeof vi.fn>;
 
+/**
+ * Chainable terminal query. The class-progress fallback now reads its roster
+ * through the shared student reader (lib/db/students), which pages with
+ * .select().eq().order().range() and also filters Former Students, so the mock
+ * has to accept the whole chain — and stay awaitable for the shorter
+ * .select().eq() calls the other tables use.
+ */
 function terminalEq(result: unknown) {
-  return {
-    eq: vi.fn(() => Promise.resolve({ data: result, error: null })),
+  const query: any = {
+    eq: vi.fn(() => query),
+    in: vi.fn(() => query),
+    order: vi.fn(() => query),
+    range: vi.fn(() => Promise.resolve({ data: result, error: null })),
+    then: (onFulfilled: any, onRejected: any) =>
+      Promise.resolve({ data: result, error: null }).then(onFulfilled, onRejected),
   };
+  return query;
 }
 
 function examsQuery(result: unknown) {

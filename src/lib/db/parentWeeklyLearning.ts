@@ -1,5 +1,6 @@
 import { supabase } from '../supabase';
 import type { Student } from '../../types';
+import { filterStudentsByStatus } from './students';
 
 export interface ParentLearningResource {
   label: string | null;
@@ -51,7 +52,9 @@ export async function getParentLearningChildren(parentId: string): Promise<Stude
     .select('*')
     .eq('parentId', parentId);
   if (error) throw new Error(error.message || 'Could not load children.');
-  return (data ?? []) as Student[];
+  // Weekly learning is current work: a child who left the school is not offered
+  // a learning plan. Client-side filter keeps this working pre-migration.
+  return filterStudentsByStatus((data ?? []) as Student[], 'active');
 }
 
 /** Parent UI must use this allowlisted RPC, never the raw lesson-plan tables. */

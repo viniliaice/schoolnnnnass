@@ -72,7 +72,9 @@ export function ExamVerification() {
 
   const studentsQuery = useQuery<Student[], Error>({
     queryKey: ['examVerification', 'students', ...sortedClassFilter],
-    queryFn: () => getStudentsByClasses(sortedClassFilter, undefined, STUDENT_FETCH_LIMIT),
+    // 'all': a pending exam belonging to a student who has since left must
+    // still be verifiable instead of staying pending forever.
+    queryFn: () => getStudentsByClasses(sortedClassFilter, undefined, STUDENT_FETCH_LIMIT, 'all'),
     enabled: sortedClassFilter.length > 0,
     staleTime: 1000 * 60 * 10,
     refetchOnWindowFocus: false,

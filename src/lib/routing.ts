@@ -40,6 +40,14 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   // apply_student_class_import RPC (which re-checks the role in SQL).
   '/admin/class-import': ['admin'],
 
+  // Former Students / Student Cleanup. Admin only — it flips students.status to
+  // 'former' through the admin-gated apply_former_student_import RPC (which
+  // re-checks the role in SQL). Nothing is ever deleted, but deciding that a
+  // child left the school is an administrator decision, so both the upload /
+  // review flow and the former-students directory are admin-only.
+  '/admin/student-cleanup': ['admin'],
+  '/admin/former-students': ['admin'],
+
   // Lesson Plan Review. Admin reviews plans exactly like a supervisor: the
   // database already grants both roles identical rights (`admin_all_plans` RLS
   // plus the `('supervisor','admin')` checks inside decide_lesson_plan_review,

@@ -10,7 +10,7 @@ import { useToast } from '../../context/ToastContext';
 import { Dialog } from '../../components/ui/Dialog';
 import { ExamReport } from '../reports/ExamReport';
 import { DataTable } from '../../components/ui/DataTable';
-import { Plus, Trash2, Edit, GraduationCap, Search, MessageCircle, Loader2, UserCheck } from 'lucide-react';
+import { Plus, Trash2, Edit, GraduationCap, Search, MessageCircle, Loader2, UserCheck, UserMinus } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ColumnDef } from '@tanstack/react-table';
 import { buildParentCredentialWhatsAppLink, sendParentCredentialWhatsApp } from '../../lib/whatsapp';
@@ -371,6 +371,19 @@ export function ManageStudents() {
         <div>
           <h1 className="text-2xl font-bold text-slate-900">Manage Students</h1>
           <p className="text-slate-500 mt-1">Add students, assign classes and parents</p>
+          {/* This list is ACTIVE students only: leavers live on their own page so
+              they never inflate a roster, while their history stays intact. */}
+          <p className="text-xs text-slate-500 mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
+            <span className="inline-flex items-center gap-1">
+              <UserMinus className="w-3.5 h-3.5" /> Students who left the school are not listed here.
+            </span>
+            <a href="/admin/former-students" className="font-semibold text-indigo-600 hover:text-indigo-700 underline underline-offset-2">
+              Former Students
+            </a>
+            <a href="/admin/student-cleanup" className="font-semibold text-indigo-600 hover:text-indigo-700 underline underline-offset-2">
+              Student Cleanup (bulk import)
+            </a>
+          </p>
         </div>
         <button onClick={() => { resetForm(); setShowCreate(true); }}
           className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-medium text-sm hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all">

@@ -9,7 +9,10 @@ type ClassNamesQueryOptions = Omit<
 export function useClassNames(options?: ClassNamesQueryOptions) {
   return useQuery<string[], unknown, string[], readonly unknown[]>({
     queryKey: ['classNames'],
-    queryFn: getStudentClasses,
+    // Explicit wrapper: getStudentClasses now takes a status filter, and
+    // React Query would otherwise hand it its QueryContext. Class dropdowns
+    // list CURRENTLY enrolled classes; Former Students have their own page.
+    queryFn: () => getStudentClasses('active'),
     staleTime: 1000 * 60 * 10,
     gcTime: 1000 * 60 * 30,
     refetchOnWindowFocus: false,

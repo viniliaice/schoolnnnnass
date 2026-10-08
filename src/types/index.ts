@@ -68,6 +68,24 @@ export interface User {
   createdAt: string;
 }
 
+/**
+ * Enrollment status of a student record.
+ *
+ * 'former' means the child left the school (Former Students / Student Cleanup,
+ * supabase/migrations/20261008_former_students_cleanup.sql). A former student
+ * is NEVER deleted: every mark, attendance row, payment, parent link, message
+ * and historical class stays exactly as it was. They simply stop appearing in
+ * the surfaces that are about CURRENTLY enrolled students.
+ *
+ * Rows written before the status column existed have no value at all, which is
+ * why every reader treats `undefined`/`null` as 'active' (see
+ * `isActiveStudentRecord` in lib/db/students.ts).
+ */
+export type StudentStatus = 'active' | 'former';
+
+/** Which students a read should return. 'active' is the default everywhere. */
+export type StudentStatusFilter = StudentStatus | 'all';
+
 export interface Student {
   id: string;
   name: string;
@@ -76,12 +94,18 @@ export interface Student {
   createdAt: string;
   /** Government/admission ID from the transport sheet (Gov-id column). */
   govId?: string | null;
-  /** Bus number, 'WALKER', or 'CAR' (family-ID feature). */
+  /** Bus number, 'WALKER', or 'CAR' (family-ID feature). 'LEFT' = left school. */
   transport?: string | null;
   /** Parent phone imported from the sheet's SECOND NUMBER column. */
   parentPhone?: string | null;
   /** Family ID: zero-padded 4-digit string ('0421'); MBK- prefix is display-only. */
   familyId?: string | null;
+  /** Enrollment status. Missing on rows written before 20261008 → treat as active. */
+  status?: StudentStatus | null;
+  /** When the status last changed (Former Students directory). */
+  statusUpdatedAt?: string | null;
+  /** profiles.id of whoever changed the status last. */
+  statusUpdatedBy?: string | null;
 }
 
 export interface Subject {

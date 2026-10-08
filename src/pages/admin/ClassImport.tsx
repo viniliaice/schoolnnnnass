@@ -134,9 +134,14 @@ export function ClassImport() {
     let mounted = true;
     (async () => {
       try {
+        // 'all': the import matches uploaded rows against every student record
+        // that exists, including ones already marked as Former Students — hiding
+        // a leaver here would make the import offer to CREATE them again as a
+        // duplicate. Whether a leaver gets a new class is decided by the review
+        // screen, not by this lookup.
         const [allStudents, studentClasses, subjectClasses, years] = await Promise.all([
-          getStudents(),
-          getStudentClasses(),
+          getStudents(undefined, 'all'),
+          getStudentClasses('all'),
           getClasses(),
           getAcademicYears(),
         ]);

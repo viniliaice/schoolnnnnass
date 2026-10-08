@@ -4,7 +4,10 @@ import { warnFallback } from '../logger';
 export type SystemStats = {
   totalTeachers: number;
   totalParents: number;
+  /** ACTIVE students. Former Students / Student Cleanup (20261008) moved
+   *  leavers out of this number; they are reported as `formerStudents`. */
   totalStudents: number;
+  formerStudents: number;
   totalExams: number;
   pendingExams: number;
   approvedExams: number;
@@ -16,6 +19,7 @@ const EMPTY_STATS: SystemStats = {
   totalTeachers: 0,
   totalParents: 0,
   totalStudents: 0,
+  formerStudents: 0,
   totalExams: 0,
   pendingExams: 0,
   approvedExams: 0,
@@ -29,6 +33,7 @@ function normalizeSystemStats(value: unknown): SystemStats {
     totalTeachers: Number(stats.totalTeachers ?? 0),
     totalParents: Number(stats.totalParents ?? 0),
     totalStudents: Number(stats.totalStudents ?? 0),
+    formerStudents: Number(stats.formerStudents ?? 0),
     totalExams: Number(stats.totalExams ?? 0),
     pendingExams: Number(stats.pendingExams ?? 0),
     approvedExams: Number(stats.approvedExams ?? 0),
@@ -57,7 +62,7 @@ async function getSystemStatsFallback(): Promise<SystemStats> {
   const [
     totalTeachers,
     totalParents,
-    totalStudents,
+    allStudents,
     totalExams,
     pendingExams,
     approvedExams,
@@ -77,6 +82,13 @@ async function getSystemStatsFallback(): Promise<SystemStats> {
   const { data: examRows, error: examError } = examsForAverage;
   if (examError) throw examError;
 
+  // Former Students / Student Cleanup: the headline number is ACTIVE students.
+  // The former count is fetched separately and tolerated when the database has
+  // not been migrated yet (no students.status column), so an out-of-order deploy
+  // degrades to "all students are active" instead of failing the dashboard.
+  const formerStudents = await countRows('students', query => query.eq('status', 'former')).catch(() => 0);
+  const totalStudents = Math.max(0, allStudents - formerStudents);
+
   const rows = (examRows ?? []) as Array<{ score: number; total: number }>;
   const averageScore = rows.length > 0
     ? Math.round(
@@ -89,6 +101,7 @@ async function getSystemStatsFallback(): Promise<SystemStats> {
     totalTeachers,
     totalParents,
     totalStudents,
+    formerStudents,
     totalExams,
     pendingExams,
     approvedExams,

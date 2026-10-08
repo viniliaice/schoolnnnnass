@@ -1,6 +1,9 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { normalizePhone } from './transport';
 import type { Role } from '../types';
+// Former Students / Student Cleanup: the pure matching contract shared with the
+// no-backend preview client (the database implements the same rules in SQL).
+import { evaluateFormerStudentRows, MAX_FORMER_IMPORT_ROWS } from './import/formerStudents';
 
 const rawSupabaseUrl = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const rawSupabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -69,6 +72,25 @@ const demoStudents = [
   { id: 'stu-samegov-a', name: 'Leyla Hassan', className: 'Grade 3-B', parentId: 'parent-3', createdAt: '2026-02-15T08:00:00Z', govId: '999888', transport: 'CAR', parentPhone: '252634500000', familyId: '0014' },
   { id: 'stu-samegov-b', name: 'Leyla Hassan', className: 'Grade 3-B', parentId: null, createdAt: '2026-05-20T08:00:00Z', govId: '999888', transport: 'CAR', parentPhone: null, familyId: null },
 ];
+
+// ── Former Students / Student Cleanup demo data ─────────────────────────────
+// The real database carries students.status ('active' | 'former') after
+// migration 20261008_former_students_cleanup.sql. The preview client mirrors
+// that: every demo student gets a status, and two are pre-marked as former so
+// the Former Students directory, the restore action and the active-only
+// rosters all have something to show without a backend.
+const demoFormerStudents: any[] = [
+  { id: 'student-former-1', name: 'Ayaan Cabdi Nuur', className: 'Grade 4-B', parentId: 'parent-2', createdAt: '2026-01-12T08:00:00Z', govId: 'MBK-4B-021', transport: 'LEFT', parentPhone: '252634511111', familyId: '0021', status: 'former', statusUpdatedAt: '2026-09-28T09:12:00Z', statusUpdatedBy: 'preview-admin' },
+  { id: 'student-former-2', name: 'Hodan Maxamuud Faarax', className: 'Grade 2-C', parentId: null, createdAt: '2026-02-02T08:00:00Z', govId: null, transport: 'LEFT', parentPhone: null, familyId: null, status: 'former', statusUpdatedAt: '2026-09-28T09:14:00Z', statusUpdatedBy: 'preview-admin' },
+];
+(demoStudents as any[]).push(...demoFormerStudents);
+for (const student of demoStudents as any[]) {
+  if (!('status' in student)) {
+    student.status = 'active';
+    student.statusUpdatedAt = null;
+    student.statusUpdatedBy = null;
+  }
+}
 
 const demoProfiles: any[] = [
   { id: 'preview-admin', name: 'Preview Admin', email: 'admin@mbk.edu', role: 'admin', phone1: null, phone2: null, assignedClasses: ['Grade 1-A','Grade 2-C'], assignedSubjects: [], createdAt: '2026-06-01', auth_id: 'auth-preview-admin' },
@@ -634,6 +656,385 @@ function demoMarksMonitorRows(params: any): any[] {
     });
 }
 
+// ── Former Students / Student Cleanup: in-memory mirror of the SQL RPCs ─────
+// The preview client has no Postgres, so the same contract implemented by
+// 20261008_former_students_cleanup.sql is reproduced here on the demo data:
+//   * System ID (students.id) is the only match key
+//   * missing / unknown / ambiguous IDs can never be applied
+//   * an ID match with a different name needs an explicit per-row confirmation
+//   * nothing is deleted, everything is recorded in a ledger that a rollback
+//     consults before restoring anyone
+// Production never reaches this code: with real credentials configured, the
+// RPCs run in the database and the database is the only thing that decides.
+const mockFormerState: {
+  seq: number;
+  imports: any[];
+  rows: any[];
+  ledger: any[];
+} = { seq: 0, imports: [], rows: [], ledger: [] };
+
+const MOCK_FORMER_POLICY = {
+  policyId: 'former_students_system_id_match',
+  version: 1,
+  nameEn: 'Former Students / Student Cleanup',
+  matchKeyEn: 'System ID (students.id) is the only match key.',
+  neverDeleteEn: 'No student record is ever deleted. History is preserved.',
+  confirmPhrase: 'MARK AS FORMER STUDENTS',
+  rollbackConfirmPhrase: 'ROLLBACK IMPORT',
+  maxRows: MAX_FORMER_IMPORT_ROWS,
+  statuses: {
+    exact_match: 'Exact Match — System ID found and the names agree',
+    id_match_name_conflict: 'ID Match but Name Different — manual review required',
+    possible_duplicate: 'Possible Duplicate — the same System ID or name appears more than once in the file',
+    requires_review: 'Requires Review — the uploaded record cannot be verified',
+    not_found: 'System ID Not Found — nothing will be changed',
+    already_former: 'Already a Former Student — nothing to do',
+  },
+  actions: { deactivate: 'Mark as Former Student', keep_active: 'Keep Active', review: 'Review' },
+  autoSafeConditions: [
+    'system_id_present', 'system_id_matches_exactly_one_student', 'uploaded_name_present',
+    'uploaded_name_agrees_with_database_name', 'system_id_unique_in_uploaded_file',
+    'uploaded_name_unique_in_uploaded_file', 'student_currently_active',
+  ],
+  neverDeactivateWhen: [
+    'system_id_missing', 'system_id_not_found', 'multiple_database_records_share_the_system_id',
+    'uploaded_record_is_ambiguous', 'only_the_name_matches',
+    'uploaded_name_is_very_different_from_the_database_name',
+  ],
+  invariants: {
+    noDeletes: 'This feature never deletes a student row or any child row.',
+    noFuzzyNameMatch: 'A name match never identifies a student; only System ID does.',
+    notInFileStaysActive: 'A student who is not in the uploaded file is never touched.',
+    historyPreserved: 'Marks, attendance, payments, parents, messages and historical classes stay intact.',
+    rollbackIsChecked: 'Rollback consults the status ledger and skips students changed after the import.',
+  },
+};
+
+const MOCK_FORMER_ACTOR = { id: 'preview-admin', name: 'Preview Admin' };
+
+function mockFormerLedgerPush(entry: Record<string, unknown>) {
+  const record = {
+    id: `ssc-mock-${mockFormerState.ledger.length + 1}`,
+    createdAt: new Date().toISOString(),
+    ...entry,
+  };
+  mockFormerState.ledger.push(record);
+  return record;
+}
+
+function mockFormerPreview(pRows: any) {
+  const rows = Array.isArray(pRows) ? pRows : [];
+  if (rows.length > MOCK_FORMER_POLICY.maxRows) {
+    return { data: null, error: { message: `Too many rows in one import (max ${MOCK_FORMER_POLICY.maxRows}). Split the file.`, code: '54000' } };
+  }
+  const evaluation = evaluateFormerStudentRows(rows, demoStudents as any[]);
+  return {
+    data: { ...evaluation, dryRun: true, writesPerformed: 0, policy: MOCK_FORMER_POLICY, evaluatedAt: new Date().toISOString() },
+    error: null,
+  };
+}
+
+function mockFormerApply(pRows: any, pFileName: any, pReason: any) {
+  const preview = mockFormerPreview(pRows);
+  if (preview.error) return preview;
+  const evaluation = preview.data!;
+  const requestedByRow = new Map<number, { action?: string; adminConfirmed?: boolean }>(
+    (Array.isArray(pRows) ? pRows : []).map((r: any) => [Number(r.rowNumber), r]),
+  );
+
+  mockFormerState.seq += 1;
+  const importId = `fsi-mock-${mockFormerState.seq}`;
+  const summary = evaluation.summary;
+  const record: any = {
+    id: importId,
+    importNumber: mockFormerState.seq,
+    seq: mockFormerState.seq,
+    fileName: pFileName ?? null,
+    adminId: MOCK_FORMER_ACTOR.id,
+    adminName: MOCK_FORMER_ACTOR.name,
+    reason: pReason ?? null,
+    status: 'applied',
+    uploadedCount: summary.totalUploaded,
+    validCount: summary.validRecords,
+    missingNameCount: summary.missingNames,
+    missingSystemIdCount: summary.missingSystemIds,
+    duplicateSystemIdCount: summary.duplicateSystemIds,
+    duplicateNameCount: summary.duplicateNames,
+    foundCount: summary.foundInDatabase,
+    notFoundCount: summary.notFoundInDatabase,
+    exactMatchCount: summary.exactMatches,
+    nameConflictCount: summary.nameConflicts,
+    possibleDuplicateCount: summary.possibleDuplicates,
+    reviewCount: summary.requiresReview,
+    alreadyFormerCount: summary.alreadyFormer,
+    readyCount: summary.readyToDeactivate,
+    deactivatedCount: 0,
+    skippedCount: 0,
+    restoredCount: 0,
+    rollbackSkippedCount: 0,
+    rolledBackAt: null,
+    rolledBackBy: null,
+    rolledBackByName: null,
+    summary,
+    createdAt: new Date().toISOString(),
+  };
+  mockFormerState.imports.push(record);
+
+  let deactivated = 0;
+  let skipped = 0;
+  let keptActive = 0;
+  let blocked = 0;
+  const deactivatedIds: string[] = [];
+  const skippedRows: any[] = [];
+
+  for (const evaluated of evaluation.rows) {
+    const requested = requestedByRow.get(evaluated.rowNumber);
+    const action = requested?.action === 'deactivate' || requested?.action === 'keep_active' ? requested.action : 'review';
+    const confirmed = Boolean(requested?.adminConfirmed);
+    let actionTaken: string;
+    let actionReason: string;
+
+    if (action === 'keep_active') {
+      actionTaken = 'kept_active'; actionReason = 'admin_kept_active'; keptActive += 1;
+    } else if (action !== 'deactivate') {
+      actionTaken = 'skipped'; actionReason = 'not_selected_for_deactivation'; skipped += 1;
+    } else if (evaluated.blocked) {
+      actionTaken = 'blocked'; actionReason = evaluated.reasons[0] ?? 'blocked_by_safety_rule'; blocked += 1;
+      skippedRows.push({ rowNumber: evaluated.rowNumber, uploadedSystemId: evaluated.uploadedSystemId, reason: actionReason });
+    } else if (evaluated.matchStatus === 'already_former') {
+      actionTaken = 'already_former'; actionReason = 'already_former'; skipped += 1;
+    } else if (evaluated.requiresReview && !confirmed) {
+      actionTaken = 'blocked'; actionReason = 'requires_manual_review'; blocked += 1;
+      skippedRows.push({ rowNumber: evaluated.rowNumber, uploadedSystemId: evaluated.uploadedSystemId, reason: actionReason });
+    } else if (!evaluated.matchedStudentId) {
+      actionTaken = 'blocked'; actionReason = 'no_matched_student'; blocked += 1;
+    } else {
+      const student = (demoStudents as any[]).find(s => s.id === evaluated.matchedStudentId);
+      if (!student || student.status === 'former') {
+        actionTaken = 'already_former'; actionReason = 'already_former'; skipped += 1;
+      } else {
+        const previousStatus = student.status ?? 'active';
+        const previousTransport = student.transport ?? null;
+        // STATUS + the school's existing LEFT marker only. Name, System ID,
+        // class, parent, Gov ID and family ID are preserved.
+        student.status = 'former';
+        student.transport = 'LEFT';
+        student.statusUpdatedAt = new Date().toISOString();
+        student.statusUpdatedBy = MOCK_FORMER_ACTOR.id;
+        mockFormerLedgerPush({
+          studentId: student.id, studentName: student.name,
+          previousStatus, newStatus: 'former', reason: 'former_import',
+          previousTransport, changedBy: MOCK_FORMER_ACTOR.id, changedByName: MOCK_FORMER_ACTOR.name,
+          importId, fileName: record.fileName, note: record.reason,
+        });
+        actionTaken = 'deactivated';
+        actionReason = confirmed && evaluated.requiresReview ? 'admin_confirmed_review_row' : 'exact_system_id_match';
+        deactivated += 1;
+        deactivatedIds.push(student.id);
+      }
+    }
+
+    mockFormerState.rows.push({
+      id: `fsr-mock-${mockFormerState.rows.length + 1}`,
+      importId,
+      rowNumber: evaluated.rowNumber,
+      uploadedName: evaluated.uploadedName,
+      uploadedSystemId: evaluated.uploadedSystemId,
+      studentId: evaluated.matchedStudentId,
+      studentName: evaluated.databaseName,
+      className: evaluated.className,
+      matchStatus: evaluated.matchStatus,
+      nameMatch: evaluated.nameMatch,
+      nameSimilarity: evaluated.nameSimilarity,
+      reasons: evaluated.reasons,
+      requestedAction: action,
+      adminConfirmed: confirmed,
+      actionTaken,
+      actionReason,
+      previousStatus: actionTaken === 'deactivated' ? 'active' : null,
+      newStatus: actionTaken === 'deactivated' ? 'former' : null,
+      restoredAt: null,
+      restoredBy: null,
+      createdAt: new Date().toISOString(),
+    });
+  }
+
+  record.deactivatedCount = deactivated;
+  record.skippedCount = skipped + keptActive + blocked;
+
+  return {
+    data: {
+      importId,
+      importNumber: record.importNumber,
+      committed: true,
+      atomic: true,
+      fileName: record.fileName,
+      adminId: MOCK_FORMER_ACTOR.id,
+      adminName: MOCK_FORMER_ACTOR.name,
+      deactivated,
+      skipped,
+      keptActive,
+      blocked,
+      deleted: 0,
+      formerStudentIds: deactivatedIds,
+      skippedRows,
+      summary,
+      invariants: MOCK_FORMER_POLICY.invariants,
+      completedAt: new Date().toISOString(),
+    },
+    error: null,
+  };
+}
+
+function mockFormerRollback(pImportId: any, pPhrase: any) {
+  const expected = MOCK_FORMER_POLICY.rollbackConfirmPhrase;
+  if (String(pPhrase ?? '').trim().toUpperCase() !== expected) {
+    return { data: null, error: { message: `Rollback confirmation phrase required: type ${expected} to undo this import.`, code: '22023' } };
+  }
+  const record = mockFormerState.imports.find(i => i.id === pImportId);
+  if (!record) return { data: null, error: { message: `Import ${pImportId} not found.`, code: 'P0002' } };
+  if (record.status === 'rolled_back') {
+    return { data: null, error: { message: `Import ${pImportId} was already rolled back.`, code: '55000' } };
+  }
+
+  let restored = 0;
+  let skipped = 0;
+  const restoredIds: string[] = [];
+  const skippedRows: any[] = [];
+
+  for (const row of mockFormerState.rows.filter(r => r.importId === pImportId && r.actionTaken === 'deactivated')) {
+    const student = (demoStudents as any[]).find(s => s.id === row.studentId);
+    if (!student) {
+      skipped += 1; skippedRows.push({ studentId: row.studentId, reason: 'student_missing' });
+      continue;
+    }
+    // Audit check: the most recent ledger entry for this student must still be
+    // the one this import wrote, and the student must still be former.
+    const latest = [...mockFormerState.ledger]
+      .filter(l => l.studentId === row.studentId)
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .pop();
+    if (!latest || latest.importId !== pImportId || latest.reason !== 'former_import' || student.status !== 'former') {
+      skipped += 1;
+      skippedRows.push({ studentId: row.studentId, studentName: row.studentName, reason: 'changed_after_import' });
+      continue;
+    }
+    student.status = latest.previousStatus ?? 'active';
+    student.transport = latest.previousTransport ?? null;
+    student.statusUpdatedAt = new Date().toISOString();
+    student.statusUpdatedBy = MOCK_FORMER_ACTOR.id;
+    mockFormerLedgerPush({
+      studentId: student.id, studentName: student.name, previousStatus: 'former',
+      newStatus: student.status, reason: 'import_rollback', previousTransport: 'LEFT',
+      changedBy: MOCK_FORMER_ACTOR.id, changedByName: MOCK_FORMER_ACTOR.name,
+      importId: pImportId, fileName: record.fileName, note: `Rollback of import ${pImportId}`,
+    });
+    row.restoredAt = new Date().toISOString();
+    row.restoredBy = MOCK_FORMER_ACTOR.id;
+    restored += 1;
+    restoredIds.push(student.id);
+  }
+
+  record.status = skipped === 0 ? 'rolled_back' : 'partially_rolled_back';
+  record.restoredCount += restored;
+  record.rollbackSkippedCount += skipped;
+  record.rolledBackAt = new Date().toISOString();
+  record.rolledBackBy = MOCK_FORMER_ACTOR.id;
+  record.rolledBackByName = MOCK_FORMER_ACTOR.name;
+
+  return {
+    data: {
+      importId: pImportId, restored, skipped, restoredStudentIds: restoredIds, skippedRows,
+      importStatus: record.status, completedAt: new Date().toISOString(),
+    },
+    error: null,
+  };
+}
+
+function mockFormerListImports(pLimit: any, pOffset: any) {
+  const limit = Math.min(Math.max(Number(pLimit ?? 25) || 25, 1), 200);
+  const offset = Math.max(Number(pOffset ?? 0) || 0, 0);
+  const sorted = [...mockFormerState.imports].sort((a, b) => b.seq - a.seq);
+  return { data: { total: sorted.length, imports: sorted.slice(offset, offset + limit) }, error: null };
+}
+
+function mockFormerGetImport(pImportId: any, pLimit: any, pOffset: any) {
+  const record = mockFormerState.imports.find(i => i.id === pImportId);
+  if (!record) return { data: null, error: { message: `Import ${pImportId} not found.`, code: 'P0002' } };
+  const limit = Math.min(Math.max(Number(pLimit ?? 200) || 200, 1), 2000);
+  const offset = Math.max(Number(pOffset ?? 0) || 0, 0);
+  const rows = mockFormerState.rows.filter(r => r.importId === pImportId);
+  return { data: { import: record, rows: rows.slice(offset, offset + limit), rowTotal: rows.length }, error: null };
+}
+
+function mockFormerListStudents(pSearch: any, pClass: any, pLimit: any, pOffset: any) {
+  const q = String(pSearch ?? '').trim().toLowerCase();
+  const cls = pClass ? String(pClass) : null;
+  const limit = Math.min(Math.max(Number(pLimit ?? 50) || 50, 1), 500);
+  const offset = Math.max(Number(pOffset ?? 0) || 0, 0);
+  const former = (demoStudents as any[]).filter(s => s.status === 'former');
+  const matched = former.filter(s => {
+    if (cls && s.className !== cls) return false;
+    if (!q) return true;
+    return [s.name, s.id, s.govId ?? ''].some(v => String(v).toLowerCase().includes(q));
+  });
+  matched.sort((a, b) => String(a.name).toLowerCase().localeCompare(String(b.name).toLowerCase()));
+  const classes = Array.from(new Set(former.map(s => s.className).filter(Boolean))).sort();
+  const students = matched.slice(offset, offset + limit).map(s => {
+    const last = [...mockFormerState.ledger]
+      .filter(l => l.studentId === s.id)
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+    const parent = demoProfiles.find(p => p.id === s.parentId);
+    const actor = demoProfiles.find(p => p.id === s.statusUpdatedBy);
+    return {
+      id: s.id, name: s.name, className: s.className, govId: s.govId ?? null,
+      parentId: s.parentId ?? null, parentName: parent?.name ?? null, parentPhone: s.parentPhone ?? null,
+      transport: s.transport ?? null, familyId: s.familyId ?? null, status: 'former',
+      markedFormerAt: s.statusUpdatedAt ?? null, markedFormerBy: s.statusUpdatedBy ?? null,
+      markedFormerByName: actor?.name ?? null, createdAt: s.createdAt,
+      lastChange: last
+        ? { reason: last.reason, at: last.createdAt, by: last.changedByName ?? null, fileName: last.fileName ?? null, importId: last.importId ?? null }
+        : null,
+    };
+  });
+  return { data: { total: matched.length, students, classes }, error: null };
+}
+
+function mockFormerSetStatus(pStudentId: any, pStatus: any, pReason: any) {
+  const target = String(pStatus ?? '').trim().toLowerCase();
+  if (target !== 'active' && target !== 'former') {
+    return { data: null, error: { message: 'Status must be "active" or "former".', code: '22023' } };
+  }
+  const student = (demoStudents as any[]).find(s => s.id === pStudentId);
+  if (!student) return { data: null, error: { message: `Student ${pStudentId} does not exist.`, code: 'P0002' } };
+  const previousStatus = student.status ?? 'active';
+  if (previousStatus === target) {
+    return { data: { studentId: student.id, status: target, changed: false, reason: 'already_in_state' }, error: null };
+  }
+  const previousTransport = student.transport ?? null;
+  if (target === 'former') {
+    student.transport = 'LEFT';
+  } else {
+    const lastFormer = [...mockFormerState.ledger]
+      .filter(l => l.studentId === student.id && l.newStatus === 'former')
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))[0];
+    student.transport = lastFormer ? (lastFormer.previousTransport ?? null) : null;
+  }
+  student.status = target;
+  student.statusUpdatedAt = new Date().toISOString();
+  student.statusUpdatedBy = MOCK_FORMER_ACTOR.id;
+  mockFormerLedgerPush({
+    studentId: student.id, studentName: student.name, previousStatus, newStatus: target,
+    reason: target === 'former' ? 'former_manual' : 'manual_restore',
+    previousTransport, changedBy: MOCK_FORMER_ACTOR.id, changedByName: MOCK_FORMER_ACTOR.name,
+    importId: null, fileName: null, note: pReason ?? null,
+  });
+  return {
+    data: { studentId: student.id, studentName: student.name, previousStatus, status: target, changed: true, changedBy: MOCK_FORMER_ACTOR.id, changedAt: new Date().toISOString() },
+    error: null,
+  };
+}
+
 function createMockSupabase(): SupabaseClient {
   const demoClasses = Array.from(new Set(demoStudents.map(s => s.className))).sort();
 
@@ -1016,6 +1417,27 @@ function createMockSupabase(): SupabaseClient {
   const mockFrom = (table: string) => makeChain(table);
 
   const mockRpc = async (fn: string, params?: any) => {
+    // Former Students / Student Cleanup: same contract as the SQL RPCs, run on
+    // the demo data (see mockFormer* helpers above).
+    if (fn === 'former_students_policy') return { data: MOCK_FORMER_POLICY, error: null };
+    if (fn === 'preview_former_student_import') return mockFormerPreview(params?.p_rows);
+    if (fn === 'apply_former_student_import') {
+      return mockFormerApply(params?.p_rows, params?.p_file_name, params?.p_reason);
+    }
+    if (fn === 'rollback_former_student_import') {
+      return mockFormerRollback(params?.p_import_id, params?.p_confirm_phrase);
+    }
+    if (fn === 'list_former_student_imports') return mockFormerListImports(params?.p_limit, params?.p_offset);
+    if (fn === 'get_former_student_import') {
+      return mockFormerGetImport(params?.p_import_id, params?.p_limit, params?.p_offset);
+    }
+    if (fn === 'list_former_students') {
+      return mockFormerListStudents(params?.p_search, params?.p_class, params?.p_limit, params?.p_offset);
+    }
+    if (fn === 'set_student_former_status') {
+      return mockFormerSetStatus(params?.p_student_id, params?.p_status, params?.p_reason);
+    }
+
     // The real app calls the SECURITY DEFINER monitor RPC. In the no-env
     // preview there is no Postgres, so return the same derived, assignment-
     // first shape from sanitized demo data rather than reporting a missing
@@ -2570,7 +2992,7 @@ function createMockSupabase(): SupabaseClient {
     // Version marker lets Vite HMR replace an older cached preview client
     // after a new preview-only RPC is added. Without it, globalThis.__supabase__
     // could keep the old mockRpc implementation until a full browser reload.
-    __marksMonitorPreviewVersion: 1,
+    __marksMonitorPreviewVersion: 2,
     auth: mockAuth as any,
     from: mockFrom as any,
     rpc: mockRpc as any,
@@ -2592,7 +3014,7 @@ function createMockSupabase(): SupabaseClient {
 const cachedSupabase = globalThis.__supabase__ as (SupabaseClient & { __marksMonitorPreviewVersion?: number }) | undefined;
 
 export const supabase: SupabaseClient = isPlaceholderEnv
-  ? cachedSupabase?.__marksMonitorPreviewVersion === 1
+  ? cachedSupabase?.__marksMonitorPreviewVersion === 2
     ? cachedSupabase
     : createMockSupabase()
   : cachedSupabase ?? createClient(supabaseUrl, supabaseAnonKey, {

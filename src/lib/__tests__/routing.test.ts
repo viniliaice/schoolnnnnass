@@ -30,8 +30,8 @@ describe('canAccessRoute — office role', () => {
   it('every guarded route is listed in ROUTE_ACCESS', () => {
     expect(Object.keys(ROUTE_ACCESS).sort()).toEqual([
       '/admin/class-import', '/admin/drivers', '/admin/duplicate-students', '/admin/family-ids', '/admin/family-ids/setup',
-      '/admin/grade-corrections', '/admin/lesson-plan-submissions', '/admin/lesson-plans',
-      '/admin/monitor-marks', '/directory', '/gate', '/supervisor/lesson-plan-submissions',
+      '/admin/former-students', '/admin/grade-corrections', '/admin/lesson-plan-submissions', '/admin/lesson-plans',
+      '/admin/monitor-marks', '/admin/student-cleanup', '/directory', '/gate', '/supervisor/lesson-plan-submissions',
       '/supervisor/lesson-plans', '/supervisor/monitor-marks',
     ]);
   });
@@ -51,6 +51,22 @@ describe('student class import route is admin-only', () => {
     expect(canAccessRoute('admin', '/admin/class-import')).toBe(true);
     for (const role of ['supervisor', 'office', 'teacher', 'parent'] as const) {
       expect(canAccessRoute(role, '/admin/class-import'), role).toBe(false);
+    }
+  });
+});
+
+describe('former students routes are admin-only', () => {
+  it('only admins may open /admin/student-cleanup (the upload + review flow)', () => {
+    expect(canAccessRoute('admin', '/admin/student-cleanup')).toBe(true);
+    for (const role of ['supervisor', 'office', 'teacher', 'parent'] as const) {
+      expect(canAccessRoute(role, '/admin/student-cleanup'), role).toBe(false);
+    }
+  });
+
+  it('only admins may open /admin/former-students (the directory)', () => {
+    expect(canAccessRoute('admin', '/admin/former-students')).toBe(true);
+    for (const role of ['supervisor', 'office', 'teacher', 'parent'] as const) {
+      expect(canAccessRoute(role, '/admin/former-students'), role).toBe(false);
     }
   });
 });

@@ -5,7 +5,7 @@ import { getExams } from '../../lib/db/exams';
 import { getUsers } from '../../lib/db/profiles';
 import { AcademicReminderPanel } from '../../components/academic-reminders/AcademicReminderPanel';
 
-import { Users, GraduationCap, FileText, CheckCircle, XCircle, Clock, TrendingUp, BookOpen, FileBarChart, CalendarRange } from 'lucide-react';
+import { Users, GraduationCap, FileText, CheckCircle, XCircle, Clock, TrendingUp, BookOpen, FileBarChart, CalendarRange, UserMinus } from 'lucide-react';
 
 export function AdminDashboard({ navigate }: { navigate?: (path: string) => void }) {
   const [stats, setStats] = useState<any>(null);
@@ -104,7 +104,10 @@ export function AdminDashboard({ navigate }: { navigate?: (path: string) => void
   const statCards: any[] = [
     { label: 'Teachers', value: stats.totalTeachers, icon: Users, color: 'bg-teal-500', bg: 'bg-teal-50' },
     { label: 'Parents', value: stats.totalParents, icon: Users, color: 'bg-violet-500', bg: 'bg-violet-50' },
+    // Active students only: Former Students / Student Cleanup (20261008) moved
+    // leavers out of this count and reports them separately.
     { label: 'Students', value: stats.totalStudents, icon: GraduationCap, color: 'bg-blue-500', bg: 'bg-blue-50' },
+    { label: 'Former Students', value: stats.formerStudents, icon: UserMinus, color: 'bg-slate-500', bg: 'bg-slate-100', onClick: () => navigate?.('/admin/former-students') },
     { label: 'Total Exams', value: stats.totalExams, icon: FileText, color: 'bg-amber-500', bg: 'bg-amber-50' },
     { label: 'Pending', value: stats.pendingExams, icon: Clock, color: 'bg-amber-500', bg: 'bg-amber-50' },
     { label: 'Approved', value: stats.approvedExams, icon: CheckCircle, color: 'bg-emerald-500', bg: 'bg-emerald-50' },
