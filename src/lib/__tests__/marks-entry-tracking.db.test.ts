@@ -33,10 +33,15 @@ async function installMonitorSchema(db: PgTestDb) {
   `);
   const history = readMigration('20260906b_student_enrollments_history.sql');
   await db.exec(extractStatementContaining(history, 'FUNCTION public.class_students_for_term', '$$;'));
-  // Applied in production order: the original monitor, then the Quiz fix on top.
+  // Applied in production order: base monitor, Quiz fix, Homework (CA) tile,
+  // then the current-student roster update for Former Students.
   await db.exec(readMigration('20260919_marks_entry_tracking.sql'));
   await db.exec(readMigration('20260919b_marks_monitor_quiz_component.sql'));
   await db.exec(readMigration('20260919c_marks_monitor_homework_ca_tile.sql'));
+  // The monitor migration must remain deployable even if the Former Students
+  // status-column migration has not run yet; status is added afterwards here.
+  await db.exec(readMigration('20261010_monitor_excludes_former_students.sql'));
+  await db.exec(`ALTER TABLE public.students ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';`);
 }
 
 /**
@@ -89,18 +94,20 @@ async function seed(db: PgTestDb) {
     INSERT INTO public.terms(id,name,"academicYearId","startDate","endDate",months) VALUES
       ('term-1','Term 1','ay-1','2026-08-01','2026-12-31',ARRAY['September','October']);
 
-    INSERT INTO public.students(id,name,"className",transport) VALUES
-      ('s-1','Ayaan Ali','Grade 5-A',NULL),
-      ('s-2','Bilan Hassan','Grade 5-A',NULL),
-      ('s-3','Cumar Omar','Grade 5-A',NULL),
-      ('s-left','Left Student','Grade 5-A','LEFT'),
-      ('s-6','Grade Six Student','Grade 6-A',NULL);
+    INSERT INTO public.students(id,name,"className",transport,status) VALUES
+      ('s-1','Ayaan Ali','Grade 5-A',NULL,'active'),
+      ('s-2','Bilan Hassan','Grade 5-A',NULL,'active'),
+      ('s-3','Cumar Omar','Grade 5-A',NULL,'active'),
+      ('s-left','Left Student','Grade 5-A','LEFT','active'),
+      ('s-former','Former Student','Grade 5-A',NULL,'former'),
+      ('s-6','Grade Six Student','Grade 6-A',NULL,'active');
 
     INSERT INTO public.student_enrollments(id,"studentId","className","academicYearId","termId","effectiveFrom",reason) VALUES
       ('enr-1','s-1','Grade 5-A','ay-1','term-1','2026-08-01','backfill'),
       ('enr-2','s-2','Grade 5-A','ay-1','term-1','2026-08-01','backfill'),
       ('enr-3','s-3','Grade 5-A','ay-1','term-1','2026-08-01','backfill'),
       ('enr-left','s-left','Grade 5-A','ay-1','term-1','2026-08-01','backfill'),
+      ('enr-former','s-former','Grade 5-A','ay-1','term-1','2026-08-01','backfill'),
       ('enr-6','s-6','Grade 6-A','ay-1','term-1','2026-08-01','backfill');
 
     INSERT INTO public.class_subjects(id,"className","subjectId","teacherId") VALUES
@@ -175,11 +182,27 @@ d('monitor_marks_entries — real Postgres via PGlite', () => {
     expect(Number(adminRows.find((row) => row.assignment_id === 'cs-6a-english')?.percentage)).toBe(0);
   });
 
+  it('excludes Former Students from monitor counts while historical term rosters retain them', async () => {
+    await db.setAuthUid(AUTH_ADMIN);
+
+    const historicalRoster = await db.query<{ student_id: string }>(
+      `SELECT student_id FROM public.class_students_for_term($1, $2)`,
+      ['Grade 5-A', 'term-1'],
+    );
+    expect(historicalRoster.rows.map((student) => student.student_id)).toContain('s-former');
+
+    const row = (await monitor(db, 'final', 'Grade 5-A'))[0];
+    expect(row.expected_students).toBe(3);
+    expect(row.entered_students).toBe(2);
+    expect(row.missing_students).toEqual([{ id: 's-3', name: 'Cumar Omar' }]);
+    expect(row.missing_students.map((student: { id: string }) => student.id)).not.toContain('s-former');
+  });
+
   it('counts explicit entry states and legacy term-null rows once by student ID', async () => {
     await db.setAuthUid(AUTH_ADMIN);
     const rows = await monitor(db, 'final', 'Grade 5-A');
     const row = rows[0];
-    expect(row.expected_students).toBe(3); // LEFT is excluded
+    expect(row.expected_students).toBe(3); // LEFT and Former students are excluded
     expect(row.entered_students).toBe(2); // s-1 duplicate rows + s-2 absent row
     expect(row.missing_students).toEqual([{ id: 's-3', name: 'Cumar Omar' }]);
     expect(new Date(row.last_updated).toISOString()).toBe('2026-10-11T10:00:00.000Z');

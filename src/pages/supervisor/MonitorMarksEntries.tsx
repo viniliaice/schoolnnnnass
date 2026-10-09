@@ -226,7 +226,7 @@ function EntryDetails({ row, onClose }: { row: MarksEntryRow; onClose: () => voi
             )}
           </div>
 
-          <p className="text-xs leading-5 text-slate-500">Expected students come from the selected term roster and students marked LEFT are excluded. Existing pending, approved, rejected, scored, absent, and not-applicable exam records are counted once as explicit entry records.</p>
+          <p className="text-xs leading-5 text-slate-500">Expected students come from the selected term roster; students marked Former or LEFT are excluded. Historical reports still retain former students in the terms they attended. Existing pending, approved, rejected, scored, absent, and not-applicable exam records are counted once as explicit entry records.</p>
         </div>
       </section>
     </div>

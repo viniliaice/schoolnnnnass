@@ -137,6 +137,7 @@ describe('MonitorMarksEntries', () => {
     await act(async () => { viewButton?.dispatchEvent(new MouseEvent('click', { bubbles: true })); });
     expect(host.textContent).toContain('Missing students');
     expect(host.textContent).toContain('Every active term-roster student has the required entry.');
+    expect(host.textContent).toContain('Historical reports still retain former students in the terms they attended.');
   });
 
   it('does not apply a stale month filter to term-scoped midterm/final workflows', async () => {
