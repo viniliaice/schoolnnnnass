@@ -113,9 +113,10 @@ describe('Admin sidebar wiring (admin only — other roles untouched)', () => {
     expect(parentBlock![0]).not.toContain('AdminSidebar');
   });
 
-  it('ships dedicated responsive CSS (desktop column, drawer, safe areas, 44px targets)', () => {
+  it('ships dedicated responsive CSS (desktop column, mobile rail, drawer, safe areas, 44px targets)', () => {
     const css = cssSource();
     expect(css).toMatch(/\.admin-sidebar-desktop\s*\{/);
+    expect(css).toMatch(/\.admin-sidebar-mobile-rail\s*\{/);
     expect(css).toMatch(/\.admin-sidebar-drawer\s*\{/);
     expect(css).toMatch(/\.admin-sidebar-toggle\s*\{/);
     expect(css).toMatch(/min-height:\s*2\.75rem/);            // 44px touch targets
@@ -126,7 +127,7 @@ describe('Admin sidebar wiring (admin only — other roles untouched)', () => {
     expect(css).toMatch(/\.admin-sidebar-desktop\[data-collapsed="true"\]/);
   });
 
-  it('hides the mobile toggle + drawer with its own desktop media query (layer-proof)', () => {
+  it('hides the mobile toggle, drawer, and mobile rail with its own desktop media query (layer-proof)', () => {
     const css = cssSource();
     // Tailwind v4 puts utilities in @layer utilities; the toggle's unlayered
     // `display: grid` would otherwise override the layered `lg:hidden` at
@@ -136,8 +137,21 @@ describe('Admin sidebar wiring (admin only — other roles untouched)', () => {
     expect(mediaBlock, 'expected a min-width:64rem block hiding the toggle').not.toBe('');
     expect(mediaBlock).toContain('display: none');
     expect(mediaBlock).toContain('.admin-sidebar-mobile-root');
+    expect(mediaBlock).toContain('.admin-sidebar-mobile-rail');
     // And the base rule must keep the button visible below the breakpoint.
     const baseRule = css.match(/\.admin-sidebar-toggle\s*\{[^}]*\}/s)?.[0] ?? '';
     expect(baseRule).toContain('display: grid');
+
+    // And desktop sidebar is hidden below the 64rem breakpoint.
+    const mobileMediaBlock = css.match(/@media \(max-width: 63\.99rem\)\s*\{[^@]*?\.admin-sidebar-desktop[^}]*\}/s)?.[0] ?? '';
+    expect(mobileMediaBlock).toContain('display: none');
+  });
+
+  it('AdminSidebar renders both mobile persistent rail and desktop column', () => {
+    const adminSource = adminSidebarSource();
+    expect(adminSource).toContain('admin-sidebar-mobile-rail');
+    expect(adminSource).toContain('admin-sidebar-desktop');
+    expect(adminSource).toContain('admin-sidebar-drawer');
+    expect(adminSource).toContain('admin-sidebar-toggle');
   });
 });
