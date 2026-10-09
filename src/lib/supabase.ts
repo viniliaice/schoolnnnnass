@@ -563,7 +563,11 @@ function demoMarksMonitorRows(params: any): any[] {
     .map((assignment: any) => {
       const subjectName = assignment.subjects?.name ?? assignment.subjectId;
       const expectedStudents = demoStudents.filter((student: any) =>
-        student.className === assignment.className && String(student.transport ?? '').toUpperCase() !== 'LEFT'
+        student.className === assignment.className
+        && String(student.transport ?? '').toUpperCase() !== 'LEFT'
+        // Former students never belong to the current-term marks roster
+        // (mirrors 20261010_monitor_excludes_former_students.sql).
+        && String(student.status ?? 'active').toLowerCase() !== 'former'
       );
       const exams = demoMarksMonitorExams.filter((exam: any) =>
         exam.studentId

@@ -337,9 +337,18 @@ forever), the Family IDs screen (it manages the LEFT marker), Manage Drivers
 (lists existing assignments), and the report screens.
 
 **Deliberately unchanged historical SQL:** `class_students_for_term`,
-`get_midterm_report`, `get_final_report`, `get_monthly_report`,
-`monitor_marks_entries` — a report for a term a leaver attended still includes
-them, which is correct history.
+`get_midterm_report`, `get_final_report`, `get_monthly_report` — a report for a
+term a leaver attended still includes them, which is correct history.
+
+**Marks monitor (`monitor_marks_entries`) — changed in
+`20261010_monitor_excludes_former_students.sql`.** The monitor is a live "who
+still owes marks" view, so it now excludes former students from its current-term
+roster. It still reads its roster through the historical `class_students_for_term()`
+helper, which is left unchanged, so the historical reports keep leavers. The
+migration is the shipped 20260919c function with one predicate added to
+`eligible_roster`: `lower(COALESCE(to_jsonb(s) ->> 'status','active')) <> 'former'`.
+The existing `transport <> 'LEFT'` check stays, so nothing that was excluded
+before is now included. A demo-mode mirror is in `src/lib/supabase.ts`.
 
 ---
 
@@ -360,13 +369,13 @@ them, which is correct history.
    `status='former'` automatically. If the school considers some `LEFT` students
    still enrolled (e.g. LEFT set by mistake), review them first — the backfill is
    ledger-recorded and reversible per student via `set_student_former_status`.
-4. **Marks monitoring (`monitor_marks_entries`) still counts leavers for the
-   current term**, because it reads its roster through the term-scoped
-   `class_students_for_term()` (shared with historical reports, which *should*
-   keep leavers). Changing it means either splitting that helper or recreating a
-   375-line function; I chose not to touch safety-critical historical SQL. If the
-   noise bothers the supervisors, the fix is a `class_active_students_for_term()`
-   helper plus a monitor-only swap.
+4. **Marks monitoring — resolved in `20261010_monitor_excludes_former_students.sql`.**
+   The monitor no longer counts former students as expected or missing for the
+   current term. It excludes them with an explicit `students.status` check, not
+   only the older `transport = 'LEFT'` proxy. The historical
+   `class_students_for_term()` helper is unchanged, so reports keep leavers. The
+   new migration must be applied with the other two (see item 1). Verified by
+   `monitorExcludesFormerStudents.db.test.ts`, which fails without the migration.
 5. **Parent portal policy.** A parent whose only child left sees no current
    children (quizzes/weekly learning), but the child still appears in Exam
    Results / Exam Reports. Confirm that is the intended "historical access"

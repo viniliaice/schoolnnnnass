@@ -65,9 +65,10 @@ path in the migration deletes a student row.
 * `mark_student_left()` — keeps `status` in sync with the family-IDs LEFT toggle (still preserves `familyId` both ways).
 * `teacher_exam_progress` view and `get_class_student_subject_progress()` — see `20261008b_former_students_roster_filters.sql`.
 
+* `monitor_marks_entries()` — recreated in `20261010_monitor_excludes_former_students.sql` (shipped 20260919c + one predicate: `status <> 'former'` on the roster). The current-term marks monitor no longer counts former students.
+
 Deliberately unchanged (historical): `class_students_for_term`,
-`get_midterm_report`, `get_final_report`, `get_monthly_report`,
-`monitor_marks_entries` — a report for a term a leaver attended still includes them.
+`get_midterm_report`, `get_final_report`, `get_monthly_report` — a report for a term a leaver attended still includes them.
 
 ## Related
 

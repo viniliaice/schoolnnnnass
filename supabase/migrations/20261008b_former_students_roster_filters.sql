@@ -20,9 +20,11 @@
 --     student_enrollments for the TERM being reported, so a report issued for a
 --     term a leaver attended still ranks and averages them. That is correct
 --     history, not stale data.
---   * monitor_marks_entries() — it reads its roster through
---     class_students_for_term() (historical, term-scoped) and therefore keeps
---     the same semantics as the reports.
+--   * monitor_marks_entries() — it still reads its roster through the
+--     historical class_students_for_term() helper, which is unchanged. Its
+--     CURRENT-term view excludes former students in its own migration,
+--     20261010_monitor_excludes_former_students.sql, so the reports keep leavers
+--     while the live marks monitor does not.
 --
 -- No data is modified. Idempotent (CREATE OR REPLACE).
 -- ============================================================================
