@@ -1,5 +1,6 @@
 import { supabase } from '../supabase';
 import { AttendanceRecord, Exam, HomeworkRecord, Student, Quiz } from '../../types';
+import { filterStudentsByStatus } from './students';
 
 export async function getParentPortalSnapshot(parentId: string) {
   const { data: students, error: studentsError } = await supabase
@@ -8,7 +9,13 @@ export async function getParentPortalSnapshot(parentId: string) {
     .eq('parentId', parentId);
   if (studentsError) throw studentsError;
 
-  const studentIds = (students || []).map((s: Student) => s.id);
+  // Former Students / Student Cleanup: the parent portal snapshot is a CURRENT
+  // view (today's children, attendance, homework, quizzes). A child who left the
+  // school stops appearing here, while their historical reports stay reachable
+  // through the report screens (which ask for 'all'). Filtering happens on the
+  // client so this still works against a database that has not been migrated.
+  const activeStudents = filterStudentsByStatus((students || []) as Student[], 'active');
+  const studentIds = activeStudents.map((s: Student) => s.id);
   if (studentIds.length === 0) {
     return { students: [], exams: [], attendance: [], homework: [], quizzes: [] };
   }
@@ -50,7 +57,7 @@ export async function getParentPortalSnapshot(parentId: string) {
     .gte('dueDate', today);
 
   return {
-    students: students as Student[],
+    students: activeStudents,
     exams: (examsRes.data || []) as Exam[],
     attendance: (attendanceRes.data || []) as AttendanceRecord[],
     homework: (homeworkRes.data || []) as HomeworkRecord[],

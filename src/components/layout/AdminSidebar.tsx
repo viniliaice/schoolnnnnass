@@ -2,9 +2,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity, ArrowLeftRight, ArrowUpDown, BarChart3, BellRing, BookOpen, BookOpenCheck,
   Bot, Calendar, CalendarCheck, CalendarRange, CarFront, ChevronDown, ClipboardCheck,
-  CreditCard, DatabaseBackup, Eye, FileBarChart, FileCheck, FileSpreadsheet, GitMerge,
+  CreditCard, DatabaseBackup, Eye, FileBarChart, FileCheck, FileSpreadsheet, FileUp, GitMerge,
   GraduationCap, HelpCircle, Layers, LayoutDashboard, ListChecks, LogOut, Mail, Megaphone,
-  Menu, NotepadText, PanelLeftClose, PanelLeftOpen, Pencil, ShieldCheck, Users, UsersRound, X,
+  Menu, NotepadText, PanelLeftClose, PanelLeftOpen, Pencil, ShieldCheck, UserMinus, Users, UsersRound, X,
   type LucideIcon,
 } from 'lucide-react';
 import { useRole } from '../../context/RoleContext';
@@ -50,6 +50,12 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
       { label: 'Manage Students', path: '/admin/students', icon: GraduationCap },
       { label: 'Duplicate Students', path: '/admin/duplicate-students', icon: GitMerge },
       { label: 'Class Updates / Import', path: '/admin/class-import', icon: ArrowLeftRight },
+      // Former Students / Student Cleanup: the upload + review flow, then the
+      // directory of students already marked as former (restore / history).
+      // Same order and labels as the legacy admin nav in Sidebar.tsx, which
+      // adminSidebarInventory.test.ts parses as the source of truth.
+      { label: 'Student Cleanup', path: '/admin/student-cleanup', icon: FileUp },
+      { label: 'Former Students', path: '/admin/former-students', icon: UserMinus },
       { label: 'Bulk Import', path: '/admin/bulk', icon: DatabaseBackup },
     ],
   },

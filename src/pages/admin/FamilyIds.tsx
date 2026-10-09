@@ -107,7 +107,9 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
     setLoading(true);
     setLoadError(null);
     try {
-      const loaded = await getStudents();
+      // 'all': this screen manages the transport/LEFT marker for every student,
+      // leavers included (that is what it is for).
+      const loaded = await getStudents(undefined, 'all');
       setStudents(loaded);
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : 'Could not load students.');

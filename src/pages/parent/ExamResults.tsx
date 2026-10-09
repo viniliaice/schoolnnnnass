@@ -51,7 +51,8 @@ export function ExamResults({ initialTab = 'monthly' }: { initialTab?: ReportTab
 
   useEffect(() => {
     if (parentCtx || !session) return;
-    getStudentsByParent(session.userId)
+    // Fallback list for deep-linked historical results: keep leavers resolvable.
+    getStudentsByParent(session.userId, 'all')
       .then(kids => {
         setFallbackKids(kids);
         setFallbackActiveId(prev => (prev && kids.some(k => k.id === prev) ? prev : kids[0]?.id ?? ''));

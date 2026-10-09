@@ -389,7 +389,8 @@ export async function getDuplicateGroups(): Promise<DuplicateGroup[]> {
       const ids = (data as Array<{ student_ids: string[] }>).flatMap(g => g.student_ids);
       if (ids.length > 0) {
         // Fetch those students in one batch via paginated fetch then filter.
-        const all = await getStudents(10000);
+        // 'all': a duplicate pair may involve a student who has since left.
+        const all = await getStudents(10000, 'all');
         const byId = new Map(all.map(s => [s.id, s]));
         const groups: DuplicateGroup[] = [];
         for (const row of data as Array<{ group_key: string; student_ids: string[]; class_name: string }>) {
@@ -428,7 +429,9 @@ export async function getDuplicateGroups(): Promise<DuplicateGroup[]> {
   }
 
   // Client grouping: fetch all students (paginated) and group by normalized name + class
-  const students = await getStudents(10000);
+  // 'all' — same reason as above: duplicate merging is an identity workflow,
+  // not a current-roster workflow.
+  const students = await getStudents(10000, 'all');
   const map = new Map<string, Student[]>();
   for (const s of students) {
     const key = `${normalizeNameForDuplicate(s.name)}|${s.className}`;

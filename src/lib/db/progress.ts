@@ -1,6 +1,10 @@
 import type { Exam, ExamType, TeacherExamProgress, TeacherExamProgressVerification, ClassStudentSubjectProgress } from '../../types';
 import { supabase } from '../supabase';
 import { warnFallback } from '../logger';
+import { getStudentIdsByClasses, getStudentsByClass, getStudentsByClasses } from './students';
+
+/** Roster lookups for the client-side fallbacks below. */
+const STUDENT_LOOKUP_LIMIT = 10_000;
 
 const teacherExamProgressColumns = `
   teacherId,
@@ -141,13 +145,12 @@ export async function getClassStudentSubjectProgressFallback(
 ): Promise<ClassStudentSubjectProgress[]> {
   if (!className || !month) return [];
 
-  const { data: students, error: studentError } = await supabase
-    .from('students')
-    .select('id,name')
-    .eq('className', className);
-  if (studentError) throw studentError;
+  // Central reader (lib/db/students) so this client fallback excludes Former
+  // Students exactly like the server-side
+  // get_class_student_subject_progress() it stands in for.
+  const students = await getStudentsByClass(className, STUDENT_LOOKUP_LIMIT, 'active');
 
-  const studentIds = (students || []).map((student: any) => student.id);
+  const studentIds = students.map((student: any) => student.id);
   if (studentIds.length === 0) return [];
 
   const { data: classSubjects, error: csError } = await supabase
@@ -289,14 +292,11 @@ async function getTeacherExamProgressFallback(filters: {
   if (classSubjects.length === 0) return [];
 
   const classList = Array.from(new Set(classSubjects.map(cs => cs.className)));
-  const { data: students, error: studentError } = await supabase
-    .from('students')
-    .select('id,className')
-    .in('className', classList);
-  if (studentError) throw studentError;
+  // Mirrors the teacher_exam_progress view, which excludes Former Students.
+  const students = await getStudentsByClasses(classList, undefined, STUDENT_LOOKUP_LIMIT, 'active');
 
-  const studentMap = new Map((students || []).map((s: any) => [s.id, s.className]));
-  const studentIds = (students || []).map((s: any) => s.id);
+  const studentMap = new Map(students.map((s: any) => [s.id, s.className]));
+  const studentIds = students.map((s: any) => s.id);
   if (studentIds.length === 0) return [];
 
   let examQuery: any = supabase
@@ -411,13 +411,8 @@ export async function getTeacherExamProgressVerification(filters: {
 }): Promise<TeacherExamProgressVerification> {
   const { teacherId, className, subjectId, subjectName, month } = filters;
 
-  const { data: students, error: studentError } = await supabase
-    .from('students')
-    .select('id')
-    .eq('className', className);
-  if (studentError) throw studentError;
-
-  const studentIds = (students || []).map((s: any) => s.id);
+  // Mirrors the teacher_exam_progress view, which excludes Former Students.
+  const studentIds = await getStudentIdsByClasses([className], 'active');
   const totalStudents = studentIds.length;
 
   if (studentIds.length === 0) {

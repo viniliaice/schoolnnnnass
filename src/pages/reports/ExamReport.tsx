@@ -713,7 +713,8 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
       setLoading(true);
       try {
         if (session.role === 'parent') {
-          const list = await getStudentsByParent(session.userId);
+          // Reports are historical: a leaver's past-term report stays printable.
+          const list = await getStudentsByParent(session.userId, 'all');
           const filtered = selectedClass === 'All' ? list : list.filter(s => s.className === selectedClass);
           setStudents(filtered);
           if (filtered.length > 0) setSelectedStudent(filtered[0].id);
@@ -723,7 +724,9 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
           if (session.role === 'teacher' || session.role === 'supervisor') {
             const user = await getUserById(session.userId);
             const classesList = user?.assignedClasses || [];
-            const list = classesList.length > 0 ? await getStudentsByClasses(classesList) : await getStudents();
+            const list = classesList.length > 0
+              ? await getStudentsByClasses(classesList, undefined, undefined, 'all')
+              : await getStudents(undefined, 'all');
             setStudents(list);
             if (initialStudentId && list.find(s => s.id === initialStudentId)) {
               setSelectedStudent(initialStudentId);
@@ -731,12 +734,12 @@ export function ExamReport({ initialStudentId }: { initialStudentId?: string } =
               setSelectedStudent(list[0].id);
             }
           } else {
-            const list = await getStudents();
+            const list = await getStudents(undefined, 'all');
             setStudents(list);
             if (list.length > 0) setSelectedStudent(list[0].id);
           }
         } else {
-          const list = await getStudentsByClass(selectedClass);
+          const list = await getStudentsByClass(selectedClass, undefined, 'all');
           setStudents(list);
           if (list.length > 0) setSelectedStudent(list[0].id);
         }

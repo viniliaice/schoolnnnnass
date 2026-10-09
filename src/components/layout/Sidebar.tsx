@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   FileSpreadsheet, Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, CalendarRange, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil, ListChecks, BarChart3, GitMerge, UsersRound, Copy, Download
+  CalendarCheck, CalendarRange, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil, ListChecks, BarChart3, GitMerge, UsersRound, Copy, Download, UserMinus, FileUp
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -25,6 +25,10 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Manage Students', icon: GraduationCap, path: '/admin/students' },
     { label: 'Duplicate Students', icon: GitMerge, path: '/admin/duplicate-students' },
     { label: 'Class Updates / Import', icon: ArrowLeftRight, path: '/admin/class-import' },
+    // Former Students / Student Cleanup: the upload + review flow, then the
+    // directory of students already marked as former (restore / history).
+    { label: 'Student Cleanup', icon: FileUp, path: '/admin/student-cleanup' },
+    { label: 'Former Students', icon: UserMinus, path: '/admin/former-students' },
     { label: 'Manage Academic', icon: BookOpen, path: '/admin/academic' },
     { label: 'Unit Plans', icon: Layers, path: '/admin/unit-plans' },
     // Admin reviews lesson plans with the same rights as a supervisor.
