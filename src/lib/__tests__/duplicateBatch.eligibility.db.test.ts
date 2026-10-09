@@ -346,10 +346,13 @@ describe('safe batch eligibility — EXCLUDED profile conflicts', () => {
     //   A: parent ahmed daahir aadan, phone 634572257, transport 25
     //   B: Unassigned,                phone 634453468, transport 25
     const name = 'C/raxmaan Axmed Daahir';
+    // 615666000 is deliberately NOT in public.authoritative_parent_phones
+    // (20261009). This test pins the UNRESOLVED conflict path; a listed number
+    // would legitimately resolve it — see duplicateBatch.phoneRegistry.db.test.ts.
     const { aId } = await seedPair({
       name,
       aPhone: '634572257',
-      bPhone: '634453468',
+      bPhone: '615666000',
       aTransport: '25',
       bTransport: '25',
     });
@@ -375,15 +378,17 @@ describe('safe batch eligibility — EXCLUDED profile conflicts', () => {
     expect(row?.eligibilityCodes).toContain('same_parent_phone');
   });
 
-  it('excludes when only the unassigned record has a phone (not authoritative for the batch)', async () => {
+  it('treats a phone that only the unassigned record has as transferable, not as an exclusion', async () => {
+    // Policy v2 (20261008): one-sided data is missing information on the keeper,
+    // not a conflict. The value is carried across instead of forcing a review.
     if (!db) return;
     const name = scenarioName('PhoneOnlyB');
     const { aId } = await seedPair({ name, aPhone: null, bPhone: '634453468' });
     const res = await report();
-    expect(res.summary.safeCount).toBe(0);
-    const excluded = res.excludedRows.find((r) => r.keeperId === aId);
-    expect(excluded?.exclusionCodes).toContain('parent_phone_only_on_unassigned');
-    expect(excluded?.severity).toBe('review');
+    expect(res.summary.safeCount).toBe(1);
+    const row = findRow(res.rows, aId);
+    expect(row?.eligible).toBe(true);
+    expect(row?.eligibilityCodes).toContain('parent_phone_from_removed_preserved');
   });
 
   it('excludes both-parents-assigned pairs (parent conflict)', async () => {
@@ -441,13 +446,18 @@ describe('safe batch eligibility — EXCLUDED profile conflicts', () => {
     expect(res.exclusionReasons.transport_conflict).toBe(1);
   });
 
-  it('excludes when only the unassigned record has a transport value', async () => {
+  it('treats a transport value that only the unassigned record has as transferable', async () => {
+    // Policy v2: transport is a scalar (WALKER | CAR | bus number) whose only
+    // relational link is authorized_pickup_students, which the merge RPC already
+    // moves. A blank keeper is missing data, not a conflict.
     if (!db) return;
     const name = scenarioName('TransportOnlyB');
     const { aId } = await seedPair({ name, aTransport: null, bTransport: '25' });
     const res = await report();
-    expect(res.summary.safeCount).toBe(0);
-    expect(res.excludedRows.find((r) => r.keeperId === aId)?.exclusionCodes).toContain('transport_only_on_unassigned');
+    expect(res.summary.safeCount).toBe(1);
+    const row = findRow(res.rows, aId);
+    expect(row?.eligible).toBe(true);
+    expect(row?.eligibilityCodes).toContain('transport_from_removed_preserved');
   });
 
   it('excludes conflicting family IDs', async () => {
@@ -649,7 +659,8 @@ describe('safe batch eligibility — reporting + performance', () => {
     if (!db) return;
     await seedPair({ name: scenarioName('Safe1') });
     await seedPair({ name: scenarioName('Safe2') });
-    await seedPair({ name: scenarioName('PhoneX'), aPhone: '634572257', bPhone: '634453468' });
+    // Unlisted number on purpose — the registry must not resolve this one.
+    await seedPair({ name: scenarioName('PhoneX'), aPhone: '634572257', bPhone: '615666000' });
     await seedPair({ name: scenarioName('GovX'), aGov: '111', bGov: '222' });
     await seedPair({ name: scenarioName('ParentsX'), aParent: 'parent-1', bParent: 'parent-2' });
 

@@ -85,6 +85,12 @@ describe('SafeBatchMergePanel — English', () => {
     expect(txt).toContain('Each chunk of 25 merges is one atomic transaction');
     expect(txt).toContain('dry run writes: 0');
 
+    // The dry run states plainly that nothing changed, and the execution count
+    // it offers is the server's — never a client-side classification.
+    expect(byTestId(container, 'safe-batch-no-writes')!.textContent)
+      .toContain('Safe preview completed. No records were modified.');
+    expect(byTestId(container, 'safe-batch-status')!.textContent).toContain('2 pairs are safe');
+
     // Excluded pairs are listed with the reason each stays in individual review.
     expect(txt).toContain('Excluded — individual review only');
     await act(async () => { (Array.from(container.querySelectorAll('button')).find((b) => (b.textContent || '').includes('Excluded — individual review only')) as HTMLButtonElement).click(); });
