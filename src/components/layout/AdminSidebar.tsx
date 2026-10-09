@@ -270,7 +270,8 @@ export function AdminSidebar({ currentPath, onNavigate }: AdminSidebarProps) {
         data-path={item.path}
         data-testid="admin-nav-item"
         aria-current={active ? 'page' : undefined}
-        title={rail ? label : undefined}
+        aria-label={label}
+        title={label}
         onClick={() => handleNavigate(item.path)}
         className={cn(
           'admin-sidebar__item',
@@ -284,7 +285,15 @@ export function AdminSidebar({ currentPath, onNavigate }: AdminSidebarProps) {
     );
   };
 
-  const renderPanel = ({ rail, showClose }: { rail: boolean; showClose: boolean }) => (
+  const renderPanel = ({
+    rail,
+    showClose,
+    isMobileRail,
+  }: {
+    rail: boolean;
+    showClose?: boolean;
+    isMobileRail?: boolean;
+  }) => (
     <div className={cn('admin-sidebar', rail && 'admin-sidebar--rail')}>
       {/* Brand */}
       <div className="admin-sidebar__header">
@@ -295,13 +304,27 @@ export function AdminSidebar({ currentPath, onNavigate }: AdminSidebarProps) {
             <span className="admin-sidebar__role">{roleLabel}</span>
           </div>
         )}
-        {showClose ? (
+        {isMobileRail ? (
+          <button
+            type="button"
+            className="admin-sidebar__icon-button admin-sidebar-toggle"
+            data-testid="admin-sidebar-toggle"
+            onClick={() => setMobileOpen(true)}
+            aria-label={t('adminSidebar.openMenu', 'Open navigation menu')}
+            aria-expanded={mobileOpen}
+            aria-controls="admin-sidebar-drawer"
+            title={t('adminSidebar.openMenu', 'Open navigation menu')}
+          >
+            <Menu className="h-5 w-5" aria-hidden="true" />
+          </button>
+        ) : showClose ? (
           <button
             type="button"
             className="admin-sidebar__icon-button admin-sidebar__close"
             data-testid="admin-sidebar-close"
             onClick={() => setMobileOpen(false)}
             aria-label={t('adminSidebar.closeMenu', 'Close navigation menu')}
+            title={t('adminSidebar.closeMenu', 'Close navigation menu')}
           >
             <X className="h-5 w-5" aria-hidden="true" />
           </button>
@@ -313,6 +336,7 @@ export function AdminSidebar({ currentPath, onNavigate }: AdminSidebarProps) {
             onClick={toggleCollapsed}
             aria-label={collapsed ? t('adminSidebar.expand', 'Expand sidebar') : t('adminSidebar.collapse', 'Collapse sidebar')}
             aria-pressed={collapsed}
+            title={collapsed ? t('adminSidebar.expand', 'Expand sidebar') : t('adminSidebar.collapse', 'Collapse sidebar')}
           >
             {collapsed ? <PanelLeftOpen className="h-5 w-5" aria-hidden="true" /> : <PanelLeftClose className="h-5 w-5" aria-hidden="true" />}
           </button>
@@ -366,6 +390,7 @@ export function AdminSidebar({ currentPath, onNavigate }: AdminSidebarProps) {
             <button
               type="button"
               className="admin-sidebar__icon-button admin-sidebar__logout"
+              data-testid="admin-sidebar-logout"
               onClick={logout}
               title={t('session.signOut', 'Sign Out')}
               aria-label={t('session.signOut', 'Sign Out')}
@@ -401,22 +426,18 @@ export function AdminSidebar({ currentPath, onNavigate }: AdminSidebarProps) {
 
   return (
     <>
-      {/* Mobile menu button — visible only below the desktop breakpoint */}
-      <button
-        type="button"
-        className="admin-sidebar-toggle lg:hidden"
-        data-testid="admin-sidebar-toggle"
-        onClick={() => setMobileOpen(true)}
-        aria-label={t('adminSidebar.openMenu', 'Open navigation menu')}
-        aria-expanded={mobileOpen}
-        aria-controls="admin-sidebar-drawer"
+      {/* Mobile persistent mini icon rail — visible below desktop breakpoint (<1024px) */}
+      <aside
+        className="admin-sidebar-mobile-rail"
+        data-testid="admin-sidebar-mobile-rail"
+        aria-label={navigationLabel}
       >
-        <Menu className="h-5 w-5" aria-hidden="true" />
-      </button>
+        {renderPanel({ rail: true, isMobileRail: true })}
+      </aside>
 
       {/* Mobile drawer + backdrop */}
       {mobileOpen && (
-        <div className="admin-sidebar-mobile-root lg:hidden">
+        <div className="admin-sidebar-mobile-root">
           <div
             className="admin-sidebar-backdrop"
             data-testid="admin-sidebar-backdrop"
@@ -438,9 +459,9 @@ export function AdminSidebar({ currentPath, onNavigate }: AdminSidebarProps) {
         </div>
       )}
 
-      {/* Desktop column — the flex sibling that main content resizes against */}
+      {/* Desktop column — the flex sibling that main content resizes against (≥1024px) */}
       <div
-        className="admin-sidebar-desktop hidden lg:block shrink-0 sticky top-0 h-screen"
+        className="admin-sidebar-desktop"
         data-testid="admin-sidebar-desktop"
         data-collapsed={collapsed}
       >

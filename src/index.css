@@ -833,6 +833,7 @@ html[data-mode="dark"] .admin-sidebar {
   align-items: center;
   gap: 0.65rem;
   padding: 0.9rem 0.9rem 0.65rem;
+  padding-top: max(0.9rem, calc(env(safe-area-inset-top, 0px) + 0.9rem));
   border-bottom: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
 }
 
@@ -861,12 +862,14 @@ html[data-mode="dark"] .admin-sidebar {
   color: var(--accent);
 }
 
-/* Small square icon buttons (collapse, close, logout) — 40px+ targets */
+/* Small square icon buttons (collapse, close, logout, toggle) — 44px+ targets */
 .admin-sidebar__icon-button {
   display: grid;
   place-items: center;
-  width: 2.5rem;
-  height: 2.5rem;
+  min-width: 2.75rem;
+  min-height: 2.75rem;
+  width: 2.75rem;
+  height: 2.75rem;
   flex-shrink: 0;
   border-radius: 0.6rem;
   border: 1px solid transparent;
@@ -1038,10 +1041,31 @@ html[data-mode="dark"] .admin-sidebar {
 .admin-sidebar__logout:hover { background: color-mix(in srgb, var(--danger-text) 16%, transparent); color: var(--danger-text); }
 .admin-sidebar__footer-rail { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
 
+/* ── Mobile persistent icon rail ─────────────────────────────────────────
+   Mini icon rail visible on viewports <1024px. Sits on the start edge as a
+   sticky flex sibling of <main>, allowing 1-tap navigation to any
+   destination without opening the full drawer. */
+.admin-sidebar-mobile-rail {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  height: 100dvh;
+  flex-shrink: 0;
+  width: var(--asb-rail-width);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+}
+
 /* ── Desktop column ──────────────────────────────────────────────────────
    Flex sibling of <main>; collapsing animates the width and the main
    content reflows automatically (both are flex children). */
 .admin-sidebar-desktop {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  height: 100dvh;
+  flex-shrink: 0;
   width: var(--asb-width);
   transition: width 200ms ease;
 }
@@ -1049,10 +1073,6 @@ html[data-mode="dark"] .admin-sidebar {
 
 /* ── Mobile menu button ────────────────────────────────────────────────── */
 .admin-sidebar-toggle {
-  position: fixed;
-  z-index: 50;
-  top: calc(env(safe-area-inset-top, 0px) + 0.85rem);
-  inset-inline-start: 1rem;
   display: grid;
   place-items: center;
   width: 2.75rem;  /* 44px target */
@@ -1065,17 +1085,30 @@ html[data-mode="dark"] .admin-sidebar {
   color: var(--text);
   box-shadow: var(--shadow);
   cursor: pointer;
+  margin-inline: auto;
 }
-.admin-sidebar-toggle:hover { color: var(--text); }
+.admin-sidebar-toggle:hover {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--text);
+}
 
-/* Hide the mobile chrome at the desktop breakpoint here — NOT via the
-   `lg:hidden` utility alone. These rules are unlayered CSS, and unlayered
-   declarations override Tailwind's layered utilities at any viewport width,
-   so `display: grid` above would otherwise beat `lg:hidden` and keep the
-   hamburger visible on laptops. 64rem = Tailwind `lg` (1024px). */
+/* Hide the mobile chrome (toggle button, drawer, and persistent mobile rail)
+   at the desktop breakpoint here — NOT via the `lg:hidden` utility alone.
+   These rules are unlayered CSS, and unlayered declarations override Tailwind's
+   layered utilities at any viewport width, so `display: grid` above would
+   otherwise beat `lg:hidden` and keep the hamburger visible on laptops.
+   64rem = Tailwind `lg` (1024px). */
 @media (min-width: 64rem) {
   .admin-sidebar-toggle,
-  .admin-sidebar-mobile-root {
+  .admin-sidebar-mobile-root,
+  .admin-sidebar-mobile-rail {
+    display: none;
+  }
+}
+
+/* Hide the desktop sidebar on viewports below 1024px (<64rem) */
+@media (max-width: 63.99rem) {
+  .admin-sidebar-desktop {
     display: none;
   }
 }

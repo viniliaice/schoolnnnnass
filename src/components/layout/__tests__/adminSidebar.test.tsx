@@ -75,46 +75,63 @@ afterEach(() => {
 });
 
 describe('AdminSidebar — navigation inventory renders', () => {
-  it('renders every nav path exactly once (no lost or duplicated links)', async () => {
+  it('renders every nav path exactly once on desktop sidebar when expanded (no lost or duplicated links)', async () => {
     const host = await mountSidebar('/dashboard');
+    const desktop = host.querySelector('[data-testid="admin-sidebar-desktop"]')!;
     // Expand every category first — collapsed groups intentionally render no items.
     for (const group of ADMIN_NAV_GROUPS) {
-      await click(host.querySelector(`[data-testid="admin-nav-group-${group.id}"]`)!);
+      await click(desktop.querySelector(`[data-testid="admin-nav-group-${group.id}"]`)!);
     }
-    const rendered = [...host.querySelectorAll('[data-testid="admin-nav-item"]')].map(el =>
+    const rendered = [...desktop.querySelectorAll('[data-testid="admin-nav-item"]')].map(el =>
       el.getAttribute('data-path'),
     );
     expect(rendered).toEqual(ADMIN_NAV_PATHS);
     expect(new Set(rendered).size).toBe(rendered.length);
   });
 
-  it('renders all six categories with their headings', async () => {
+  it('renders every nav path as icon items on the mobile persistent rail (no lost or duplicated links)', async () => {
     const host = await mountSidebar('/dashboard');
+    const mobileRail = host.querySelector('[data-testid="admin-sidebar-mobile-rail"]')!;
+    const rendered = [...mobileRail.querySelectorAll('[data-testid="admin-nav-item"]')].map(el =>
+      el.getAttribute('data-path'),
+    );
+    expect(rendered).toEqual(ADMIN_NAV_PATHS);
+    expect(new Set(rendered).size).toBe(rendered.length);
+  });
+
+  it('renders all six categories with their headings on desktop', async () => {
+    const host = await mountSidebar('/dashboard');
+    const desktop = host.querySelector('[data-testid="admin-sidebar-desktop"]')!;
     for (const group of ADMIN_NAV_GROUPS) {
-      const toggle = host.querySelector(`[data-testid="admin-nav-group-${group.id}"]`);
+      const toggle = desktop.querySelector(`[data-testid="admin-nav-group-${group.id}"]`);
       expect(toggle, `category ${group.id}`).not.toBeNull();
       expect(toggle!.getAttribute('aria-expanded')).toBe('false');
     }
   });
 
-  it('keeps Dashboard as a standalone top-level item', async () => {
+  it('keeps Dashboard as a standalone top-level item on desktop and mobile rail', async () => {
     const host = await mountSidebar('/dashboard');
-    const dashboard = host.querySelector('[data-path="/dashboard"]');
-    expect(dashboard).not.toBeNull();
-    expect(dashboard!.getAttribute('aria-current')).toBe('page');
+    const desktopDashboard = host.querySelector('[data-testid="admin-sidebar-desktop"] [data-path="/dashboard"]');
+    expect(desktopDashboard).not.toBeNull();
+    expect(desktopDashboard!.getAttribute('aria-current')).toBe('page');
+
+    const mobileDashboard = host.querySelector('[data-testid="admin-sidebar-mobile-rail"] [data-path="/dashboard"]');
+    expect(mobileDashboard).not.toBeNull();
+    expect(mobileDashboard!.getAttribute('aria-current')).toBe('page');
   });
 
   it('pins Manage Users next to Dashboard and above the Students category', async () => {
     const host = await mountSidebar('/dashboard');
+    const desktop = host.querySelector('[data-testid="admin-sidebar-desktop"]')!;
     // Rendered without expanding any category…
-    const dashboard = host.querySelector('[data-path="/dashboard"]')!;
-    const manageUsers = host.querySelector('[data-path="/admin/users"]');
+    const dashboard = desktop.querySelector('[data-path="/dashboard"]')!;
+    const manageUsers = desktop.querySelector('[data-path="/admin/users"]');
     expect(manageUsers).not.toBeNull();
     expect(manageUsers!.getAttribute('aria-current')).toBeNull();
     // …immediately after Dashboard (both are direct children of the nav)…
     expect(manageUsers!.previousElementSibling).toBe(dashboard);
     // …and before the first category heading in document order.
-    const studentsToggle = host.querySelector('[data-testid="admin-nav-group-students"]')!;
+    const studentsToggle = desktop.querySelector('[data-testid="admin-nav-group-students"]')!;
     expect(
       manageUsers!.compareDocumentPosition(studentsToggle) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
@@ -124,18 +141,36 @@ describe('AdminSidebar — navigation inventory renders', () => {
 describe('AdminSidebar — active route highlighting', () => {
   it('marks the exact active page and auto-expands only its category', async () => {
     const host = await mountSidebar('/admin/lesson-plans');
-    const active = host.querySelector('[data-path="/admin/lesson-plans"]');
+    const desktop = host.querySelector('[data-testid="admin-sidebar-desktop"]')!;
+    const active = desktop.querySelector('[data-path="/admin/lesson-plans"]');
     expect(active!.getAttribute('aria-current')).toBe('page');
-    expect(host.querySelector('[data-testid="admin-nav-group-academic"]')!.getAttribute('aria-expanded')).toBe('true');
+    expect(desktop.querySelector('[data-testid="admin-nav-group-academic"]')!.getAttribute('aria-expanded')).toBe('true');
     // Other categories stay collapsed.
-    expect(host.querySelector('[data-testid="admin-nav-group-students"]')!.getAttribute('aria-expanded')).toBe('false');
-    expect(host.querySelector('[data-testid="admin-nav-group-transport"]')!.getAttribute('aria-expanded')).toBe('false');
+    expect(desktop.querySelector('[data-testid="admin-nav-group-students"]')!.getAttribute('aria-expanded')).toBe('false');
+    expect(desktop.querySelector('[data-testid="admin-nav-group-transport"]')!.getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it('highlights the active item on the mobile persistent rail', async () => {
+    const host = await mountSidebar('/admin/lesson-plans');
+    const mobileRail = host.querySelector('[data-testid="admin-sidebar-mobile-rail"]')!;
+    const active = mobileRail.querySelector('[data-path="/admin/lesson-plans"]');
+    expect(active).not.toBeNull();
+    expect(active!.getAttribute('aria-current')).toBe('page');
+    expect(active!.classList.contains('admin-sidebar__item--active')).toBe(true);
+
+    const inactive = mobileRail.querySelector('[data-path="/admin/students"]')!;
+    expect(inactive.getAttribute('aria-current')).toBeNull();
+    expect(inactive.classList.contains('admin-sidebar__item--active')).toBe(false);
   });
 
   it('keeps the parent item highlighted on nested routes (/admin/family-ids/setup)', async () => {
     const host = await mountSidebar('/admin/family-ids/setup');
-    expect(host.querySelector('[data-path="/admin/family-ids"]')!.getAttribute('aria-current')).toBe('page');
-    expect(host.querySelector('[data-testid="admin-nav-group-transport"]')!.getAttribute('aria-expanded')).toBe('true');
+    const desktop = host.querySelector('[data-testid="admin-sidebar-desktop"]')!;
+    expect(desktop.querySelector('[data-path="/admin/family-ids"]')!.getAttribute('aria-current')).toBe('page');
+    expect(desktop.querySelector('[data-testid="admin-nav-group-transport"]')!.getAttribute('aria-expanded')).toBe('true');
+
+    const mobileRail = host.querySelector('[data-testid="admin-sidebar-mobile-rail"]')!;
+    expect(mobileRail.querySelector('[data-path="/admin/family-ids"]')!.getAttribute('aria-current')).toBe('page');
   });
 
   it('does not confuse look-alike prefixes (lesson-plans vs lesson-planner)', async () => {
@@ -145,43 +180,90 @@ describe('AdminSidebar — active route highlighting', () => {
     expect(isAdminRouteActive('/admin/family-ids/setup', '/admin/family-ids')).toBe(true);
 
     const host = await mountSidebar('/admin/lesson-planner');
-    expect(host.querySelector('[data-path="/admin/lesson-planner"]')!.getAttribute('aria-current')).toBe('page');
-    expect(host.querySelector('[data-path="/admin/lesson-plans"]')!.getAttribute('aria-current')).toBeNull();
+    const desktop = host.querySelector('[data-testid="admin-sidebar-desktop"]')!;
+    expect(desktop.querySelector('[data-path="/admin/lesson-planner"]')!.getAttribute('aria-current')).toBe('page');
+    expect(desktop.querySelector('[data-path="/admin/lesson-plans"]')!.getAttribute('aria-current')).toBeNull();
+
+    const mobileRail = host.querySelector('[data-testid="admin-sidebar-mobile-rail"]')!;
+    expect(mobileRail.querySelector('[data-path="/admin/lesson-planner"]')!.getAttribute('aria-current')).toBe('page');
+    expect(mobileRail.querySelector('[data-path="/admin/lesson-plans"]')!.getAttribute('aria-current')).toBeNull();
   });
 });
 
 describe('AdminSidebar — expandable categories', () => {
   it('toggles a category without navigating anywhere', async () => {
     const host = await mountSidebar('/dashboard');
-    const toggle = host.querySelector('[data-testid="admin-nav-group-students"]')!;
+    const desktop = host.querySelector('[data-testid="admin-sidebar-desktop"]')!;
+    const toggle = desktop.querySelector('[data-testid="admin-nav-group-students"]')!;
 
     await click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
     expect(navigateMock).not.toHaveBeenCalled();
 
-    // Category contents become visible/interactive.
-    expect(host.querySelector('[data-path="/admin/students"]')).not.toBeNull();
+    // Category contents become visible/interactive in desktop sidebar.
+    expect(desktop.querySelector('[data-path="/admin/students"]')).not.toBeNull();
 
     await click(toggle);
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
     expect(navigateMock).not.toHaveBeenCalled();
-    expect(host.querySelector('[data-path="/admin/students"]')).toBeNull();
+    expect(desktop.querySelector('[data-path="/admin/students"]')).toBeNull();
   });
 
   it('keeps manually opened categories open when another one is active', async () => {
     const host = await mountSidebar('/dashboard');
-    await click(host.querySelector('[data-testid="admin-nav-group-communication"]')!);
-    await click(host.querySelector('[data-testid="admin-nav-group-students"]')!);
-    expect(host.querySelector('[data-testid="admin-nav-group-communication"]')!.getAttribute('aria-expanded')).toBe('true');
-    expect(host.querySelector('[data-testid="admin-nav-group-students"]')!.getAttribute('aria-expanded')).toBe('true');
+    const desktop = host.querySelector('[data-testid="admin-sidebar-desktop"]')!;
+    await click(desktop.querySelector('[data-testid="admin-nav-group-communication"]')!);
+    await click(desktop.querySelector('[data-testid="admin-nav-group-students"]')!);
+    expect(desktop.querySelector('[data-testid="admin-nav-group-communication"]')!.getAttribute('aria-expanded')).toBe('true');
+    expect(desktop.querySelector('[data-testid="admin-nav-group-students"]')!.getAttribute('aria-expanded')).toBe('true');
+  });
+});
+
+describe('AdminSidebar — mobile persistent icon rail', () => {
+  it('renders persistent rail with accessible labels, visible tooltips and category dividers', async () => {
+    const host = await mountSidebar('/dashboard');
+    const mobileRail = host.querySelector('[data-testid="admin-sidebar-mobile-rail"]')!;
+    expect(mobileRail).not.toBeNull();
+    expect(mobileRail.getAttribute('aria-label')).toBe('Admin navigation');
+
+    const items = mobileRail.querySelectorAll('[data-testid="admin-nav-item"]');
+    expect(items.length).toBe(ADMIN_NAV_PATHS.length);
+    items.forEach(item => {
+      expect(item.getAttribute('aria-label')).toBeTruthy();
+      expect(item.getAttribute('title')).toBeTruthy();
+    });
+
+    const sections = mobileRail.querySelectorAll('.admin-sidebar__rail-section');
+    expect(sections.length).toBe(ADMIN_NAV_GROUPS.length);
+    expect(sections[0].getAttribute('title')).toBe('Students');
+    expect(sections[1].getAttribute('title')).toBe('Academic');
+  });
+
+  it('navigates directly on single tap from mobile rail', async () => {
+    const host = await mountSidebar('/dashboard');
+    const mobileRail = host.querySelector('[data-testid="admin-sidebar-mobile-rail"]')!;
+    const studentLink = mobileRail.querySelector('[data-path="/admin/students"]')!;
+    await click(studentLink);
+    expect(navigateMock).toHaveBeenCalledTimes(1);
+    expect(navigateMock).toHaveBeenCalledWith('/admin/students');
+  });
+
+  it('renders hamburger menu button in mobile rail header', async () => {
+    const host = await mountSidebar('/dashboard');
+    const mobileRail = host.querySelector('[data-testid="admin-sidebar-mobile-rail"]')!;
+    const toggle = mobileRail.querySelector('[data-testid="admin-sidebar-toggle"]');
+    expect(toggle).not.toBeNull();
+    expect(toggle!.getAttribute('aria-expanded')).toBe('false');
+    expect(toggle!.getAttribute('aria-controls')).toBe('admin-sidebar-drawer');
   });
 });
 
 describe('AdminSidebar — navigation contract', () => {
   it('navigates through the layout contract and highlights the new page', async () => {
     const host = await mountSidebar('/dashboard');
-    await click(host.querySelector('[data-testid="admin-nav-group-students"]')!);
-    await click(host.querySelector('[data-path="/admin/students"]')!);
+    const desktop = host.querySelector('[data-testid="admin-sidebar-desktop"]')!;
+    await click(desktop.querySelector('[data-testid="admin-nav-group-students"]')!);
+    await click(desktop.querySelector('[data-path="/admin/students"]')!);
     expect(navigateMock).toHaveBeenCalledTimes(1);
     expect(navigateMock).toHaveBeenCalledWith('/admin/students');
   });
@@ -220,8 +302,9 @@ describe('AdminSidebar — mobile drawer', () => {
     const host = await mountSidebar('/dashboard');
     await click(host.querySelector('[data-testid="admin-sidebar-toggle"]')!);
 
-    await click(host.querySelector('[data-testid="admin-nav-group-exams"]')!);
-    const item = host.querySelector('[data-path="/admin/exam-reports"]')!;
+    const drawer = host.querySelector('[data-testid="admin-sidebar-drawer"]')!;
+    await click(drawer.querySelector('[data-testid="admin-nav-group-exams"]')!);
+    const item = drawer.querySelector('[data-path="/admin/exam-reports"]')!;
     await click(item);
     expect(navigateMock).toHaveBeenCalledWith('/admin/exam-reports');
     expect(host.querySelector('[data-testid="admin-sidebar-drawer"]')).toBeNull();
@@ -237,11 +320,30 @@ describe('AdminSidebar — mobile drawer', () => {
 });
 
 describe('AdminSidebar — bottom profile section', () => {
-  it('exposes logout in the footer and wires it to the session logout', async () => {
+  it('exposes logout in desktop footer and wires it to session logout', async () => {
     const host = await mountSidebar('/dashboard');
-    const footer = host.querySelector('[data-testid="admin-sidebar-footer"]')!;
-    expect(footer.textContent).toContain('Adam Admin');
-    const logoutButton = footer.querySelector('[data-testid="admin-sidebar-logout"]')!;
+    const desktopFooter = host.querySelector('[data-testid="admin-sidebar-desktop"] [data-testid="admin-sidebar-footer"]')!;
+    expect(desktopFooter.textContent).toContain('Adam Admin');
+    const logoutButton = desktopFooter.querySelector('[data-testid="admin-sidebar-logout"]')!;
+    await click(logoutButton);
+    expect(logoutMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes logout in mobile rail footer and wires it to session logout', async () => {
+    const host = await mountSidebar('/dashboard');
+    const mobileFooter = host.querySelector('[data-testid="admin-sidebar-mobile-rail"] [data-testid="admin-sidebar-footer"]')!;
+    expect(mobileFooter.querySelector('.admin-sidebar__avatar')!.textContent).toBe('AA');
+    const logoutButton = mobileFooter.querySelector('[data-testid="admin-sidebar-logout"]')!;
+    await click(logoutButton);
+    expect(logoutMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('exposes logout in mobile drawer footer and wires it to session logout', async () => {
+    const host = await mountSidebar('/dashboard');
+    await click(host.querySelector('[data-testid="admin-sidebar-toggle"]')!);
+    const drawerFooter = host.querySelector('[data-testid="admin-sidebar-drawer"] [data-testid="admin-sidebar-footer"]')!;
+    expect(drawerFooter.textContent).toContain('Adam Admin');
+    const logoutButton = drawerFooter.querySelector('[data-testid="admin-sidebar-logout"]')!;
     await click(logoutButton);
     expect(logoutMock).toHaveBeenCalledTimes(1);
   });
