@@ -30,10 +30,17 @@ describe('canAccessRoute — office role', () => {
   it('every guarded route is listed in ROUTE_ACCESS', () => {
     expect(Object.keys(ROUTE_ACCESS).sort()).toEqual([
       '/admin/class-import', '/admin/drivers', '/admin/duplicate-students', '/admin/family-ids', '/admin/family-ids/setup',
-      '/admin/former-students', '/admin/grade-corrections', '/admin/lesson-plan-submissions', '/admin/lesson-plans',
+      '/admin/fingerprint-attendance', '/admin/former-students', '/admin/grade-corrections', '/admin/lesson-plan-submissions', '/admin/lesson-plans',
       '/admin/monitor-marks', '/admin/student-cleanup', '/directory', '/gate', '/supervisor/lesson-plan-submissions',
       '/supervisor/lesson-plans', '/supervisor/monitor-marks',
     ]);
+  });
+});
+
+describe('fingerprint attendance route is admin-only', () => {
+  it('only admins may open /admin/fingerprint-attendance', () => {
+    expect(canAccessRoute('admin', '/admin/fingerprint-attendance')).toBe(true);
+    for (const role of ['supervisor', 'office', 'teacher', 'parent'] as const) expect(canAccessRoute(role, '/admin/fingerprint-attendance')).toBe(false);
   });
 });
 

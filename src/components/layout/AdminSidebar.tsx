@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Activity, ArrowLeftRight, ArrowUpDown, BarChart3, BellRing, BookOpen, BookOpenCheck,
   Bot, Calendar, CalendarCheck, CalendarRange, CarFront, ChevronDown, ClipboardCheck,
-  CreditCard, DatabaseBackup, Eye, FileBarChart, FileCheck, FileSpreadsheet, FileUp, GitMerge,
+  CreditCard, DatabaseBackup, Eye, FileBarChart, FileCheck, FileSpreadsheet, FileUp, Fingerprint, GitMerge,
   GraduationCap, HelpCircle, Layers, LayoutDashboard, ListChecks, LogOut, Mail, Megaphone,
   Menu, NotepadText, PanelLeftClose, PanelLeftOpen, Pencil, ShieldCheck, UserMinus, Users, UsersRound, X,
   type LucideIcon,
@@ -66,6 +66,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
     items: [
       { label: 'Manage Academic', path: '/admin/academic', icon: BookOpen },
       { label: 'Record Attendance', path: '/admin/attendance', icon: CalendarCheck },
+      { label: 'Fingerprint Attendance', path: '/admin/fingerprint-attendance', icon: Fingerprint },
       { label: 'Assign Homework', path: '/admin/homework', icon: BookOpenCheck },
       { label: 'Class Progress', path: '/admin/class-progress', icon: Calendar },
       { label: 'Unit Plans', path: '/admin/unit-plans', icon: Layers },
