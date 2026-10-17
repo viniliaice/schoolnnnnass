@@ -32,11 +32,12 @@ vi.mock('@supabase/supabase-js',()=>({createClient:(_url:string,key:string)=>({
  auth:{getUser:async()=>({data:{user:key==='anon'?{id:state.userId}:null},error:null})},
  from:(table:string)=>new Query(table),
 })}));
-import enqueue from '../../../api/fingerprint-attendance/import';
-import connector from '../../../api/fingerprint-attendance/connector';
-import status from '../../../api/fingerprint-attendance/status';
-import retry from '../../../api/fingerprint-attendance/retry';
-import exportFile from '../../../api/fingerprint-attendance/export';
+import fingerprintRouter from '../../../api/fingerprint-attendance/[action]';
+import enqueue from '../../../server/fingerprint-attendance/import';
+import connector from '../../../server/fingerprint-attendance/connector';
+import status from '../../../server/fingerprint-attendance/status';
+import retry from '../../../server/fingerprint-attendance/retry';
+import exportFile from '../../../server/fingerprint-attendance/export';
 
 function response(){const res:any={code:200,headers:{},body:null,status(n:number){this.code=n;return this;},setHeader(k:string,v:string){this.headers[k]=v;},json(x:any){this.body=x;return this;},send(x:any){this.body=x;return this;}};return res;}
 function req(method:string,body:any={},auth='Bearer valid'){return {method,body,headers:{authorization:auth},query:{jobId:body.jobId}} as any;}
@@ -44,6 +45,14 @@ async function connectorCall(action:string,jobId:string,extra:any={}){const res=
 
 describe('fingerprint API simulated end-to-end persistence/export',()=>{
  beforeEach(()=>{state.jobs=[];state.logs=[];leases.clear();state.role='admin';state.userId='auth-admin';process.env.SUPABASE_URL='https://unit.test';process.env.SUPABASE_ANON_KEY='anon';process.env.SUPABASE_SERVICE_ROLE_KEY='service';process.env.FINGERPRINT_CONNECTOR_TOKEN='connector-token';});
+ it('routes existing action URLs through the shared Vercel function',async()=>{
+  const id='00000000-0000-4000-8000-000000000001';
+  state.jobs.push({id,requested_by:state.userId,status:'queued',last_dispatched_at:new Date().toISOString()});
+  const res=response();await fingerprintRouter({method:'GET',headers:{authorization:'Bearer valid'},query:{action:'status',jobId:id}},res);
+  expect(res.code).toBe(200);expect(res.body.id).toBe(id);
+  const missing=response();await fingerprintRouter({method:'GET',headers:{authorization:'Bearer valid'},query:{action:'unknown'}},missing);
+  expect(missing.code).toBe(404);
+ });
  it('rejects non-admin, creates one job, claims it once, stores deduped records, completes and exports actual CSV/XLSX bytes',async()=>{
   state.role='teacher';let res=response();await enqueue(req('POST',{format:'csv'}),res);expect(res.code).toBe(403);expect(state.jobs).toHaveLength(0);
   state.role='admin';res=response();await enqueue(req('POST',{format:'xlsx',from:'2026-03-02',to:'2026-03-02'}),res);expect(res.code).toBe(202);expect(state.jobs).toHaveLength(1);const id=res.body.jobId;
