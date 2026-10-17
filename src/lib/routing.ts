@@ -14,6 +14,11 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   // Dismissal gate — office is a first-class gate role (read/lookup only).
   '/gate': ['admin', 'supervisor', 'office'],
 
+  // Office can create parent accounts from Manage Users. The create-profile
+  // RPC restricts this role to parent accounts; staff/admin creation remains
+  // administrator-only.
+  '/admin/users': ['admin', 'office'],
+
   // Family-ID browse/print page — office may VIEW + print + lookup.
   '/admin/family-ids': ['admin', 'supervisor', 'office'],
 

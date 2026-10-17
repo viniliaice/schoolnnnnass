@@ -155,8 +155,8 @@ export async function createUser(data: Omit<User, 'id' | 'createdAt'>): Promise<
   const { data: sessionData } = await supabase.auth.getSession();
   const adminSession = sessionData?.session;
   const adminProfile = adminSession ? await getProfileByAuthId(adminSession.user.id) : null;
-  if (!adminSession || !adminProfile || adminProfile.role !== 'admin') {
-    throw new Error('Not signed in as an admin. Sign out and log in again, then retry.');
+  if (!adminSession || !adminProfile || (adminProfile.role !== 'admin' && !(adminProfile.role === 'office' && data.role === 'parent'))) {
+    throw new Error('Only administrators can create staff accounts. Office users may create parent accounts.');
   }
 
   const { data: authData, error: authError } = await supabase.auth.signUp({ email: data.email, password });
