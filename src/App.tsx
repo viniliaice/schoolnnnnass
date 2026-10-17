@@ -51,6 +51,7 @@ import { UploadResults } from './pages/teacher/UploadResults';
 import { BulkUploadGrades } from './pages/teacher/BulkUploadGrades';
 import { AllResults } from './pages/teacher/AllResults';
 import { RecordAttendance } from './pages/teacher/RecordAttendance';
+import { FingerprintAttendance } from './pages/admin/FingerprintAttendance';
 import { AssignHomework } from './pages/teacher/AssignHomework';
 import { CreateQuiz } from './pages/teacher/CreateQuiz';
 import { GradeQuizzes } from './pages/teacher/GradeQuizzes';
@@ -210,6 +211,7 @@ function AppContent() {
             case '/admin/lesson-plan-submissions': return <LessonPlanSubmissions navigate={navigate} reviewPath="/admin/lesson-plans" />;
             case '/supervisor/lesson-plan-submissions': return <LessonPlanSubmissions navigate={navigate} />;
             case '/admin/attendance': return <RecordAttendance />;
+            case '/admin/fingerprint-attendance': return <FingerprintAttendance />;
             case '/admin/homework': return <AssignHomework />;
             case '/admin/quizzes': return <CreateQuiz />;
             case '/admin/grade-quizzes': return <GradeQuizzes />;

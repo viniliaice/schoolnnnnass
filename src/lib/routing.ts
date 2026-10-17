@@ -11,6 +11,7 @@ import type { Role } from '../types';
  * IDs, and the gate audit trail; generate/transport-edit stay admin-only).
  */
 export const ROUTE_ACCESS: Record<string, Role[]> = {
+  '/admin/fingerprint-attendance': ['admin'],
   // Dismissal gate — office is a first-class gate role (read/lookup only).
   '/gate': ['admin', 'supervisor', 'office'],
 
