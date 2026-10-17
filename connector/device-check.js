@@ -1,36 +1,69 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDeviceAdapter } from './src/device.js';
+import { createDeviceAdapter, DeviceConnectionError, makeCommKey } from './src/device.js';
 
-const base = { ip: '192.168.1.201', port: 4370, timeoutMs: 1000, inport: 0, commKey: 0 };
-function fakeZk(overrides = {}) {
+const base = { ip: '192.0.2.10', port: 4370, timeoutMs: 1000, inport: 0 };
+function fakeZk({ connectCommand = 2005, authCommand = 2000, infoCommand = 2002, readError = null, socketError = null } = {}) {
   const calls = [];
-  const connect = overrides.connect || (async () => {});
-  const read = overrides.read || (async () => ({ data: [{ sn: 1, user_id: 'u7', record_time: 'Mon Mar 02 2026 08:15:00 GMT+0300', state: 0, type: 1 }] }));
   class FakeZk {
-    constructor(){this.ztcp={createSocket:async()=>{calls.push('socket');},connect:async()=>{calls.push('connect');return connect();},disconnect:async()=>{calls.push('disconnect');}};}
-    async getAttendances() { calls.push('read'); return read(); }
+    constructor() {
+      this.ztcp = {
+        socket: {}, sessionId: 0x1234,
+        createSocket: async () => { calls.push('socket'); if (socketError) throw Object.assign(new Error('synthetic socket error'), { code:socketError }); },
+        executeCmd: async (command, data) => {
+          calls.push(command);
+          if (command === 1000) return reply(connectCommand);
+          if (command === 1102) { calls.push(Buffer.from(data).toString('hex')); return reply(authCommand); }
+          if (command === 50) return reply(infoCommand);
+          return reply(2000);
+        },
+        closeSocket: async () => { calls.push('closeSocket'); },
+        disconnect: async () => { calls.push('unsafe-disconnect-unused'); },
+      };
+    }
+    async getAttendances() {
+      calls.push('read-attendance');
+      if (readError) throw readError;
+      return { data: [{ sn: 7, user_id: 'synthetic-user', record_time: 'Mon Mar 02 2026 08:15:00 GMT+0300', state: 0, type: 1 }] };
+    }
   }
   return { calls, FakeZk };
 }
-test('verified-key opt-in, requested-only retrieval and finally disconnect', async () => {
-  process.env.ZK_COMM_KEY_ZERO_CONFIRMED = 'true';
-  const f = fakeZk();
-  const records = await createDeviceAdapter(base, f.FakeZk).readAttendance();
-  assert.equal(records[0].record_time, 'Mon Mar 02 2026 08:15:00 GMT+0300');
-  assert.deepEqual(f.calls, ['socket', 'connect', 'read', 'disconnect']);
-  delete process.env.ZK_COMM_KEY_ZERO_CONFIRMED;
+function reply(code) { const b = Buffer.alloc(8); b.writeUInt16LE(code, 0); return b; }
+
+test('CommKey transform matches published legacy MakeKey vector for a synthetic value', () => {
+  assert.equal(makeCommKey('1234', 0x1234).toString('hex'), '4136326b');
 });
-test('fails closed without physical key confirmation and never opens socket', async () => {
-  delete process.env.ZK_COMM_KEY_ZERO_CONFIRMED;
+test('read-only test performs TCP connect, CommKey auth, device-info command and disconnect', async () => {
   const f = fakeZk();
-  await assert.rejects(createDeviceAdapter(base, f.FakeZk).readAttendance(), /cannot set a communication key/);
+  const result = await createDeviceAdapter(base, f.FakeZk).testConnection('1234');
+  assert.equal(result.status, 'success');
+  assert.equal(result.key_authenticated, true);
+  assert.deepEqual(f.calls, ['socket', 1000, 1102, '4136326b', 50, 1001, 'closeSocket']);
+});
+test('distinguishes a refused configured address or port from an unreachable network', async () => {
+  const refused = fakeZk({ socketError:'ECONNREFUSED' });
+  await assert.rejects(createDeviceAdapter(base, refused.FakeZk).testConnection('1234'), (e) => e instanceof DeviceConnectionError && e.code === 'address_port_failure');
+  const unreachable = fakeZk({ socketError:'EHOSTUNREACH' });
+  await assert.rejects(createDeviceAdapter(base, unreachable.FakeZk).testConnection('1234'), (e) => e instanceof DeviceConnectionError && e.code === 'network_failure');
+});
+test('read-only test distinguishes authentication rejection and always disconnects', async () => {
+  const f = fakeZk({ authCommand: 2005 });
+  await assert.rejects(createDeviceAdapter(base, f.FakeZk).testConnection('1234'), (e) => e instanceof DeviceConnectionError && e.code === 'authentication_failure');
+  assert.deepEqual(f.calls, ['socket', 1000, 1102, '4136326b', 1001, 'closeSocket']);
+});
+test('does not claim credential verification when the device does not request CommKey auth', async () => {
+  const f = fakeZk({ connectCommand: 2000 });
+  await assert.rejects(createDeviceAdapter(base, f.FakeZk).testConnection('1234'), (e) => e instanceof DeviceConnectionError && e.code === 'credential_not_verified');
+  assert.deepEqual(f.calls, ['socket', 1000, 1001, 'closeSocket']);
+});
+test('fails closed when no credential is available', async () => {
+  const f = fakeZk();
+  await assert.rejects(createDeviceAdapter(base, f.FakeZk).testConnection(''), /No device communication credential/);
   assert.deepEqual(f.calls, []);
 });
-test('disconnects after attendance retrieval failure', async () => {
-  process.env.ZK_COMM_KEY_ZERO_CONFIRMED = 'true';
-  const f = fakeZk({ read: async () => { throw new Error('simulated read failure'); } });
-  await assert.rejects(createDeviceAdapter(base, f.FakeZk).readAttendance(), /simulated read failure/);
-  assert.deepEqual(f.calls, ['socket', 'connect', 'read', 'disconnect']);
-  delete process.env.ZK_COMM_KEY_ZERO_CONFIRMED;
+test('attendance read uses authenticated TCP session and disconnects on failure', async () => {
+  const f = fakeZk({ readError: new Error('simulated read error') });
+  await assert.rejects(createDeviceAdapter(base, f.FakeZk).readAttendance('1234'), /simulated read error/);
+  assert.deepEqual(f.calls, ['socket', 1000, 1102, '4136326b', 'read-attendance', 1001, 'closeSocket']);
 });

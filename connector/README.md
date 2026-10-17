@@ -1,18 +1,27 @@
 # MBK LAN attendance connector
 
-This is an event-driven LAN process, not a scheduler. It opens a Supabase Auth session and waits for INSERT events from `fingerprint_import_jobs`; it does not open a K40 socket while idle. It accepts only a queued event and claims it once through the restricted ERP API. Each claim receives a short-lived attempt lease; status/save/finish calls must present that lease, and explicit admin retry invalidates a stale worker's lease. A queued request expires after 24 hours; an active lease expires after five minutes and requires explicit admin retry. Stop with Ctrl-C / SIGTERM. Never port-forward device TCP 4370.
+This is an event-driven LAN process, not a scheduler. It opens a dedicated Supabase Auth session and waits for INSERT events from the explicitly requested import/test tables; it does not connect to the K40 while idle, poll for work, or perform recurring imports. The ERP API accepts only queued admin-created work. The connector has no Supabase service-role key. Never port-forward the K40's TCP port to the public internet.
 
-## Current stop-ship compatibility limitation
-`zkteco-js@1.7.2` is MIT licensed, pinned exactly in this connector and publicly warns it is not recommended for production. I inspected the published package source: `getAttendances()` returns `{data: [{sn,user_id,record_time,type,state,ip}]}`; it decodes 40-byte records, converts time to a JS Date string, and calls a buffer-free command after reads. Package `createSocket()`/`disconnect()` are available. There are no tests specified in its package scripts. Crucially, its five-argument constructor is `(ip, port, timeout, inport, maxChunk)`: it has no communication-key option or `setCommKey` method. The adapter therefore **fails closed unless the key has been physically confirmed as zero** (and a separate explicit local `ZK_COMM_KEY_ZERO_CONFIRMED=true` is set). Never use that flag just to bypass a nonzero key. For any nonzero device key, use an independently security-reviewed adapter/library that supports the K40 comm key; do not patch out authentication. Actual K40 compatibility is unverified.
+## Credential and target handling
 
-## Install/configure
-1. Apply the two additive migrations in order to the intended Supabase project. This enables Realtime publication for only the jobs table and grants the connector read-only, RLS-constrained access to queued job metadata.
-2. In Supabase Auth, create a dedicated non-human connector identity. Using trusted admin-only tooling, set its `app_metadata.role` to `fingerprint_connector`. Do not set `user_metadata` (users can change it). Do not grant it admin or service-role privileges. Enable email/password auth as needed and ensure account recovery is controlled by admins.
-3. On Vercel server environment set existing `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY` (server-side only) and a high-entropy `FINGERPRINT_CONNECTOR_TOKEN`. The exact same token goes in this connector's protected `.env`. Never place the service-role key on the school computer.
-4. On an always-on school LAN computer, install Node 24, copy this directory, run `npm ci`, copy `.env.example` to `.env`, fill values from secure sources, and protect the file (e.g. owner-only permissions). Set `ERP_API_URL` to the deployed ERP and `ZK_DEVICE_COMM_KEY` only after checking it in the K40's communication settings. Initial device address/serial/port are in the example.
-5. Start `npm start`; it logs Realtime subscription status. It makes no device connection while idle. Stop with Ctrl-C or the OS service manager. If notification was missed or connector offline, status stays queued; use explicit admin re-dispatch only after that operation is implemented—there is no automatic scan/retry.
+The device communication key is entered in Administration → Fingerprint Attendance and stored only as AES-256-GCM ciphertext in the server database. It is fetched over the connector's authenticated HTTPS API only after the connector claims a specific authorized job/test. It is never put in this `.env`, browser storage, source, URL, or logs. The connector's `.env` must be owner-only and is Git-ignored; it contains only the connector's own login/API credentials and the verified device serial.
 
-## Safety / unresolved implementation checks
-The source uses only `createSocket`, `getAttendances`, and `disconnect`; it does not call real-time log, clear, user, or settings operations. It has bounded calls and finally cleanup. `commKey` has no implementation in this library, so verify zero physically before use or replace adapter. There is no verified read-only firmware/platform inspection. Ensure no school router exposes 4370 publicly.
+Set these **server-side Preview environment variables** before enabling the workflow:
+- `FINGERPRINT_CREDENTIAL_ENCRYPTION_KEY`: base64 encoding of exactly 32 random bytes (generate once with `openssl rand -base64 32`, store in the deployment secret manager; preserve it across deployments/backups or existing ciphertext cannot be decrypted).
+- `FINGERPRINT_CONNECTOR_TOKEN`: long random API bearer token, also placed in this connector `.env`.
+- `ZK_DEVICE_SERIAL`: serial verified on the intended K40, mirrored in connector `.env`.
+- `ZK_DEVICE_IP` and `ZK_DEVICE_PORT`: the explicitly approved LAN target only. No default/fallback target is used. Port 4370 is not to be exposed publicly.
+- Optional `ZK_TIMEOUT_MS` (default 15000).
 
-The Vercel API event handoff is Supabase Realtime Postgres Changes (not polling). Ensure project Realtime is running and table publication/RLS migration applies. Connector database identity can only SELECT queued jobs; state writes and batches go to the ERP API using the separate connector token. Deploy migration and API code before running a connector. Test against simulated data first; actual device tests require the on-site network/device and an authorized verified key.
+## Install
+
+1. Verify the actual non-production Supabase Preview project/branch, apply the required additive migrations there, and set Preview server secrets. Do not apply to an ambiguous production project.
+2. Create a dedicated Supabase Auth connector account. Set trusted `app_metadata.role=fingerprint_connector`; do not grant admin or service-role access. Ensure the realtime table policies/publication required by the migrations are enabled.
+3. On an always-on school LAN computer, install Node 24, copy this directory, run `npm ci`, copy `.env.example` to `.env`, fill the connector credentials and verified serial, and restrict file access (for example `chmod 600 .env`). The device key is not stored in this file.
+4. Start `npm start`; it logs only subscription/operational status. Stop with Ctrl-C or the OS service manager. Keep TCP 4370 LAN-only.
+
+## Connection-test and protocol status
+
+The manual Test connection action sends one request to the LAN connector. It performs a TCP connect, legacy CommKey auth handshake and a read-only device-info command, then disconnects. It never clears logs, changes device settings/users, or requests biometric templates. The adapter's CommKey transform is a local port of the published pyzk reference and has synthetic unit coverage, but the K40 model/firmware handshake has **not** been verified on hardware. Treat a passing mock test as protocol-path testing only, not hardware compatibility. The connector reports safe outcome categories and does not log exception details or credential bytes.
+
+Attendance retrieval is separate and remains explicit/manual. Imported raw device event fields and timestamps are preserved; the API deduplicates records and leaves employee-to-teacher mapping for manual review. Do not make payroll/attendance decisions from unmatched records.

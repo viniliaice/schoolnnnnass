@@ -44,7 +44,7 @@ function req(method:string,body:any={},auth='Bearer valid'){return {method,body,
 async function connectorCall(action:string,jobId:string,extra:any={}){const res=response();const leaseToken=leases.get(jobId);await connector(req('POST',{action,jobId,...extra,...(action==='claim'?{}:{leaseToken})},'Bearer connector-token'),res);if(action==='claim'&&res.body?.accepted)leases.set(jobId,res.body.leaseToken);return res;}
 
 describe('fingerprint API simulated end-to-end persistence/export',()=>{
- beforeEach(()=>{state.jobs=[];state.logs=[];leases.clear();state.role='admin';state.userId='auth-admin';process.env.SUPABASE_URL='https://unit.test';process.env.SUPABASE_ANON_KEY='anon';process.env.SUPABASE_SERVICE_ROLE_KEY='service';process.env.FINGERPRINT_CONNECTOR_TOKEN='connector-token';});
+ beforeEach(()=>{state.jobs=[];state.logs=[];leases.clear();state.role='admin';state.userId='auth-admin';process.env.SUPABASE_URL='https://unit.test';process.env.SUPABASE_ANON_KEY='anon';process.env.SUPABASE_SERVICE_ROLE_KEY='service';process.env.FINGERPRINT_CONNECTOR_TOKEN='connector-token';process.env.ZK_DEVICE_SERIAL='2807990625055';});
  it('routes existing action URLs through the shared Vercel function',async()=>{
   const id='00000000-0000-4000-8000-000000000001';
   state.jobs.push({id,requested_by:state.userId,status:'queued',last_dispatched_at:new Date().toISOString()});

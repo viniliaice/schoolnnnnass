@@ -1,4 +1,6 @@
 import connector from '../../server/fingerprint-attendance/connector.js';
+import credentials from '../../server/fingerprint-attendance/credentials.js';
+import deviceTest from '../../server/fingerprint-attendance/device-test.js';
 import exportFile from '../../server/fingerprint-attendance/export.js';
 import enqueue from '../../server/fingerprint-attendance/import.js';
 import retry from '../../server/fingerprint-attendance/retry.js';
@@ -6,6 +8,8 @@ import status from '../../server/fingerprint-attendance/status.js';
 
 const handlers: Record<string, (req: any, res: any) => unknown> = {
   connector,
+  credential: credentials,
+  'device-test': deviceTest,
   export: exportFile,
   import: enqueue,
   retry,
