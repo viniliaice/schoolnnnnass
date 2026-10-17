@@ -1,6 +1,18 @@
 import { useState } from 'react';
 import { supabase } from '../../lib/supabase';
 
+async function readApiJson(response: Response): Promise<any> {
+  const text = await response.text();
+  if (!text.trim()) {
+    throw new Error(`Fingerprint API returned an empty response (HTTP ${response.status}). Check the Vercel function deployment and Preview environment variables.`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(`Fingerprint API returned a non-JSON response (HTTP ${response.status}). Check the Vercel function logs.`);
+  }
+}
+
 /** Manual-only interface. It never subscribes to the device or starts work on mount. */
 export function FingerprintAttendance() {
   const [format, setFormat] = useState<'csv' | 'xlsx'>('xlsx');
@@ -13,19 +25,19 @@ export function FingerprintAttendance() {
     if (!jobId) return;
     const { data: { session } } = await supabase.auth.getSession();
     const r = await fetch(`/api/fingerprint-attendance/status?jobId=${encodeURIComponent(jobId)}`, { headers: { Authorization: `Bearer ${session?.access_token || ''}` } });
-    const data = await r.json(); if (!r.ok) throw new Error(data.error || 'Unable to refresh status.');
+    const data = await readApiJson(r); if (!r.ok) throw new Error(data.error || 'Unable to refresh status.');
     setResult((old: any) => ({ ...old, ...data, jobId }));
   };
   const retry = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     const r = await fetch('/api/fingerprint-attendance/retry', { method:'POST', headers:{Authorization:`Bearer ${session?.access_token || ''}`,'Content-Type':'application/json'}, body:JSON.stringify({jobId:result.jobId}) });
-    const data = await r.json(); if (!r.ok) throw new Error(data.error || 'Retry request failed.');
+    const data = await readApiJson(r); if (!r.ok) throw new Error(data.error || 'Retry request failed.');
     setResult((old:any)=>({...old,...data,status:'queued'}));
   };
   const download = async () => {
     const { data: { session } } = await supabase.auth.getSession();
     const r = await fetch(`/api/fingerprint-attendance/export?jobId=${encodeURIComponent(result.jobId)}`, { headers: { Authorization: `Bearer ${session?.access_token || ''}` } });
-    if (!r.ok) { const data = await r.json(); throw new Error(data.error || 'Export download failed.'); }
+    if (!r.ok) { const data = await readApiJson(r); throw new Error(data.error || 'Export download failed.'); }
     const blob = await r.blob(); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = `fingerprint-${result.jobId}.${format}`; a.click(); URL.revokeObjectURL(url);
   };
   const start = async () => {
@@ -34,7 +46,7 @@ export function FingerprintAttendance() {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session) throw new Error('Sign in again to start an import.');
       const response = await fetch('/api/fingerprint-attendance/import', { method: 'POST', headers: { Authorization: `Bearer ${session.access_token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ format, from: from || null, to: to || null }) });
-      const body = await response.json();
+      const body = await readApiJson(response);
       if (!response.ok) throw new Error(body.error || 'Import request failed.');
       setResult(body);
     } catch (e) { setError(e instanceof Error ? e.message : 'Import failed.'); }

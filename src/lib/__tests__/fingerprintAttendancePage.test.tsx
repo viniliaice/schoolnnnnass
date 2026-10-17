@@ -7,10 +7,19 @@ import { FingerprintAttendance } from '../../pages/admin/FingerprintAttendance';
 
 afterEach(()=>{vi.unstubAllGlobals();document.body.innerHTML='';});
 it('does not request an import on page open and one click sends one request',async()=>{
- const fetchMock=vi.fn().mockResolvedValue({ok:true,json:async()=>({jobId:'job-1',message:'queued'})});vi.stubGlobal('fetch',fetchMock);
+ const fetchMock=vi.fn().mockResolvedValue({ok:true,status:202,text:async()=>JSON.stringify({jobId:'job-1',message:'queued'})});vi.stubGlobal('fetch',fetchMock);
  const host=document.createElement('div');document.body.appendChild(host);const root=createRoot(host);
  await act(async()=>{root.render(<FingerprintAttendance/>);});expect(fetchMock).not.toHaveBeenCalled();
  const button=[...host.querySelectorAll('button')].find(b=>b.textContent?.includes('Download Fingerprint Records'))!;expect(button).toBeTruthy();
  await act(async()=>{button.dispatchEvent(new MouseEvent('click',{bubbles:true}));});expect(fetchMock).toHaveBeenCalledTimes(1);expect(fetchMock.mock.calls[0][0]).toBe('/api/fingerprint-attendance/import');
+ await act(async()=>root.unmount());
+});
+it('shows a useful API diagnostic instead of a JSON parse exception for an empty response',async()=>{
+ const fetchMock=vi.fn().mockResolvedValue({ok:false,status:500,text:async()=>''});vi.stubGlobal('fetch',fetchMock);
+ const host=document.createElement('div');document.body.appendChild(host);const root=createRoot(host);
+ await act(async()=>{root.render(<FingerprintAttendance/>);});
+ const button=[...host.querySelectorAll('button')].find(b=>b.textContent?.includes('Download Fingerprint Records'))!;
+ await act(async()=>{button.dispatchEvent(new MouseEvent('click',{bubbles:true}));});
+ expect(host.querySelector('[role="alert"]')?.textContent).toContain('empty response (HTTP 500)');
  await act(async()=>root.unmount());
 });
