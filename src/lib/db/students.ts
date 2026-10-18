@@ -428,6 +428,15 @@ export async function updateStudent(id: string, data: Partial<Student>): Promise
   return (await getStudentById(id)) ?? null;
 }
 
+/** Narrow office/admin action: change only the parent link (active or former student). */
+export async function assignStudentParent(id: string, parentId: string | null): Promise<void> {
+  const { error } = await supabase.rpc('assign_student_parent', {
+    p_student_id: id,
+    p_parent_id: parentId ?? '',
+  });
+  if (error) throw new Error(error.message || 'Failed to assign parent');
+}
+
 export async function deleteStudent(id: string): Promise<boolean> {
   const { error } = await supabase.rpc('delete_student', { p_student_id: id });
   if (error) {
