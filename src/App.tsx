@@ -270,6 +270,8 @@ function AppContent() {
         // Office routes (gate staff — read/lookup only)
         if (session.role === 'office') {
           switch (currentPath) {
+            case '/admin/users': return <ManageUsers />;
+            case '/admin/students': return <ManageStudents />;
             case '/gate': return <GateScreen navigate={navigate} />;
             case '/admin/family-ids': return <FamilyIds mode="browse" navigate={navigate} />;
             case '/admin/drivers': return <ManageDrivers />;

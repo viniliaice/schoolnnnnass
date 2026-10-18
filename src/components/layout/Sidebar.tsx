@@ -110,6 +110,8 @@ const navItems: Record<Role, NavItem[]> = {
   ],
   office: [
     { label: 'Dashboard', icon: LayoutDashboard, path: '/dashboard' },
+    { label: 'Manage Users', icon: Users, path: '/admin/users' },
+    { label: 'Manage Students', icon: GraduationCap, path: '/admin/students' },
     { label: 'Dismissal Gate', icon: ShieldCheck, path: '/gate' },
     { label: 'Family IDs', icon: CreditCard, path: '/admin/family-ids' },
     { label: 'Manage Drivers', icon: CarFront, path: '/admin/drivers' },

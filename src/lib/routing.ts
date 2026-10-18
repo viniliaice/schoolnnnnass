@@ -18,6 +18,7 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   // RPC restricts this role to parent accounts; staff/admin creation remains
   // administrator-only.
   '/admin/users': ['admin', 'office'],
+  '/admin/students': ['admin', 'office'],
 
   // Family-ID browse/print page — office may VIEW + print + lookup.
   '/admin/family-ids': ['admin', 'supervisor', 'office'],
