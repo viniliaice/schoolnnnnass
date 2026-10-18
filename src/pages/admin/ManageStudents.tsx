@@ -1,12 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Listbox } from '@headlessui/react';
-import { getStudentsPaginated, getStudentsByClasses, createStudent, updateStudent, deleteStudent, getStudentById } from '../../lib/db/students';
+import { getStudentsPaginated, getStudentsByClasses, createStudent, updateStudent, assignStudentParent, deleteStudent, getStudentById } from '../../lib/db/students';
 import { getUserById, searchParents } from '../../lib/db/profiles';
 import { getExamsByStudent } from '../../lib/db/exams';
 import { getCurrentTerm } from '../../lib/db/academic';
 import { getReportCommentsForStudentTerm as getReportCommentsForStudentTermDirect } from '../../lib/db/reports';
 import { Student, User, CLASSES, Exam } from '../../types';
 import { useToast } from '../../context/ToastContext';
+import { useRole } from '../../context/RoleContext';
 import { Dialog } from '../../components/ui/Dialog';
 import { ExamReport } from '../reports/ExamReport';
 import { DataTable } from '../../components/ui/DataTable';
@@ -17,6 +18,8 @@ import { buildParentCredentialWhatsAppLink, sendParentCredentialWhatsApp } from 
 
 export function ManageStudents() {
   const { addToast } = useToast();
+  const { session } = useRole();
+  const officeMode = session?.role === 'office';
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [students, setStudents] = useState<Student[]>([]);
@@ -284,9 +287,9 @@ export function ManageStudents() {
             <button onClick={() => openEdit(student)} className="p-1 text-blue-400 hover:text-blue-600">
               <Edit className="w-4 h-4" />
             </button>
-            <button onClick={() => handleDelete(student)} className="p-1 text-red-400 hover:text-red-600">
+            {!officeMode && <button onClick={() => handleDelete(student)} className="p-1 text-red-400 hover:text-red-600">
               <Trash2 className="w-4 h-4" />
-            </button>
+            </button>}
           </div>
         );
       },
@@ -342,7 +345,11 @@ export function ManageStudents() {
       // SECURITY DEFINER, audit-logged path. students has no client UPDATE
       // policy (20260906d_rls_lockdown), so this is the only write route.
       // `formParent || null` sends an explicit null to CLEAR the assignment.
-      await updateStudent(showEdit.id, { name: formName, className: formClass, parentId: formParent || null });
+      if (officeMode) {
+        await assignStudentParent(showEdit.id, formParent || null);
+      } else {
+        await updateStudent(showEdit.id, { name: formName, className: formClass, parentId: formParent || null });
+      }
       addToast({ type: 'success', title: 'Student updated successfully' });
       setShowEdit(null); resetForm(); await refresh();
     } catch (error) {
@@ -385,10 +392,10 @@ export function ManageStudents() {
             </a>
           </p>
         </div>
-        <button onClick={() => { resetForm(); setShowCreate(true); }}
+        {!officeMode && <button onClick={() => { resetForm(); setShowCreate(true); }}
           className="flex items-center gap-2 px-4 py-2.5 bg-indigo-600 text-white rounded-xl font-medium text-sm hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all">
           <Plus className="w-4 h-4" /> Add Student
-        </button>
+        </button>}
       </div>
 
       {/* Filters */}
@@ -534,9 +541,10 @@ export function ManageStudents() {
       </Dialog>
 
       {/* Edit Dialog */}
-      <Dialog open={!!showEdit} onClose={() => { setShowEdit(null); resetForm(); }} title="Edit Student">
+      <Dialog open={!!showEdit} onClose={() => { setShowEdit(null); resetForm(); }} title={officeMode ? 'Assign Parent' : 'Edit Student'}>
         <div className="space-y-4">
-          <input placeholder="Student Name" value={formName} onChange={e => setFormName(e.target.value)}
+          {officeMode && <p className="text-sm text-slate-600">Choose or remove the parent linked to this student. Student details cannot be changed here.</p>}
+          <input placeholder="Student Name" value={formName} disabled={officeMode} onChange={e => setFormName(e.target.value)}
             className="w-full px-4 py-2.5 rounded-xl border border-slate-200 text-sm focus:ring-2 focus:ring-indigo-200 focus:border-indigo-400 outline-none" />
           <div>
             <label className="text-sm font-semibold text-slate-700 mb-1.5 block">Class</label>
