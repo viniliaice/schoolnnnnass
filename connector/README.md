@@ -54,6 +54,28 @@ The device library returns attendance logs before applying the selected date fil
 
 On macOS/Linux, create `.env` only if absent with `touch .env`, restrict it with `chmod 600 .env`, edit it, then run `npm ci`, `npm run diagnose`, and `npm start` from this directory.
 
+## Local website testing with the Preview API
+
+To use a local Vite website while keeping fingerprint server functions on the deployed Preview backend, first stop any `vercel dev` or Vite process. In Vercel Project Settings → Deployment Protection, create a dedicated **Protection Bypass for Automation** secret for local testing. Do not paste it into chat, source control, `.env`, a browser variable, or a command that echoes it. In a PowerShell window at the repository root, set the fingerprint API proxy and secret for that process only, then bind Vite to loopback:
+
+```powershell
+$env:FINGERPRINT_API_PROXY_TARGET = 'https://your-preview-deployment.vercel.app'
+$secureBypass = Read-Host 'Paste the Vercel automation bypass secret' -AsSecureString
+$bypassPtr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureBypass)
+try {
+  $env:VERCEL_AUTOMATION_BYPASS_SECRET = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bypassPtr)
+  npm run dev -- --host 127.0.0.1
+} finally {
+  [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bypassPtr)
+  $env:VERCEL_AUTOMATION_BYPASS_SECRET = $null
+  Remove-Variable secureBypass, bypassPtr
+}
+```
+
+Vite forwards the secret as the `x-vercel-protection-bypass` request header only for the fingerprint API proxy. Keep this local server bound to `127.0.0.1` while the bypass is active, and stop it when finished. Open `http://localhost:5173`. The frontend must also be configured with that Supabase project's `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` in the ignored root `.env.local`; obtain the public anon key from Supabase settings and do not paste environment-file contents into chat.
+
+In another PowerShell window, set `ERP_API_URL=http://localhost:5173` in `connector/.env`, then run `npm run diagnose` and `npm start`. The connector sends its authenticated API requests to local Vite, which proxies them to the Preview API. This is **not an isolated local backend**: admin requests, device credentials, and attendance writes still use the Preview deployment and its Supabase project. Vercel server-only Preview settings (including the matching connector token, encryption key, and K40 target) must be configured there. Do not use the live K40 or submit a real import unless you intend to access that device and write records to the Preview database.
+
 ## Server-side setup and safety
 
 Use the intended non-production Vercel Preview deployment. Set the matching `FINGERPRINT_CONNECTOR_TOKEN`, the explicit `ZK_DEVICE_SERIAL`, `ZK_DEVICE_IP`, `ZK_DEVICE_PORT`, and `FINGERPRINT_CREDENTIAL_ENCRYPTION_KEY` in Vercel's server-side Preview environment. Keep frontend `VITE_` values separate. Do not rerun already-applied migrations to clear "already exists" errors.

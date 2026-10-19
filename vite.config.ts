@@ -123,5 +123,17 @@ export default defineConfig({
     host: "0.0.0.0",
     port: 5173,
     allowedHosts: true,
+    proxy: process.env.FINGERPRINT_API_PROXY_TARGET
+      ? {
+          "/api/fingerprint-attendance": {
+            target: process.env.FINGERPRINT_API_PROXY_TARGET,
+            changeOrigin: true,
+            secure: true,
+            headers: process.env.VERCEL_AUTOMATION_BYPASS_SECRET
+              ? { "x-vercel-protection-bypass": process.env.VERCEL_AUTOMATION_BYPASS_SECRET }
+              : undefined,
+          },
+        }
+      : undefined,
   },
 });
