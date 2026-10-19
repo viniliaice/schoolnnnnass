@@ -41,7 +41,18 @@ create index if not exists fingerprint_logs_occurred_at_idx on public.fingerprin
 create index if not exists fingerprint_logs_review_idx on public.fingerprint_attendance_logs (mapping_status) where mapping_status='review';
 alter table public.fingerprint_import_jobs enable row level security;
 alter table public.fingerprint_attendance_logs enable row level security;
--- Admin is the only human role allowed to see protected job/event data.
-create policy fingerprint_jobs_admin_read on public.fingerprint_import_jobs for select to authenticated using (exists(select 1 from public.profiles p where p.auth_id=auth.uid() and p.role='admin'));
-create policy fingerprint_logs_admin_read on public.fingerprint_attendance_logs for select to authenticated using (exists(select 1 from public.profiles p where p.auth_id=auth.uid() and p.role='admin'));
--- Writes are performed only by trusted server code using service role; no client write policies.
+
+-- CREATE POLICY has no IF NOT EXISTS clause. These guards make a manual rerun
+-- safe when a previous attempt already created the policy. Existing definitions
+-- are left untouched; inspect pg_policies if an existing name is unexpected.
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='fingerprint_import_jobs' and policyname='fingerprint_jobs_admin_read') then
+    create policy fingerprint_jobs_admin_read on public.fingerprint_import_jobs
+      for select to authenticated using (exists(select 1 from public.profiles p where p.auth_id=auth.uid() and p.role='admin'));
+  end if;
+  if not exists (select 1 from pg_policies where schemaname='public' and tablename='fingerprint_attendance_logs' and policyname='fingerprint_logs_admin_read') then
+    create policy fingerprint_logs_admin_read on public.fingerprint_attendance_logs
+      for select to authenticated using (exists(select 1 from public.profiles p where p.auth_id=auth.uid() and p.role='admin'));
+  end if;
+end $$;
+-- Writes are performed only by trusted server code using service role; there are no client write policies.
