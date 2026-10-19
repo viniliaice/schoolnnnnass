@@ -2,9 +2,10 @@
 process.env.TZ = 'Africa/Mogadishu';
 import { createClient } from '@supabase/supabase-js';
 import { createDeviceAdapter, DeviceConnectionError } from './device.js';
+import { getConnectorEnvStatus, REQUIRED_CONNECTOR_ENV } from './env-status.js';
 
-const required = ['SUPABASE_URL','SUPABASE_ANON_KEY','CONNECTOR_EMAIL','CONNECTOR_PASSWORD','ERP_API_URL','CONNECTOR_TOKEN','ZK_DEVICE_SERIAL'];
-for (const key of required) if (!process.env[key]) throw new Error(`Missing required environment variable ${key}`);
+const envStatus = getConnectorEnvStatus();
+for (const key of REQUIRED_CONNECTOR_ENV) if (!envStatus[key]) throw new Error(`Missing required environment variable ${key}`);
 const config = {
   url: process.env.SUPABASE_URL, anon: process.env.SUPABASE_ANON_KEY,
   email: process.env.CONNECTOR_EMAIL, password: process.env.CONNECTOR_PASSWORD,
@@ -86,4 +87,8 @@ async function main() {
   const stop = async () => { await supabase.removeChannel(channel); process.exit(0); };
   process.on('SIGINT', stop); process.on('SIGTERM', stop);
 }
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((error) => {
+  const category = error instanceof Error ? error.name : 'UnknownError';
+  console.error(`Connector startup failed (${category}); diagnostic details suppressed to prevent credential exposure.`);
+  process.exit(1);
+});

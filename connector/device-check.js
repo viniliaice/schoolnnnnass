@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeviceAdapter, DeviceConnectionError, makeCommKey } from './src/device.js';
+import { getConnectorEnvStatus, REQUIRED_CONNECTOR_ENV } from './src/env-status.js';
 
 const base = { ip: '192.0.2.10', port: 4370, timeoutMs: 1000, inport: 0 };
 function fakeZk({ connectCommand = 2005, authCommand = 2000, infoCommand = 2002, readError = null, socketError = null } = {}) {
@@ -30,6 +31,16 @@ function fakeZk({ connectCommand = 2005, authCommand = 2000, infoCommand = 2002,
   return { calls, FakeZk };
 }
 function reply(code) { const b = Buffer.alloc(8); b.writeUInt16LE(code, 0); return b; }
+
+test('connector environment diagnostic reports only set or missing status', () => {
+  const env = Object.fromEntries(REQUIRED_CONNECTOR_ENV.map((name) => [name, 'synthetic-test-value']));
+  env.CONNECTOR_PASSWORD = ' ';
+  const status = getConnectorEnvStatus(env);
+  assert.deepEqual(Object.keys(status), REQUIRED_CONNECTOR_ENV);
+  assert.equal(status.SUPABASE_URL, true);
+  assert.equal(status.CONNECTOR_PASSWORD, false);
+  assert.equal(Object.values(status).filter(Boolean).length, REQUIRED_CONNECTOR_ENV.length - 1);
+});
 
 test('CommKey transform matches published legacy MakeKey vector for a synthetic value', () => {
   assert.equal(makeCommKey('1234', 0x1234).toString('hex'), '4136326b');
