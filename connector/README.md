@@ -17,8 +17,26 @@ Set these **server-side Preview environment variables** before enabling the work
 
 1. Verify the actual non-production Supabase Preview project/branch, apply the required additive migrations there, and set Preview server secrets. Do not apply to an ambiguous production project.
 2. Create a dedicated Supabase Auth connector account. Set trusted `app_metadata.role=fingerprint_connector`; do not grant admin or service-role access. Ensure the realtime table policies/publication required by the migrations are enabled.
-3. On an always-on school LAN computer, install Node 24, copy this directory, run `npm ci`, copy `.env.example` to `.env`, fill the connector credentials and verified serial, and restrict file access (for example `chmod 600 .env`). The device key is not stored in this file.
-4. Start `npm start`; it logs only subscription/operational status. Stop with Ctrl-C or the OS service manager. Keep TCP 4370 LAN-only.
+3. On an always-on school LAN computer, install Node 24, copy this directory, and run `npm ci`. Create `.env` only if it does not already exist, then fill `SUPABASE_URL`, `SUPABASE_ANON_KEY`, the dedicated connector Auth `CONNECTOR_EMAIL` and `CONNECTOR_PASSWORD`, the deployed Preview `ERP_API_URL` (not localhost), the matching `CONNECTOR_TOKEN`, and the verified `ZK_DEVICE_SERIAL`. The device communication key is never stored in this file; the IP/port are supplied by the server.
+
+   **Windows PowerShell:**
+   ```powershell
+   if (-not (Test-Path .env)) { Copy-Item .env.example .env }
+   $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+   icacls .env /inheritance:r
+   icacls .env /grant:r "$($identity):(F)"
+   notepad .env
+   ```
+   Save the file, close Notepad, then run `npm start`. `icacls` removes inherited ACLs and grants the current Windows account full access; verify the resulting ACL with `icacls .env`.
+
+   **macOS/Linux:**
+   ```sh
+   test -e .env || cp .env.example .env
+   chmod 600 .env
+   ${EDITOR:-vi} .env
+   ```
+   Save the file, then run `npm start`. The start script uses Node 24's `--env-file=.env` support, so the variables are loaded for the connector process. Never commit `.env`; it is Git-ignored.
+4. Keep the connector running on the school LAN; it logs only subscription/operational status. Stop with Ctrl-C or the OS service manager. Keep TCP 4370 LAN-only.
 
 ## Connection-test and protocol status
 
