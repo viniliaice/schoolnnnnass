@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeviceAdapter, DeviceConnectionError, makeCommKey } from './src/device.js';
 import { getConnectorEnvStatus, REQUIRED_CONNECTOR_ENV } from './src/env-status.js';
+import { filterAttendanceToRange } from './src/attendance-range.js';
 
 const base = { ip: '192.0.2.10', port: 4370, timeoutMs: 1000, inport: 0 };
 function fakeZk({ connectCommand = 2005, authCommand = 2000, infoCommand = 2002, readError = null, socketError = null } = {}) {
@@ -34,12 +35,25 @@ function reply(code) { const b = Buffer.alloc(8); b.writeUInt16LE(code, 0); retu
 
 test('connector environment diagnostic reports only set or missing status', () => {
   const env = Object.fromEntries(REQUIRED_CONNECTOR_ENV.map((name) => [name, 'synthetic-test-value']));
-  env.CONNECTOR_PASSWORD = ' ';
+  env.CONNECTOR_TOKEN = ' ';
   const status = getConnectorEnvStatus(env);
   assert.deepEqual(Object.keys(status), REQUIRED_CONNECTOR_ENV);
-  assert.equal(status.SUPABASE_URL, true);
-  assert.equal(status.CONNECTOR_PASSWORD, false);
+  assert.equal(status.ERP_API_URL, true);
+  assert.equal(status.CONNECTOR_TOKEN, false);
   assert.equal(Object.values(status).filter(Boolean).length, REQUIRED_CONNECTOR_ENV.length - 1);
+});
+
+test('attendance range filter keeps only records on inclusive Mogadishu dates', () => {
+  const records = [
+    { record_time: 'Sun Mar 01 2026 23:59:59 GMT+0300' },
+    { record_time: 'Mon Mar 02 2026 00:00:00 GMT+0300' },
+    { record_time: 'Mon Mar 02 2026 23:59:59 GMT+0300' },
+    { record_time: 'Tue Mar 03 2026 00:00:00 GMT+0300' },
+    { record_time: 'invalid' },
+  ];
+  assert.deepEqual(filterAttendanceToRange(records, '2026-03-02', '2026-03-02'), records.slice(1, 3));
+  assert.deepEqual(filterAttendanceToRange(records, null, null), records);
+  assert.throws(() => filterAttendanceToRange(records, '2026-03-03', '2026-03-02'), /must not follow/);
 });
 
 test('CommKey transform matches published legacy MakeKey vector for a synthetic value', () => {

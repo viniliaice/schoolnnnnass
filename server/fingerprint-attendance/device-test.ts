@@ -44,7 +44,7 @@ export default async function handler(req: any, res: any) {
     if (error) return res.status(503).json({ error: 'Could not read the connector test result.' });
     if (!data) return res.status(404).json({ error: 'Test request not found.' });
     const connectorUnavailable = data.status === 'queued' && Date.now() - Date.parse(data.requested_at) > 30_000;
-    return res.status(200).json({ testId: data.id, status: connectorUnavailable ? 'connector_unavailable' : data.status, requested_at: data.requested_at, tested_at: data.tested_at, configured_target: `${process.env.ZK_DEVICE_IP}:${process.env.ZK_DEVICE_PORT}`, result_message: connectorUnavailable ? 'No LAN connector claimed this request within 30 seconds. Check that the connector is online and its realtime subscription is healthy, then start a new test.' : data.result_message });
+    return res.status(200).json({ testId: data.id, status: connectorUnavailable ? 'connector_unavailable' : data.status, requested_at: data.requested_at, tested_at: data.tested_at, configured_target: `${process.env.ZK_DEVICE_IP}:${process.env.ZK_DEVICE_PORT}`, result_message: connectorUnavailable ? 'No LAN connector claimed this request within 30 seconds. Check that the connector is running and can reach the Preview API, then start a new test.' : data.result_message });
   } catch {
     return res.status(500).json({ error: 'Device connection test request failed.' });
   }

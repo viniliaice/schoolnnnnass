@@ -11,8 +11,13 @@ export default async function handler(req:any,res:any) {
  const body=typeof req.body==='string'?JSON.parse(req.body):req.body||{}; const {action,jobId}=body;
  const client=db();
  try {
-  if(action==='test_claim') {
-   const testId=String(body.testId||''); if(!/^[0-9a-f-]{36}$/i.test(testId))return res.status(400).json({error:'Invalid test id.'});
+  if(action==='test_claim'||action==='test_claim_next') {
+   let testId=String(body.testId||'');
+   if(action==='test_claim_next') {
+    const {data:nextTest,error:nextError}=await client.from('fingerprint_device_test_requests').select('id').eq('status','queued').order('requested_at',{ascending:true}).limit(1).maybeSingle();
+    if(nextError)throw nextError; if(!nextTest)return res.status(200).json({accepted:false}); testId=nextTest.id;
+   }
+   if(!/^[0-9a-f-]{36}$/i.test(testId))return res.status(400).json({error:'Invalid test id.'});
    const {data:pending,error:readError}=await client.from('fingerprint_device_test_requests').select('id,status,credential_revision_id').eq('id',testId).eq('status','queued').maybeSingle();
    if(readError)throw readError; if(!pending)return res.status(200).json({accepted:false});
    const {data:claimed,error:claimError}=await client.from('fingerprint_device_test_requests').update({status:'running'}).eq('id',testId).eq('status','queued').select('id').maybeSingle();
@@ -34,9 +39,20 @@ export default async function handler(req:any,res:any) {
    const {data,error}=await client.rpc('finish_fingerprint_device_test',{p_test_id:testId,p_result:result,p_result_message:messages[result]});
    if(error)throw error; if(!data)return res.status(409).json({error:'Test request is no longer active.'}); return res.status(200).json({ok:true,status:data});
   }
+  if(action==='claim_next') {
+   const cutoff=new Date(Date.now()-24*60*60*1000).toISOString();
+   const {data:queued,error:queuedError}=await client.from('fingerprint_import_jobs').select('id,requested_by,last_dispatched_at,date_from,date_to').eq('status','queued').gt('last_dispatched_at',cutoff).order('requested_at',{ascending:true}).limit(1).maybeSingle();
+   if(queuedError)throw queuedError; if(!queued)return res.status(200).json({accepted:false});
+   const {data:requester,error:profileError}=await client.from('profiles').select('role').eq('auth_id',queued.requested_by).single();
+   if(profileError)throw profileError; if(requester?.role!=='admin')return res.status(200).json({accepted:false});
+   const leaseToken=randomUUID(); const leaseExpires=new Date(Date.now()+5*60*1000).toISOString();
+   const {data,error}=await client.from('fingerprint_import_jobs').update({status:'running',lease_token:leaseToken,lease_expires_at:leaseExpires}).eq('id',queued.id).eq('requested_by',queued.requested_by).eq('status','queued').gt('last_dispatched_at',cutoff).select('id').maybeSingle();
+   if(error)throw error;
+   return res.status(200).json({accepted:!!data,jobId:data?.id||null,leaseToken:data?leaseToken:null,dateFrom:queued.date_from,dateTo:queued.date_to});
+  }
   if(typeof jobId!=='string'||!/^[0-9a-f-]{36}$/i.test(jobId))return res.status(400).json({error:'Invalid job id'});
-  if(action==='claim') { const {data:queued,error:queuedError}=await client.from('fingerprint_import_jobs').select('id,requested_by,last_dispatched_at').eq('id',jobId).eq('status','queued').maybeSingle(); if(queuedError)throw queuedError; if(!queued || Date.now()-Date.parse(queued.last_dispatched_at)>24*60*60*1000)return res.status(200).json({accepted:false}); const {data:requester,error:profileError}=await client.from('profiles').select('role').eq('auth_id',queued.requested_by).single(); if(profileError)throw profileError; if(requester?.role!=='admin')return res.status(200).json({accepted:false}); const leaseToken=randomUUID(); const leaseExpires=new Date(Date.now()+5*60*1000).toISOString(); const {data,error}=await client.from('fingerprint_import_jobs').update({status:'running',lease_token:leaseToken,lease_expires_at:leaseExpires}).eq('id',jobId).eq('requested_by',queued.requested_by).eq('status','queued').gt('last_dispatched_at',new Date(Date.now()-24*60*60*1000).toISOString()).select('id').maybeSingle(); if(error)throw error; return res.status(200).json({accepted:!!data,leaseToken:data?leaseToken:null}); }
-  const {data:job,error:readErr}=await client.from('fingerprint_import_jobs').select('id,status,lease_token,lease_expires_at').eq('id',jobId).maybeSingle(); if(readErr)throw readErr; if(!job||!['running','connecting','downloading','saving'].includes(job.status)||!body.leaseToken||body.leaseToken!==job.lease_token||Date.parse(job.lease_expires_at||'')<Date.now())return res.status(409).json({error:'Job is absent, unclaimed, expired, or owned by another connector attempt.'});
+  if(action==='claim') { const {data:queued,error:queuedError}=await client.from('fingerprint_import_jobs').select('id,requested_by,last_dispatched_at,date_from,date_to').eq('id',jobId).eq('status','queued').maybeSingle(); if(queuedError)throw queuedError; if(!queued || Date.now()-Date.parse(queued.last_dispatched_at)>24*60*60*1000)return res.status(200).json({accepted:false}); const {data:requester,error:profileError}=await client.from('profiles').select('role').eq('auth_id',queued.requested_by).single(); if(profileError)throw profileError; if(requester?.role!=='admin')return res.status(200).json({accepted:false}); const leaseToken=randomUUID(); const leaseExpires=new Date(Date.now()+5*60*1000).toISOString(); const {data,error}=await client.from('fingerprint_import_jobs').update({status:'running',lease_token:leaseToken,lease_expires_at:leaseExpires}).eq('id',jobId).eq('requested_by',queued.requested_by).eq('status','queued').gt('last_dispatched_at',new Date(Date.now()-24*60*60*1000).toISOString()).select('id').maybeSingle(); if(error)throw error; return res.status(200).json({accepted:!!data,leaseToken:data?leaseToken:null,dateFrom:queued.date_from,dateTo:queued.date_to}); }
+  const {data:job,error:readErr}=await client.from('fingerprint_import_jobs').select('id,status,lease_token,lease_expires_at,date_from,date_to').eq('id',jobId).maybeSingle(); if(readErr)throw readErr; if(!job||!['running','connecting','downloading','saving'].includes(job.status)||!body.leaseToken||body.leaseToken!==job.lease_token||Date.parse(job.lease_expires_at||'')<Date.now())return res.status(409).json({error:'Job is absent, unclaimed, expired, or owned by another connector attempt.'});
   if(action==='get_credential') {
    const serial=process.env.ZK_DEVICE_SERIAL||''; const ip=process.env.ZK_DEVICE_IP||''; const port=Number(process.env.ZK_DEVICE_PORT||'');
    if(!serial||!isIP(ip)||!Number.isInteger(port)||port<1||port>65535)return res.status(503).json({error:'Explicit K40 serial, address, and port must be configured server-side.'});
@@ -51,7 +67,9 @@ export default async function handler(req:any,res:any) {
    if(job.status!=='downloading')return res.status(409).json({error:'Attendance payload already received or job is not downloading.'});
    if(body.serial!==(process.env.ZK_DEVICE_SERIAL||'')||!Array.isArray(body.records)||body.records.length>50000)return res.status(400).json({error:'Invalid device payload.'});
    const rows:any[]=[]; let rejected=0;
-   for(const r of body.records){ const uid=String(r?.user_id??'').trim(); const dt=typeof r?.record_time==='string'?r.record_time:''; const timestamp=Date.parse(dt); if(!uid||uid.length>64||!Number.isFinite(timestamp)){rejected++;continue;}
+   const fromTimestamp=job.date_from?Date.parse(`${job.date_from}T00:00:00.000+03:00`):Number.NEGATIVE_INFINITY;
+   const toTimestamp=job.date_to?Date.parse(`${job.date_to}T23:59:59.999+03:00`):Number.POSITIVE_INFINITY;
+   for(const r of body.records){ const uid=String(r?.user_id??'').trim(); const dt=typeof r?.record_time==='string'?r.record_time:''; const timestamp=Date.parse(dt); if(!uid||uid.length>64||!Number.isFinite(timestamp)){rejected++;continue;} if(timestamp<fromTimestamp||timestamp>toTimestamp)continue;
      const sourceId=r.sn==null?null:String(r.sn); const key=sourceId?`sn:${sourceId}`:digest({uid,record_time:dt,type:r.type??null,state:r.state??null});
      rows.push({device_serial:body.serial,source_record_id:sourceId,fingerprint_user_id:uid,occurred_at:new Date(timestamp).toISOString(),punch_status:r.state==null?null:String(r.state),event_type:r.type==null?null:String(r.type),raw_event:r,dedupe_key:key,import_job_id:jobId,mapping_status:'review'});
    }
