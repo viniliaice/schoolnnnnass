@@ -48,7 +48,7 @@
     "supabase": "^1.153.4",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",
-    "vite": "7.2.4",
+    "vite": "7.3.7",
     "vite-plugin-singlefile": "2.3.0",
     "vitest": "4.1.4"
   }
