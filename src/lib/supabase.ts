@@ -105,6 +105,9 @@ const demoProfiles: any[] = [
   // never submits the current week — the "Not Submitted" case.
   { id: 'teacher-4', name: 'Mr. Abdirahman', email: 'abdirahman@mbk.edu', role: 'teacher', phone1: null, phone2: null, assignedClasses: ['Grade 4-A'], assignedSubjects: ['Social Studies'], createdAt: '2026-06-01', auth_id: 'auth-teacher-4' },
   { id: 'supervisor-1', name: 'Mr. Bashir (Supervisor)', email: 'supervisor@mbk.edu', role: 'supervisor', phone1: null, phone2: null, assignedClasses: [], assignedSubjects: [], createdAt: '2026-06-01', auth_id: 'auth-supervisor-1' },
+  // Office / gate staff — preview parity with the real office role: gate,
+  // family-ID browse + print, the no-parent worklist, parent accounts.
+  { id: 'office-1', name: 'Umal (Office)', email: 'office@mbk.edu', role: 'office', phone1: null, phone2: null, assignedClasses: [], assignedSubjects: [], createdAt: '2026-06-01', auth_id: 'auth-office-1' },
 ];
 
 /**

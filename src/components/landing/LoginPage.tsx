@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useRole } from '../../context/RoleContext';
+import { isPlaceholderEnv } from '../../lib/supabase';
 import { useToast } from '../../context/ToastContext';
 import { Mail, Lock, Eye, EyeOff, ArrowRight } from 'lucide-react';
 import { cn } from '../../utils/cn';
@@ -117,6 +118,40 @@ export function LoginPage() {
               )}
             </button>
           </form>
+
+          {/* Preview only (no .env / mock backend): one-click demo emails so
+              every role can be checked without remembering them. Never shown
+              against the real Supabase project. Any password is accepted. */}
+          {isPlaceholderEnv && (
+            <div className="mt-5 rounded-xl border border-dashed border-indigo-300 bg-indigo-50/70 p-3">
+              <p className="text-xs font-bold text-indigo-900">
+                Preview mode — demo sign-ins (any password)
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {[
+                  ['Office', 'office@mbk.edu'],
+                  ['Admin', 'admin@mbk.edu'],
+                  ['Supervisor', 'supervisor@mbk.edu'],
+                  ['Teacher', 'fatima@mbk.edu'],
+                  ['Parent', 'parent1@example.com'],
+                ].map(([role, demoEmail]) => (
+                  <button
+                    key={demoEmail}
+                    type="button"
+                    onClick={() => setEmail(demoEmail)}
+                    className={cn(
+                      'rounded-full border px-2.5 py-1 text-[11px] font-semibold transition',
+                      email === demoEmail
+                        ? 'border-indigo-600 bg-indigo-600 text-white'
+                        : 'border-indigo-300 bg-white text-indigo-800 hover:bg-indigo-100',
+                    )}
+                  >
+                    {role}: {demoEmail}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Footer */}
