@@ -23,6 +23,11 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   // Family-ID browse/print page — office may VIEW + print + lookup.
   '/admin/family-ids': ['admin', 'supervisor', 'office'],
 
+  // "No parent" worklist — active students with no parent account linked.
+  // Read-only for every role that can already see Family IDs; fixing a student
+  // stays in Manage Students (assign_student_parent is admin + office).
+  '/admin/family-ids/no-parent': ['admin', 'supervisor', 'office'],
+
   // Driver management (back-office): admin + office manage the authorized
   // pickup list. supervisor is deliberately excluded — a whole-school
   // driver→student→family browse would leak mappings beyond their

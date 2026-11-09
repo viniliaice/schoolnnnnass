@@ -3048,6 +3048,38 @@ function createMockSupabase(): SupabaseClient {
       return { data: base, error: null };
     }
 
+    // ── Family IDs — split a merged family (preview parity) ────────────────
+    // Mirrors split_family_members(): same guards, same MAX+1 allocation, but
+    // on the in-memory demo roster so the preview can demonstrate the repair.
+    if (fn === 'split_family_members') {
+      const digits = (value: unknown) => String(value ?? '').replace(/\D/g, '');
+      const familyId = digits(params?.p_family_id);
+      const ids = Array.isArray(params?.p_student_ids) ? [...new Set(params.p_student_ids.map(String))] : [];
+      if (!familyId) return { data: null, error: { message: 'A family ID is required.', code: '22023' } };
+      if (ids.length === 0) return { data: null, error: { message: 'Choose at least one student to move.', code: '22023' } };
+      const members = (demoStudents as any[]).filter(
+        s => digits(s.familyId) === familyId && s.transport !== 'LEFT',
+      );
+      if (!ids.every(id => members.some(s => s.id === id))) {
+        return { data: null, error: { message: `Only students currently in family ${familyId} can be split from it.`, code: '22023' } };
+      }
+      if (members.length <= ids.length) {
+        return { data: null, error: { message: `Leave at least one student in family ${familyId}.`, code: '22023' } };
+      }
+      const highest = (demoStudents as any[]).reduce((max: number, s) => {
+        const value = digits(s.familyId);
+        return /^\d{1,4}$/.test(value) ? Math.max(max, Number(value)) : max;
+      }, 0);
+      const newFamilyId = String(highest + 1).padStart(4, '0');
+      for (const s of demoStudents as any[]) {
+        if (ids.includes(s.id)) s.familyId = newFamilyId;
+      }
+      return {
+        data: { familyId, newFamilyId, studentsMoved: ids.length, remaining: members.length - ids.length },
+        error: null,
+      };
+    }
+
     // For class_students_for_term etc fallback
     return { data: null, error: { message: `Mock RPC ${fn} not implemented`, code: 'PGRST202' } };
 

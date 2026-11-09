@@ -6,7 +6,7 @@
 // PrintCardsDialog; none of them can generate a Family ID.
 
 import { useMemo, useState } from 'react';
-import { Pencil, Printer, Search, Users } from 'lucide-react';
+import { AlertTriangle, Pencil, Printer, Search, Split, Users } from 'lucide-react';
 import { displayFamilyId, formatGradeLabel, transportLabel } from '../../../lib/transport';
 import {
   buildFamilyRows, classOptions, familyRowMatches, familyRowMatchesClass,
@@ -15,6 +15,8 @@ import {
 } from '../../../lib/print/familyRows';
 import { PrintCardsDialog, type DialogSource } from './PrintCardsDialog';
 import { EditTransportDialog } from './EditTransportDialog';
+import { SplitFamilyDialog } from './SplitFamilyDialog';
+import { familyParentIds } from '../../../lib/db/familyIds';
 import { cn } from '../../../utils/cn';
 import type { Student } from '../../../types';
 
@@ -26,6 +28,8 @@ export function FamiliesTable({
   onRetry,
   canEditTransport = false,
   onEditTransport,
+  canSplitFamily = false,
+  onSplitFamily,
 }: {
   students: Student[];
   parentNames?: Map<string, string>;
@@ -36,6 +40,12 @@ export function FamiliesTable({
   /** Admin-only: show the per-student transport edit control (SQL also enforces). */
   canEditTransport?: boolean;
   onEditTransport?: (studentId: string, transport: string) => Promise<void>;
+  /**
+   * Admin-only: show the "Split…" action that moves students out of a merged
+   * family onto a new Family ID. SQL re-checks the role.
+   */
+  canSplitFamily?: boolean;
+  onSplitFamily?: (familyId: string, studentIds: string[]) => Promise<void>;
 }) {
   const [query, setQuery] = useState('');
   const [transport, setTransport] = useState<TransportSelection>('all');
@@ -43,6 +53,7 @@ export function FamiliesTable({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dialog, setDialog] = useState<DialogSource | null>(null);
   const [editing, setEditing] = useState<Student | null>(null);
+  const [splitting, setSplitting] = useState<FamilyRow | null>(null);
 
   const rows = useMemo(() => buildFamilyRows(students, parentNames), [students, parentNames]);
   const filtered = useMemo(
@@ -317,6 +328,8 @@ export function FamiliesTable({
                   }
                   canEdit={canEditTransport}
                   onEdit={setEditing}
+                  canSplit={canSplitFamily}
+                  onSplit={() => setSplitting(row)}
                 />
               ))}
             </tbody>
@@ -333,6 +346,18 @@ export function FamiliesTable({
         }}
       />
 
+      <SplitFamilyDialog
+        open={splitting !== null}
+        familyId={splitting?.familyId ?? ''}
+        students={splitting?.students ?? []}
+        parentNames={parentNames}
+        onClose={() => setSplitting(null)}
+        onSplit={async (familyId, studentIds) => {
+          if (!onSplitFamily) throw new Error('Splitting is admin-only.');
+          await onSplitFamily(familyId, studentIds);
+        }}
+      />
+
       <PrintCardsDialog
         open={dialog !== null}
         onClose={() => setDialog(null)}
@@ -344,11 +369,15 @@ export function FamiliesTable({
 }
 
 function FamilyTableRow({
-  row, selected, onToggle, onPrint, canEdit, onEdit,
+  row, selected, onToggle, onPrint, canEdit, onEdit, canSplit, onSplit,
 }: {
   row: FamilyRow; selected: boolean; onToggle: () => void; onPrint: () => void;
   canEdit?: boolean; onEdit?: (student: Student) => void;
+  canSplit?: boolean; onSplit?: () => void;
 }) {
+  // Exact, data-backed merge signal: more than one parent account inside one
+  // Family ID. Names are spelled inconsistently, so they are never used here.
+  const parentCount = familyParentIds(row.students).length;
   return (
     <tr className={cn('border-t border-slate-100 align-top', selected && 'bg-emerald-50/60')}>
       <td className="px-3 py-2">
@@ -360,7 +389,17 @@ function FamilyTableRow({
           className="h-4 w-4 accent-emerald-700"
         />
       </td>
-      <td className="px-3 py-2 font-mono font-bold text-emerald-900">{row.displayId}</td>
+      <td className="px-3 py-2 font-mono font-bold text-emerald-900">
+        {row.displayId}
+        {parentCount > 1 && (
+          <div
+            className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-100 px-1.5 py-0.5 font-sans text-[10px] font-bold text-amber-800"
+            title={`${parentCount} parent accounts share this Family ID — check for a merged household`}
+          >
+            <AlertTriangle className="h-2.5 w-2.5" /> {parentCount} parents
+          </div>
+        )}
+      </td>
       <td className="px-3 py-2">
         <div className="font-medium text-slate-800">{row.parentName || '—'}</div>
         {row.parentPhone && <div className="text-slate-400">{row.parentPhone}</div>}
@@ -398,12 +437,28 @@ function FamilyTableRow({
         ))}
       </td>
       <td className="px-3 py-2 text-right">
-        <button
-          onClick={onPrint}
-          className="inline-flex items-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 transition hover:border-emerald-600 hover:text-emerald-800"
-        >
-          <Printer className="h-3.5 w-3.5" /> Print
-        </button>
+        <div className="flex flex-col items-stretch gap-1">
+          <button
+            onClick={onPrint}
+            className="inline-flex items-center justify-center gap-1 rounded-lg border border-slate-300 bg-white px-2.5 py-1 text-xs font-bold text-slate-700 transition hover:border-emerald-600 hover:text-emerald-800"
+          >
+            <Printer className="h-3.5 w-3.5" /> Print
+          </button>
+          {canSplit && onSplit && row.studentCount > 1 && (
+            <button
+              onClick={onSplit}
+              title="Move students of another household onto a new Family ID"
+              className={cn(
+                'inline-flex items-center justify-center gap-1 rounded-lg border px-2.5 py-1 text-xs font-bold transition',
+                parentCount > 1
+                  ? 'border-amber-400 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                  : 'border-slate-300 bg-white text-slate-600 hover:border-slate-500',
+              )}
+            >
+              <Split className="h-3.5 w-3.5" /> Split
+            </button>
+          )}
+        </div>
       </td>
     </tr>
   );

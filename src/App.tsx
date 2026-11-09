@@ -171,6 +171,7 @@ function AppContent() {
             case '/admin/academic': return <ManageAcademic />;
             case '/admin/bulk': return <BulkUpload />;
             case '/admin/family-ids': return <FamilyIds mode="browse" navigate={navigate} />;
+            case '/admin/family-ids/no-parent': return <FamilyIds mode="no-parent" navigate={navigate} />;
             case '/admin/family-ids/setup': return <FamilyIds mode="setup" navigate={navigate} />;
             case '/admin/drivers': return <ManageDrivers />;
             case '/directory': return <StudentDirectory />;
@@ -224,6 +225,7 @@ function AppContent() {
             switch (currentPath) {
               case '/gate': return <GateScreen navigate={navigate} />;
               case '/admin/family-ids': return <FamilyIds mode="browse" navigate={navigate} />;
+              case '/admin/family-ids/no-parent': return <FamilyIds mode="no-parent" navigate={navigate} />;
               case '/directory': return <StudentDirectory />;
               case '/dashboard': return <SupervisorDashboard />;
               case '/supervisor/students': return <TeacherStudents />;
@@ -274,6 +276,7 @@ function AppContent() {
             case '/admin/students': return <ManageStudents />;
             case '/gate': return <GateScreen navigate={navigate} />;
             case '/admin/family-ids': return <FamilyIds mode="browse" navigate={navigate} />;
+            case '/admin/family-ids/no-parent': return <FamilyIds mode="no-parent" navigate={navigate} />;
             case '/admin/drivers': return <ManageDrivers />;
             case '/directory': return <StudentDirectory />;
             case '/messages': return <MessagesPage />;

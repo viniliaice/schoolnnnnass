@@ -30,7 +30,7 @@ describe('canAccessRoute — office role', () => {
 
   it('every guarded route is listed in ROUTE_ACCESS', () => {
     expect(Object.keys(ROUTE_ACCESS).sort()).toEqual([
-      '/admin/class-import', '/admin/drivers', '/admin/duplicate-students', '/admin/family-ids', '/admin/family-ids/setup',
+      '/admin/class-import', '/admin/drivers', '/admin/duplicate-students', '/admin/family-ids', '/admin/family-ids/no-parent', '/admin/family-ids/setup',
       '/admin/former-students', '/admin/grade-corrections', '/admin/lesson-plan-submissions', '/admin/lesson-plans',
       '/admin/monitor-marks', '/admin/student-cleanup', '/admin/students', '/admin/users', '/directory', '/gate', '/supervisor/lesson-plan-submissions',
       '/supervisor/lesson-plans', '/supervisor/monitor-marks',
@@ -68,6 +68,20 @@ describe('former students routes are admin-only', () => {
     expect(canAccessRoute('admin', '/admin/former-students')).toBe(true);
     for (const role of ['supervisor', 'office', 'teacher', 'parent'] as const) {
       expect(canAccessRoute(role, '/admin/former-students'), role).toBe(false);
+    }
+  });
+});
+
+describe('no-parent worklist route', () => {
+  it('is readable by every role that can already open Family IDs', () => {
+    for (const role of ['admin', 'supervisor', 'office'] as const) {
+      expect(canAccessRoute(role, '/admin/family-ids/no-parent'), role).toBe(true);
+    }
+  });
+
+  it('stays closed to teachers and parents', () => {
+    for (const role of ['teacher', 'parent'] as const) {
+      expect(canAccessRoute(role, '/admin/family-ids/no-parent'), role).toBe(false);
     }
   });
 });

@@ -5,7 +5,7 @@ import {
   LayoutDashboard, Users, ClipboardCheck, GraduationCap, FileText,
   FileSpreadsheet, Upload, LogOut, Menu, X, BookOpen, ChevronRight,
   Calendar, FileBarChart, Award, DatabaseBackup, BellRing, Mail, Activity, ArrowUpDown,
-  CalendarCheck, CalendarRange, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil, ListChecks, BarChart3, GitMerge, UsersRound, Copy, Download, UserMinus, FileUp
+  CalendarCheck, CalendarRange, BookOpenCheck, HelpCircle, NotepadText, Layers, ShieldCheck, CreditCard, CarFront, ArrowLeftRight, Pencil, ListChecks, BarChart3, GitMerge, UsersRound, Copy, Download, UserMinus, FileUp, UserRoundX
 } from 'lucide-react';
 import { cn } from '../../utils/cn';
 import { ThemeSwitcher } from '../ui/ThemeSwitcher';
@@ -106,6 +106,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Grade Quizzes', icon: ClipboardCheck, path: '/supervisor/grade-quizzes' },
     { label: 'Dismissal Gate', icon: ShieldCheck, path: '/gate' },
     { label: 'Family IDs', icon: CreditCard, path: '/admin/family-ids' },
+    { label: 'No-Parent Students', icon: UserRoundX, path: '/admin/family-ids/no-parent' },
     { label: 'Student Directory', icon: Users, path: '/directory' },
   ],
   office: [
@@ -114,6 +115,7 @@ const navItems: Record<Role, NavItem[]> = {
     { label: 'Manage Students', icon: GraduationCap, path: '/admin/students' },
     { label: 'Dismissal Gate', icon: ShieldCheck, path: '/gate' },
     { label: 'Family IDs', icon: CreditCard, path: '/admin/family-ids' },
+    { label: 'No-Parent Students', icon: UserRoundX, path: '/admin/family-ids/no-parent' },
     { label: 'Manage Drivers', icon: CarFront, path: '/admin/drivers' },
     { label: 'Student Directory', icon: Users, path: '/directory' },
     { label: 'Messages', icon: Mail, path: '/messages' },
