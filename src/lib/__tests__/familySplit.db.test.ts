@@ -4,7 +4,7 @@
 //
 // The split is a write path that can move a child onto a different dismissal
 // card, so its guards must be executed, not inferred:
-//   * admin only,
+//   * admin + office only (office was granted the repair on 2026-11-09),
 //   * every selected student must currently be in the family being split,
 //   * a family must keep at least one student,
 //   * the new number is allocated (MAX+1, 4 digits) under the generator lock,
@@ -22,10 +22,11 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '../../..');
-const MIGRATION = fs.readFileSync(
-  path.join(ROOT, 'supabase/migrations/20261109_split_family_members.sql'),
-  'utf8',
-);
+// Applied in order: the feature, then the migration that opens it to office.
+const MIGRATIONS = [
+  '20261109_split_family_members.sql',
+  '20261109b_office_split_family.sql',
+].map(name => fs.readFileSync(path.join(ROOT, 'supabase/migrations', name), 'utf8'));
 
 const ADMIN_UID = '11111111-1111-1111-1111-111111111111';
 const OFFICE_UID = '22222222-2222-2222-2222-222222222222';
@@ -155,18 +156,18 @@ beforeAll(async () => {
       ('s-other','Other Family Child','Grade 3-A','parent-a',NULL,'WALKER','0678')
   `);
 
-  await pg.exec(MIGRATION);
+  for (const migration of MIGRATIONS) await pg.exec(migration);
   await runAs(ADMIN_UID);
 });
 
 afterAll(async () => { await pg?.close(); });
 
 describe('split_family_members (20261109)', () => {
-  it('refuses non-admin callers and writes nothing', async () => {
-    for (const uid of [OFFICE_UID, TEACHER_UID, null]) {
+  it('refuses callers that are neither admin nor office, and writes nothing', async () => {
+    for (const uid of [TEACHER_UID, null]) {
       await runAs(uid);
       const message = await splitError('0305', ['s-akram']);
-      expect(message).toMatch(/only admins may split/i);
+      expect(message).toMatch(/only administrators or office users may split/i);
     }
     await runAs(ADMIN_UID);
     expect(await familyOf('s-akram')).toBe('0305');
@@ -175,7 +176,8 @@ describe('split_family_members (20261109)', () => {
     expect(after.rows[0].n).toBe(0);
   });
 
-  it('moves only the chosen students onto a new 4-digit ID and leaves the rest', async () => {
+  it('lets OFFICE staff split the reported family, audited with their role', async () => {
+    await runAs(OFFICE_UID);
     const result = await split('MBK-0305', ['s-akram', 's-safa', 's-sudaysi', 's-marwa']);
 
     // 0678 is the highest existing number -> 0679.
@@ -201,11 +203,13 @@ describe('split_family_members (20261109)', () => {
     );
     expect(moved.rows[0]).toMatchObject({ parentId: 'parent-b', transport: 'WALKER' });
 
-    // Audited.
+    // Audited, including who acted and in what role.
     const audit = await pg.query(
       `SELECT details FROM public.audit_logs WHERE action = 'family_ids.split' ORDER BY id DESC LIMIT 1`,
     );
     expect(audit.rows[0].details).toMatchObject({
+      by: 'office-1',
+      byRole: 'office',
       familyId: '0305',
       newFamilyId: '0679',
       studentsMoved: 4,
@@ -214,18 +218,21 @@ describe('split_family_members (20261109)', () => {
   });
 
   it('rejects a student who is not in the family being split', async () => {
+    await runAs(OFFICE_UID);
     const message = await splitError('0305', ['s-akram']); // now in 0679
     expect(message).toMatch(/currently in family 0305/i);
     expect(await familyOf('s-akram')).toBe('0679');
   });
 
   it('rejects moving the whole family', async () => {
+    await runAs(OFFICE_UID);
     const message = await splitError('0305', ['s-barwaaqo', 's-cabdiraxmaan', 's-cabdiwaasac', 's-cawale']);
     expect(message).toMatch(/leave at least one student/i);
     expect(await familyOf('s-barwaaqo')).toBe('0305');
   });
 
   it('ignores a malformed historical ID when allocating the next number', async () => {
+    await runAs(ADMIN_UID);
     // The old override bug allowed IDs longer than 4 digits; they must not
     // break MAX()::INTEGER for this or any later split.
     await pg.query(`INSERT INTO public.students(id,name,"className",transport,"familyId") VALUES
@@ -235,5 +242,12 @@ describe('split_family_members (20261109)', () => {
     expect(result.newFamilyId).toBe('0680');
     expect(result.remaining).toBe(3);
     expect(await familyOf('s-marwa')).toBe('0680');
+  });
+
+  it('still lets admins split', async () => {
+    await runAs(ADMIN_UID);
+    const result = await split('0679', ['s-safa']);
+    expect(result).toMatchObject({ newFamilyId: '0681', studentsMoved: 1, remaining: 2 });
+    expect(await familyOf('s-safa')).toBe('0681');
   });
 });
