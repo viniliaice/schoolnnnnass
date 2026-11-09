@@ -1,7 +1,7 @@
 // Office landing — gate staff (Umal, Maxamed, Abdurahman) land here after
 // login and jump to the three read/lookup tools they're allowed to use.
 
-import { ShieldCheck, Users, CreditCard } from 'lucide-react';
+import { ShieldCheck, Users, CreditCard, UserRoundX } from 'lucide-react';
 
 const TOOLS: { path: string; title: string; so: string; desc: string; icon: typeof ShieldCheck }[] = [
   {
@@ -19,6 +19,13 @@ const TOOLS: { path: string; title: string; so: string; desc: string; icon: type
     icon: CreditCard,
   },
   {
+    path: '/admin/family-ids/no-parent',
+    title: 'No-Parent Students',
+    so: 'Ardayda aan waalid lahayn',
+    desc: 'Active students with no parent account linked. Read-only follow-up list.',
+    icon: UserRoundX,
+  },
+  {
     path: '/directory',
     title: 'Student Directory',
     so: 'Liiska ardayda',
@@ -34,7 +41,7 @@ export function OfficeDashboard({ navigate }: { navigate: (path: string) => void
         <h1 className="text-2xl font-bold text-slate-900">Office Dashboard</h1>
         <p className="text-sm text-slate-500">Gate & dismissal tools — read/lookup only.</p>
       </div>
-      <div className="grid gap-4 sm:grid-cols-3">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         {TOOLS.map(tool => (
           <button
             key={tool.path}

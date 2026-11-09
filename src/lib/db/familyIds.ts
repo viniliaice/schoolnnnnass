@@ -141,6 +141,42 @@ export async function assignFamilyOverride(studentId: string, familyId: string):
   }
 }
 
+export interface SplitFamilyResult {
+  familyId: string;
+  newFamilyId: string;
+  studentsMoved: number;
+  remaining: number;
+}
+
+/**
+ * Separate a merged family (admin only — enforced in SQL).
+ *
+ * Moves exactly the given students onto a brand-new next-numbered Family ID.
+ * The number is allocated server-side under the generator's advisory lock, so
+ * nobody has to invent one by hand (the old per-student override flow), and two
+ * admins can never be handed the same number.
+ *
+ * Used by the Family IDs table's "Split…" action after a family is found to
+ * hold two households — e.g. two parent accounts in one MBK number.
+ */
+export async function splitFamilyMembers(familyId: string, studentIds: string[]): Promise<SplitFamilyResult> {
+  const digits = normalizeFamilyIdInput(familyId);
+  const ids = [...new Set((studentIds ?? []).filter(Boolean))];
+  if (!digits) throw new Error('A family ID is required.');
+  if (ids.length === 0) throw new Error('Choose at least one student to move.');
+
+  const { data, error } = await supabase.rpc('split_family_members', {
+    p_family_id: digits,
+    p_student_ids: ids,
+  });
+  if (error) {
+    console.error(`${LOG} split_family_members failed`, { familyId: digits, ids, ...errInfo(error) });
+    throw error;
+  }
+  console.log(`${LOG} split_family_members ok`, { familyId: digits, ...data });
+  return data as SplitFamilyResult;
+}
+
 export interface ApplyTransportResult {
   applied: number;
   skipped: number;
@@ -246,6 +282,37 @@ export function groupStudentsByFamily(students: Student[]): Map<string, Student[
 /** Students who have no family ID and no grouping key (parentId or phone). */
 export function findUnattached(students: Student[]): Student[] {
   return students.filter(s => !s.familyId && !s.parentId && !normalizePhone(s.parentPhone) && s.transport !== 'LEFT');
+}
+
+/**
+ * Active students with NO parent account linked (`parentId` is null).
+ *
+ * This is the office worklist: a student without a parent account cannot sign
+ * in to the parent portal, gets no parent-visible report cards, and can only be
+ * grouped into a family by their phone number at Generate time — the exact
+ * situation that produces merged families when a number is shared. Families
+ * are not required for this check: most of these students already hold an ID.
+ *
+ * LEFT (leavers) and former students are excluded: they are not the working
+ * roster. The caller decides which roster it loads.
+ */
+export function findStudentsWithoutParent(students: Student[]): Student[] {
+  return students.filter(s =>
+    !s.parentId &&
+    s.transport !== 'LEFT' &&
+    s.status !== 'former',
+  );
+}
+
+/**
+ * Distinct parent accounts inside one family, sorted for stable rendering.
+ * More than one means the Family ID currently covers two logins — either a
+ * merged household (split it) or one household with two parent accounts
+ * (leave it). It is the only reliable merge signal in the data: names are
+ * spelled inconsistently, but parentId is exact.
+ */
+export function familyParentIds(students: Student[]): string[] {
+  return [...new Set(students.map(s => s.parentId).filter((id): id is string => !!id))].sort();
 }
 
 /** Students marked as left the school (transport = 'LEFT'). */

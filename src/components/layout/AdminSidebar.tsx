@@ -4,7 +4,7 @@ import {
   Bot, Calendar, CalendarCheck, CalendarRange, CarFront, ChevronDown, ClipboardCheck,
   CreditCard, DatabaseBackup, Eye, FileBarChart, FileCheck, FileSpreadsheet, FileUp, GitMerge,
   GraduationCap, HelpCircle, Layers, LayoutDashboard, ListChecks, LogOut, Mail, Megaphone,
-  Menu, NotepadText, PanelLeftClose, PanelLeftOpen, Pencil, ShieldCheck, UserMinus, Users, UsersRound, X,
+  Menu, NotepadText, PanelLeftClose, PanelLeftOpen, Pencil, ShieldCheck, UserMinus, UserRoundX, Users, UsersRound, X,
   type LucideIcon,
 } from 'lucide-react';
 import { useRole } from '../../context/RoleContext';
@@ -106,6 +106,7 @@ export const ADMIN_NAV_GROUPS: AdminNavGroup[] = [
     items: [
       { label: 'Dismissal Gate', path: '/gate', icon: ShieldCheck },
       { label: 'Family IDs', path: '/admin/family-ids', icon: CreditCard },
+      { label: 'No-Parent Students', path: '/admin/family-ids/no-parent', icon: UserRoundX },
       { label: 'Manage Drivers', path: '/admin/drivers', icon: CarFront },
       { label: 'Student Directory', path: '/directory', icon: Users },
     ],
@@ -138,6 +139,20 @@ export function isAdminRouteActive(currentPath: string, itemPath: string): boole
   if (currentPath === itemPath) return true;
   if (itemPath === '/dashboard') return false;
   return currentPath.startsWith(`${itemPath}/`);
+}
+
+/**
+ * The single nav item that should be highlighted for `currentPath`.
+ *
+ * Longest match wins: `/admin/family-ids/no-parent` is nested under
+ * `/admin/family-ids`, and prefix matching alone would light up BOTH the
+ * Families item and the No-Parent item. Nested pages with no nav item of their
+ * own (e.g. `/admin/family-ids/setup`) still highlight their parent.
+ */
+export function activeAdminNavPath(currentPath: string): string | null {
+  const matches = ADMIN_NAV_PATHS.filter(path => isAdminRouteActive(currentPath, path));
+  if (matches.length === 0) return null;
+  return matches.reduce((best, path) => (path.length > best.length ? path : best));
 }
 
 /** The group that owns `currentPath`, if any — drives auto-expansion. */
@@ -264,10 +279,13 @@ export function AdminSidebar({ currentPath, onNavigate }: AdminSidebarProps) {
   const initials = session.userName.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase();
   const navigationLabel = t('adminSidebar.navigation', 'Admin navigation');
 
+  // Computed once per render so exactly one item is highlighted.
+  const activeNavPath = activeAdminNavPath(currentPath);
+
   const renderItem = (item: AdminNavItem, options: { rail?: boolean } = {}) => {
     const { rail = false } = options;
     const label = t(`nav.${item.label}`, item.label);
-    const active = isAdminRouteActive(currentPath, item.path);
+    const active = activeNavPath === item.path;
     const Icon = item.icon;
     return (
       <button

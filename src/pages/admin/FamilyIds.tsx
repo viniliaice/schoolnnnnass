@@ -13,8 +13,9 @@ import { useToast } from '../../context/ToastContext';
 import { canEditTransport, canGenerateFamilyIds } from '../../lib/routing';
 import { getStudents } from '../../lib/db/students';
 import {
-  applyTransportImport, assignFamilyOverride, findLeftStudents, findUnattached,
+  applyTransportImport, assignFamilyOverride, findLeftStudents, findStudentsWithoutParent, findUnattached,
   generateFamilyIds, getParentNames, groupStudentsByFamily, markStudentLeft, setStudentTransport,
+  splitFamilyMembers,
   type GenerateSummary,
 } from '../../lib/db/familyIds';
 import {
@@ -27,6 +28,7 @@ import { displayFamilyId, transportLabel } from '../../lib/transport';
 import { FamilyCardsDocument, type CardLayout, type FamilyCardData } from '../../lib/print/familyCards';
 import { getFamilyCards } from '../../lib/db/familyCards';
 import { FamiliesTable } from './family-ids/FamiliesTable';
+import { NoParentStudents } from './family-ids/NoParentStudents';
 import { cn } from '../../utils/cn';
 import type { Student } from '../../types';
 
@@ -71,12 +73,14 @@ const SAMPLE_FAMILIES: FamilyCardData[] = [
   },
 ];
 
-export type FamilyIdsMode = 'browse' | 'setup';
+export type FamilyIdsMode = 'browse' | 'setup' | 'no-parent';
 
 /**
- * `/admin/family-ids`       → mode='browse' (admin/supervisor/office)
+ * `/admin/family-ids`            → mode='browse' (admin/supervisor/office)
  *     search, filter, select and print. No generation surface at all.
- * `/admin/family-ids/setup` → mode='setup' (admin only)
+ * `/admin/family-ids/no-parent`  → mode='no-parent' (admin/supervisor/office)
+ *     the office worklist: active students with no parent account linked.
+ * `/admin/family-ids/setup`      → mode='setup' (admin only)
  *     import the transport sheet, generate IDs, resolve exceptions.
  */
 export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode; navigate?: (path: string) => void } = {}) {
@@ -143,6 +147,7 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
 
   const groups = useMemo(() => groupStudentsByFamily(students), [students]);
   const unattached = useMemo(() => findUnattached(students), [students]);
+  const noParent = useMemo(() => findStudentsWithoutParent(students), [students]);
   const leftStudents = useMemo(() => findLeftStudents(students), [students]);
   const families = useMemo(() => Array.from(groups.entries()), [groups]);
   /**
@@ -330,6 +335,26 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
     }
   };
 
+  /**
+   * Separate a merged family: move the chosen students onto a fresh Family ID.
+   * The number is allocated in SQL under the generator lock, so it can never
+   * duplicate an existing family or race a Generate run. Admin-only (SQL too).
+   */
+  const handleSplitFamily = async (familyId: string, studentIds: string[]) => {
+    try {
+      const result = await splitFamilyMembers(familyId, studentIds);
+      addToast({
+        type: 'success',
+        title: `${result.studentsMoved} student${result.studentsMoved === 1 ? '' : 's'} moved to ${displayFamilyId(result.newFamilyId)}`,
+        description: `${displayFamilyId(result.familyId)} keeps ${result.remaining} student${result.remaining === 1 ? '' : 's'}. Parent accounts and transport were not changed.`,
+      });
+      await reload();
+    } catch (err) {
+      addToast({ type: 'error', title: 'Split failed', description: err instanceof Error ? err.message : undefined });
+      throw err;
+    }
+  };
+
   const handleOverride = async (studentId: string) => {
     const familyId = window.prompt('Family ID to assign (exactly 4 digits, e.g. 0043 — existing or new):');
     if (!familyId) return;
@@ -368,11 +393,13 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
           <p className="text-sm text-slate-500">
             {mode === 'setup'
               ? 'Admin only: import the transport sheet and generate MBK-#### per family.'
-              : 'Dismissal gate: find a family and print its card.'}
+              : mode === 'no-parent'
+                ? 'Office follow-up: active students with no parent account linked.'
+                : 'Dismissal gate: find a family and print its card.'}
           </p>
         </div>
         <div className="flex items-center gap-2">
-          {mode === 'browse' && canWrite && navigate && (
+          {mode !== 'setup' && canWrite && navigate && (
             <button
               onClick={() => navigate('/admin/family-ids/setup')}
               className="rounded-xl border border-slate-300 bg-white px-4 py-2 text-sm font-bold text-slate-700 transition hover:bg-slate-50"
@@ -391,6 +418,44 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
           <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-semibold text-emerald-800">Aqoonsiga qoyska</span>
         </div>
       </div>
+
+      {/* Tabs — browse surfaces. Deep links keep the tab in the URL so office
+          can bookmark "students without a parent". */}
+      {mode !== 'setup' && (
+        <div className="mb-5 flex flex-wrap gap-2 border-b border-slate-200 pb-2" role="tablist" aria-label="Family ID views">
+          <button
+            role="tab"
+            aria-selected={mode === 'browse'}
+            onClick={() => navigate?.('/admin/family-ids')}
+            className={cn(
+              'rounded-xl px-4 py-2 text-sm font-bold transition',
+              mode === 'browse'
+                ? 'bg-emerald-800 text-white shadow-sm'
+                : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+            )}
+          >
+            Families ({families.length})
+          </button>
+          <button
+            role="tab"
+            aria-selected={mode === 'no-parent'}
+            onClick={() => navigate?.('/admin/family-ids/no-parent')}
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-xl px-4 py-2 text-sm font-bold transition',
+              mode === 'no-parent'
+                ? 'bg-amber-700 text-white shadow-sm'
+                : 'border border-slate-300 bg-white text-slate-700 hover:bg-slate-50',
+            )}
+          >
+            No parent ({noParent.length})
+            {noParent.length > 0 && mode !== 'no-parent' && (
+              <span className="rounded-full bg-amber-200 px-1.5 text-[10px] font-black text-amber-900">
+                {noParent.length}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
 
       {/* How-to — setup only */}
       {mode === 'setup' && (
@@ -712,6 +777,20 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
             onRetry={() => void reload()}
             canEditTransport={canEditTransportHere}
             onEditTransport={handleTransport}
+            canSplitFamily={canWrite}
+            onSplitFamily={handleSplitFamily}
+          />
+        </div>
+      )}
+
+      {/* No parent — the office follow-up worklist (read-only) */}
+      {mode === 'no-parent' && (
+        <div className="mb-6">
+          <NoParentStudents
+            students={students}
+            loading={loading}
+            error={loadError}
+            onRetry={() => void reload()}
           />
         </div>
       )}
