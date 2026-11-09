@@ -149,7 +149,7 @@ export interface SplitFamilyResult {
 }
 
 /**
- * Separate a merged family (admin only — enforced in SQL).
+ * Separate a merged family (admin + office — enforced in SQL).
  *
  * Moves exactly the given students onto a brand-new next-numbered Family ID.
  * The number is allocated server-side under the generator's advisory lock, so

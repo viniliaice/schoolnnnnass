@@ -20,7 +20,8 @@ export const ROUTE_ACCESS: Record<string, Role[]> = {
   '/admin/users': ['admin', 'office'],
   '/admin/students': ['admin', 'office'],
 
-  // Family-ID browse/print page — office may VIEW + print + lookup.
+  // Family-ID browse/print page — office may VIEW + print + lookup, and split
+  // a merged family (canSplitFamily); generation stays admin-only.
   '/admin/family-ids': ['admin', 'supervisor', 'office'],
 
   // "No parent" worklist — active students with no parent account linked.
@@ -115,14 +116,34 @@ export function canGenerateFamilyIds(role: Role): boolean {
  * granting this one narrow write.
  *
  * This mirrors set_student_transport() (20260820_office_transport_edit.sql),
- * which raises insufficient_privilege for every other role. It is the ONLY
- * write office gains: generation, family override, mark-left and the sheet
- * import all remain admin-only, so print/search access still does not become
- * general student-write access.
+ * which raises insufficient_privilege for every other role. Together with the
+ * family split (canSplitFamily) it is the ONLY write office gains: generation,
+ * family override, mark-left and the sheet import all remain admin-only, so
+ * print/search access still does not become general student-write access.
  *
  * supervisor is deliberately excluded — a gate/oversight role, not data entry.
  * The client check is convenience only: SQL remains the enforcement point.
  */
 export function canEditTransport(role: Role): boolean {
+  return role === 'admin' || role === 'office';
+}
+
+/**
+ * Who may split a merged family onto a new Family ID.
+ *
+ * admin + office. The front desk is who notices a merged card (they print it
+ * and take the parent's call), so repairing it is front-desk work — the same
+ * reasoning as transport editing. This grants ONLY the split operation:
+ * generation, manual override, mark-left and the sheet import stay admin-only,
+ * and the RPC refuses every role outside ('admin','office').
+ *
+ * supervisor is excluded: a gate/oversight role, not data entry. Office can
+ * already view/print every family, so splitting adds no new visibility.
+ *
+ * Mirrors split_family_members() in
+ * supabase/migrations/20261109b_office_split_family.sql. The client check is
+ * convenience only — SQL remains the enforcement point.
+ */
+export function canSplitFamily(role: Role): boolean {
   return role === 'admin' || role === 'office';
 }

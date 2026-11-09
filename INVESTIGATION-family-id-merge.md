@@ -1,6 +1,12 @@
 # Investigation — Family ID MBK-0305 covers two households
 
-Date: 2026-11-09 · Branch: `arena/b8854764-schoolnnnnass` · Scope: `/admin/family-ids`, `generate_family_ids()`, `assign_student_parent()`, family-card printing.
+Date: 2026-11-09 · Branch: `arena/9fbe20fc-schoolnnnnass` (follow-up to `arena/b8854764-schoolnnnnass`, PR #83) · Scope: `/admin/family-ids`, `generate_family_ids()`, `split_family_members()`, `assign_student_parent()`, family-card printing.
+
+> **Update (same day).** Office staff can now perform the split themselves — the front desk is
+> who spots and prints a merged card, so requiring an admin turned a two-click repair into a
+> queue. `20261109b_office_split_family.sql` widens the RPC to `('admin','office')`; generation,
+> manual override, mark-left and the sheet import remain admin-only. Everything else in this
+> document is unchanged.
 
 ## 1. What was reported
 
@@ -95,7 +101,7 @@ There was no bulk, safe, or auditable "separate these students" operation.
 
 `supabase/migrations/20261109_split_family_members.sql`
 
-* **admin-only** (`current_profile_role() = 'admin'`, same rule as generate/override/mark-left);
+* **admin + office** (`current_profile_role() IN ('admin','office')`; generation, override, mark-left and the sheet import stay admin-only);
 * allocates the **next free number itself** under the same
   `pg_advisory_xact_lock('family_ids_generate')` as the generator — no manual typing, no collision,
   no race with a Generate run;
@@ -106,7 +112,7 @@ There was no bulk, safe, or auditable "separate these students" operation.
 * writes **only** `familyId`; parent account, phone, transport and status are untouched;
 * writes an audit row `family_ids.split` with the old ID, the new ID and the student ids.
 
-### 3.2 "Split…" in the Family IDs table (admin)
+### 3.2 "Split…" in the Family IDs table (admin + office)
 
 * `src/pages/admin/family-ids/SplitFamilyDialog.tsx` — groups the family's students **by parent
   account** (the only exact signal; Somali names are spelled inconsistently — `salebaan` /
@@ -132,7 +138,7 @@ There was no bulk, safe, or auditable "separate these students" operation.
 
 ## 4. Separate MBK-0305 — exact steps
 
-1. Open **Family IDs** (admin login) and search `0305` (or `MBK-0305`).
+1. Open **Family IDs** (admin **or office** login) and search `0305` (or `MBK-0305`).
 2. The row shows **"2 parents"**. Press **Split**.
 3. In the dialog choose the group that belongs to the other household. For the reported case the
    data splits cleanly as:
@@ -150,7 +156,8 @@ assigning students back with **Assign**.
 ## 5. Guardrails & follow-ups
 
 * **Printing is still non-mutating** — `get_family_cards()` is `STABLE`, and the split path is the
-  only place that changes an ID from this screen (admin-only, audited).
+  only place that changes an ID from this screen (admin + office, audited with the actor and
+  their role).
 * **Generator behaviour was deliberately not changed.** Auto-splitting phone-shared groups would
   create duplicate IDs for real siblings imported with a shared parent phone. Instead the ambiguity
   is now visible (parent-count badge) and repairable (Split).
@@ -166,11 +173,11 @@ assigning students back with **Assign**.
 
 | File | Covers |
 |---|---|
-| `src/lib/__tests__/familySplit.db.test.ts` | **Executes the shipped migration on real PostgreSQL (PGlite)**: admin-only, membership guard, leave-one guard, `MAX+1` 4-digit allocation, only `familyId` changes, audit row, malformed legacy ID cannot break allocation. |
-| `src/lib/__tests__/splitFamilyDialog.page.test.tsx` | the reported MBK-0305 shape end-to-end: "2 parents" badge → Split → group by parent account → RPC called with the chosen ids; the whole-family move is blocked; office never sees the action. |
+| `src/lib/__tests__/familySplit.db.test.ts` | **Executes both shipped migrations on real PostgreSQL (PGlite)**: office can split while teacher/anon cannot, membership guard, leave-one guard, `MAX+1` 4-digit allocation, only `familyId` changes, audit row (with `byRole`), malformed legacy ID cannot break allocation, admin still works. |
+| `src/lib/__tests__/splitFamilyDialog.page.test.tsx` | the reported MBK-0305 shape end-to-end: "2 parents" badge → Split → group by parent account → RPC called with the chosen ids; the whole-family move is blocked; office sees the action (but not Generate) while a supervisor does not. |
 | `src/lib/__tests__/familyMergeSplit.test.ts` | no-parent filtering (LEFT/former excluded), distinct parent accounts per family, split RPC client contract (normalization, dedupe, empty selection, server error). |
 | `src/lib/__tests__/noParentStudents.page.test.tsx` | the tab renders only parentless active students, reports "already have"/"still need" counts, and never exposes the print surface. |
-| `src/lib/__tests__/routing.test.ts` | `/admin/family-ids/no-parent` is open to admin/supervisor/office and closed to teacher/parent. |
+| `src/lib/__tests__/routing.test.ts` | `/admin/family-ids/no-parent` is open to admin/supervisor/office and closed to teacher/parent; `canSplitFamily` allows admin + office only and does not widen generation. |
 
 Preview parity: `src/lib/supabase.ts` now implements `split_family_members` on the in-memory
 demo roster (same guards and `MAX+1` allocation), so the split flow can be demonstrated without a

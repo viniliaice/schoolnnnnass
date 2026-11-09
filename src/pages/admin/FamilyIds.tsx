@@ -10,7 +10,7 @@ import { pdf } from '@react-pdf/renderer';
 import { HelpCircle, ChevronDown, Download, Upload } from 'lucide-react';
 import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
-import { canEditTransport, canGenerateFamilyIds } from '../../lib/routing';
+import { canEditTransport, canGenerateFamilyIds, canSplitFamily } from '../../lib/routing';
 import { getStudents } from '../../lib/db/students';
 import {
   applyTransportImport, assignFamilyOverride, findLeftStudents, findStudentsWithoutParent, findUnattached,
@@ -88,6 +88,8 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
   const { session } = useRole();
   const canWrite = !!session && canGenerateFamilyIds(session.role);
   const canEditTransportHere = !!session && canEditTransport(session.role);
+  // Splitting a merged family is front-desk work: admin + office (SQL re-checks).
+  const canSplitFamilyHere = !!session && canSplitFamily(session.role);
   const [students, setStudents] = useState<Student[]>([]);
   const [parentNames, setParentNames] = useState<Map<string, string>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -338,7 +340,8 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
   /**
    * Separate a merged family: move the chosen students onto a fresh Family ID.
    * The number is allocated in SQL under the generator lock, so it can never
-   * duplicate an existing family or race a Generate run. Admin-only (SQL too).
+   * duplicate an existing family or race a Generate run. Admin + office (SQL
+   * re-checks the role).
    */
   const handleSplitFamily = async (familyId: string, studentIds: string[]) => {
     try {
@@ -777,7 +780,7 @@ export function FamilyIds({ mode = 'browse', navigate }: { mode?: FamilyIdsMode;
             onRetry={() => void reload()}
             canEditTransport={canEditTransportHere}
             onEditTransport={handleTransport}
-            canSplitFamily={canWrite}
+            canSplitFamily={canSplitFamilyHere}
             onSplitFamily={handleSplitFamily}
           />
         </div>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canAccessRoute, canGenerateFamilyIds, DEFAULT_ROUTE, ROUTE_ACCESS } from '../routing';
+import { canAccessRoute, canGenerateFamilyIds, canSplitFamily, DEFAULT_ROUTE, ROUTE_ACCESS } from '../routing';
 
 describe('canAccessRoute — office role', () => {
   it('allows office on /gate, /admin/family-ids, and /directory', () => {
@@ -69,6 +69,24 @@ describe('former students routes are admin-only', () => {
     for (const role of ['supervisor', 'office', 'teacher', 'parent'] as const) {
       expect(canAccessRoute(role, '/admin/former-students'), role).toBe(false);
     }
+  });
+});
+
+describe('splitting a merged family — admin + office', () => {
+  it('is front-desk work: admin and office may split', () => {
+    expect(canSplitFamily('admin')).toBe(true);
+    expect(canSplitFamily('office')).toBe(true);
+  });
+
+  it('stays closed to supervisor, teacher and parent', () => {
+    for (const role of ['supervisor', 'teacher', 'parent'] as const) {
+      expect(canSplitFamily(role), role).toBe(false);
+    }
+  });
+
+  it('does not widen any other family-ID write: generation is still admin-only', () => {
+    expect(canGenerateFamilyIds('office')).toBe(false);
+    expect(canGenerateFamilyIds('admin')).toBe(true);
   });
 });
 

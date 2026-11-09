@@ -41,8 +41,8 @@ export function FamiliesTable({
   canEditTransport?: boolean;
   onEditTransport?: (studentId: string, transport: string) => Promise<void>;
   /**
-   * Admin-only: show the "Split…" action that moves students out of a merged
-   * family onto a new Family ID. SQL re-checks the role.
+   * Show the "Split…" action that moves students out of a merged family onto a
+   * new Family ID. Admin + office; SQL re-checks the role.
    */
   canSplitFamily?: boolean;
   onSplitFamily?: (familyId: string, studentIds: string[]) => Promise<void>;
@@ -353,7 +353,7 @@ export function FamiliesTable({
         parentNames={parentNames}
         onClose={() => setSplitting(null)}
         onSplit={async (familyId, studentIds) => {
-          if (!onSplitFamily) throw new Error('Splitting is admin-only.');
+          if (!onSplitFamily) throw new Error('Your role cannot split a family.');
           await onSplitFamily(familyId, studentIds);
         }}
       />

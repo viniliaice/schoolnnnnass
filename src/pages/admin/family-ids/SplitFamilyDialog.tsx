@@ -5,9 +5,9 @@
 // correcting `parentId` cannot undo it: assign_student_parent() never touches
 // familyId. This dialog is the deliberate repair path.
 //
-// It is admin-only in the UI *and* in SQL (split_family_members re-checks the
-// role). Students are grouped by parent account because that is the one exact
-// signal in the data — names are spelled inconsistently ("salebaan" /
+// It is admin + office in the UI *and* in SQL (split_family_members re-checks
+// the role). Students are grouped by parent account because that is the one
+// exact signal in the data — names are spelled inconsistently ("salebaan" /
 // "suleban"), so grouping by surname would mislead.
 
 import { useEffect, useMemo, useState } from 'react';
@@ -56,16 +56,32 @@ export function SplitFamilyDialog({
       if (list) list.push(s);
       else byParent.set(key, [s]);
     }
-    return [...byParent.entries()]
+    const sorted = [...byParent.entries()]
       .map(([parentId, kids]) => ({
         parentId,
-        label: parentId ? (parentNames?.get(parentId) || 'Parent account') : 'No parent account',
+        name: parentId ? (parentNames?.get(parentId) || '') : '',
         students: [...kids].sort((a, b) => a.name.localeCompare(b.name)),
       }))
-      .sort((a, b) => b.students.length - a.students.length || a.label.localeCompare(b.label));
+      .sort((a, b) => b.students.length - a.students.length || a.name.localeCompare(b.name));
+
+    // Office cannot read `profiles`, so a parent name is often unavailable.
+    // Number the unnamed groups instead of printing "Parent account" twice —
+    // the students listed under each group are what identifies the household
+    // (names are spelled inconsistently, so a surname label would mislead).
+    let unnamed = 0;
+    return sorted.map((group, index) => ({
+      parentId: group.parentId,
+      students: group.students,
+      hasName: !!group.name,
+      label: !group.parentId
+        ? 'No parent account'
+        : group.name || `Parent account ${++unnamed}`,
+      ordinal: index + 1,
+    }));
   }, [students, parentNames]);
 
   const parentCount = familyParentIds(students).length;
+  const unnamedParents = groups.some(group => group.parentId && !group.hasName);
   const total = students.length;
   const movingCount = selected.size;
   const remaining = total - movingCount;
@@ -116,6 +132,12 @@ export function SplitFamilyDialog({
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
             <b>This family holds {parentCount} parent accounts.</b> That is either two households
             merged onto one ID, or one household with two logins. Check before splitting.
+            {unnamedParents && (
+              <p className="mt-1 text-amber-800">
+                Parent names are not available for your role — identify each household by the
+                students listed under it.
+              </p>
+            )}
           </div>
         )}
 

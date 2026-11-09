@@ -131,8 +131,9 @@ describe('Family IDs — Split a merged family (MBK-0305)', () => {
     expect(splitFamilyMembers).not.toHaveBeenCalled();
   });
 
-  it('hides the Split action from office users (SQL is the enforcement point)', async () => {
-    // Re-mount with an office session by replacing the mocked role.
+  it('lets OFFICE staff split a merged family, without unlocking generation', async () => {
+    // Front-desk repair: office prints the cards and takes the parent's call, so
+    // the split was opened to them on request (SQL re-checks the role).
     vi.resetModules();
     vi.doMock('../../context/RoleContext', () => ({
       useRole: () => ({ session: { role: 'office', id: 'office-1', name: 'Office' } }),
@@ -140,12 +141,61 @@ describe('Family IDs — Split a merged family (MBK-0305)', () => {
     const { FamilyIds: OfficeFamilyIds } = await import('../../pages/admin/FamilyIds');
 
     getStudents.mockResolvedValue(STUDENTS);
+    // Office cannot read `profiles`, so parent names come back EMPTY — the
+    // dialog must still let them tell the two households apart.
     getParentNames.mockResolvedValue(new Map());
+    splitFamilyMembers.mockResolvedValue({
+      familyId: '0305', newFamilyId: '0679', studentsMoved: 1, remaining: 5,
+    });
 
     const host = document.createElement('div');
     document.body.appendChild(host);
     const root = createRoot(host);
     await act(async () => { root.render(<OfficeFamilyIds mode="browse" navigate={() => {}} />); });
+
+    expect(host.textContent).toContain('MBK-0305');
+    // Generation stays admin-only even though splitting is now allowed.
+    expect(buttonByText(host, /Generate|Setup & Generate/)).toBeUndefined();
+
+    const splitButton = buttonByText(host, /^Split$/);
+    expect(splitButton, 'office sees the Split action').toBeTruthy();
+    await act(async () => { splitButton!.click(); });
+
+    expect(document.body.textContent).toContain('Separate MBK-0305');
+    // Numbered groups instead of two identical "Parent account" headers, plus
+    // an honest note about why names are missing.
+    expect(document.body.textContent).toContain('Parent account 1');
+    expect(document.body.textContent).toContain('Parent account 2');
+    expect(document.body.textContent).toContain('Parent names are not available for your role');
+
+    const marwa = Array.from(document.body.querySelectorAll('label')).find(l =>
+      (l.textContent ?? '').includes('Marwa suleban cabdi'),
+    );
+    expect(marwa, 'unparented student is offered too').toBeTruthy();
+    await act(async () => {
+      (marwa!.querySelector('input[type="checkbox"]') as HTMLInputElement).click();
+    });
+
+    const confirm = buttonByText(document.body as HTMLElement, /Split 1 to a new ID/);
+    await act(async () => { confirm!.click(); });
+
+    expect(splitFamilyMembers).toHaveBeenCalledWith('0305', ['s-marwa']);
+  });
+
+  it('keeps the Split action away from supervisors', async () => {
+    vi.resetModules();
+    vi.doMock('../../context/RoleContext', () => ({
+      useRole: () => ({ session: { role: 'supervisor', id: 'sup-1', name: 'Supervisor' } }),
+    }));
+    const { FamilyIds: SupervisorFamilyIds } = await import('../../pages/admin/FamilyIds');
+
+    getStudents.mockResolvedValue(STUDENTS);
+    getParentNames.mockResolvedValue(new Map());
+
+    const host = document.createElement('div');
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    await act(async () => { root.render(<SupervisorFamilyIds mode="browse" navigate={() => {}} />); });
 
     expect(host.textContent).toContain('MBK-0305');
     expect(buttonByText(host, /^Split$/)).toBeUndefined();
