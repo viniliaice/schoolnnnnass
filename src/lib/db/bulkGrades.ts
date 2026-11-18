@@ -33,11 +33,16 @@ export interface BulkGradeChange {
   existingScore: number | null;
   existingEntryState: EntryState | null;
   existingStatus: string | null;
-  changeType: 'new' | 'update';
+  changeType: 'new' | 'update' | 'unchanged';
+  newMonth?: string;
+  existingMonth?: string | null;
+  preservedPeriods?: string[];
   isApproved: boolean;
 }
 
 export interface BulkGradeSubmissionResult {
+  identityVersion?: number;
+  period?: { termId: string; termName: string; academicYearId: string; academicYearName?: string; month: string };
   requiresConfirmation: boolean;
   insertCount: number;
   updateCount: number;
@@ -69,7 +74,10 @@ function parseChange(value: unknown): BulkGradeChange | null {
     existingScore: num(c.existingScore),
     existingEntryState: (c.existingEntryState as EntryState | null) ?? null,
     existingStatus: c.existingStatus == null ? null : String(c.existingStatus),
-    changeType: c.changeType === 'update' ? 'update' : 'new',
+    changeType: c.changeType === 'unchanged' ? 'unchanged' : c.changeType === 'update' ? 'update' : 'new',
+    newMonth: typeof c.newMonth === 'string' ? c.newMonth : undefined,
+    existingMonth: c.existingMonth == null ? null : String(c.existingMonth),
+    preservedPeriods: Array.isArray(c.preservedPeriods) ? c.preservedPeriods.map(String) : [],
     isApproved: Boolean(c.isApproved),
   };
 }
@@ -82,6 +90,8 @@ function parseResult(value: unknown): BulkGradeSubmissionResult {
     ? (result.changes.map(parseChange).filter(Boolean) as BulkGradeChange[])
     : [];
   return {
+    identityVersion: typeof result.identityVersion === 'number' ? result.identityVersion : undefined,
+    period: result.period as BulkGradeSubmissionResult['period'],
     requiresConfirmation: Boolean(result.requiresConfirmation),
     insertCount: Number(result.insertCount ?? 0),
     updateCount: Number(result.updateCount ?? 0),
@@ -115,4 +125,13 @@ export async function submitBulkGrades(
   });
   if (error) throw new Error(error.message);
   return parseResult(data);
+}
+
+/** Fail closed against the old month-blind service or a stale UI selection. */
+export function assertBulkGradePeriod(result: BulkGradeSubmissionResult, records: BulkGradeRecord[], termId: string, academicYearId: string, month: string): void {
+  const period = result.period;
+  if (result.identityVersion !== 2 || !period || period.termId !== termId || period.academicYearId !== academicYearId || period.month !== month ||
+      !records.length || records.some(r => r.termId !== termId || r.month !== month)) {
+    throw new Error('The upload period could not be verified. Select the assessment period and validate again.');
+  }
 }

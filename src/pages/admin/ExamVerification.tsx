@@ -261,8 +261,6 @@ const teachersQuery = useQuery<User[], Error>({
     try {
       const payload: Partial<Exam> = {
         score: Number(editScore),
-        month: editMonth,
-        examType: editType as any,
       };
       const updated = await updateExam(examId, payload);
       if (!updated) throw new Error('Update failed');
@@ -581,6 +579,7 @@ const teachersQuery = useQuery<User[], Error>({
                             <td className="px-5 py-3">
                               {editingExamId === exam.id ? (
                                 <select
+                                  disabled title="Assessment identity cannot be changed in place"
                                   value={editType}
                                   onChange={e => setEditType(e.target.value)}
                                   className="px-2 py-1 rounded-md text-sm border border-slate-200 bg-white"
@@ -598,6 +597,7 @@ const teachersQuery = useQuery<User[], Error>({
                             <td className="px-5 py-3 text-sm text-slate-600">
                               {editingExamId === exam.id ? (
                                 <select
+                                  disabled title="Assessment period cannot be changed in place"
                                   value={editMonth}
                                   onChange={e => setEditMonth(e.target.value)}
                                   className="px-2 py-1 rounded-md text-sm border border-slate-200 bg-white"

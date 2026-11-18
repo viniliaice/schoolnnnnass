@@ -1,0 +1,10 @@
+import { expect, it, vi } from 'vitest';
+vi.mock('../supabase',()=>({supabase:{rpc:vi.fn()}}));
+import { assertBulkGradePeriod, type BulkGradeRecord, type BulkGradeSubmissionResult } from '../db/bulkGrades';
+const records=[{termId:'fictional-term',month:'November'}] as BulkGradeRecord[];
+const preview={identityVersion:2,period:{termId:'fictional-term',academicYearId:'fictional-year',termName:'Fictional term',month:'November'}} as BulkGradeSubmissionResult;
+it('accepts the exact preview/selection/upload period',()=>{expect(()=>assertBulkGradePeriod(preview,records,'fictional-term','fictional-year','November')).not.toThrow();});
+it.each(['October','','november'])('rejects inconsistent selected month %s',month=>{expect(()=>assertBulkGradePeriod(preview,records,'fictional-term','fictional-year',month)).toThrow();});
+it('fails closed against the old month-blind RPC',()=>{expect(()=>assertBulkGradePeriod({...preview,identityVersion:undefined},records,'fictional-term','fictional-year','November')).toThrow();});
+it('rejects an inconsistent row even when the visible selection is correct',()=>{expect(()=>assertBulkGradePeriod(preview,[...records,{...records[0],month:'October'}],'fictional-term','fictional-year','November')).toThrow();});
+it('rejects different academic year and term',()=>{expect(()=>assertBulkGradePeriod(preview,records,'fictional-term','other-year','November')).toThrow();expect(()=>assertBulkGradePeriod(preview,records,'other-term','fictional-year','November')).toThrow();});

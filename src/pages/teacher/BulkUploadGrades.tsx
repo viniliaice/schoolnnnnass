@@ -17,7 +17,7 @@ import { useRole } from '../../context/RoleContext';
 import { useToast } from '../../context/ToastContext';
 import { getCurrentTerm } from '../../lib/db/academic';
 import { getClassAssignmentsForTeacher, getClasses, getClassSubjectsForTeacher } from '../../lib/db/classes';
-import { submitBulkGrades, type BulkGradeChange, type BulkGradeSubmissionResult } from '../../lib/db/bulkGrades';
+import { assertBulkGradePeriod, submitBulkGrades, type BulkGradeChange, type BulkGradeSubmissionResult } from '../../lib/db/bulkGrades';
 import { getStudentsByClasses } from '../../lib/db/students';
 import { ASSESSMENT_GROUPS, blockDisplayName } from '../../lib/bulk-grades/assessments';
 import {
@@ -311,6 +311,8 @@ export function BulkUploadGrades() {
     setSubmitting(true);
     try {
       const result = await submitBulkGrades(resolveResult.records, uploadKey, false);
+      if (!currentTerm) throw new Error('Select a term first.');
+      assertBulkGradePeriod(result, resolveResult.records, currentTerm.id, currentTerm.academicYearId, month);
       setServerPreview(result);
       setApprovedAcknowledged(false);
       setStep('review');
@@ -326,6 +328,8 @@ export function BulkUploadGrades() {
     if (!resolveResult || !serverPreview) return;
     setSubmitting(true);
     try {
+      if (!currentTerm) throw new Error('Select a term first.');
+      assertBulkGradePeriod(serverPreview, resolveResult.records, currentTerm.id, currentTerm.academicYearId, month);
       const result = await submitBulkGrades(resolveResult.records, uploadKey, true);
       addToast({
         type: 'success',
@@ -683,14 +687,25 @@ export function BulkUploadGrades() {
         <div className="max-w-4xl space-y-5">
           <div className="rounded-2xl border border-slate-200 bg-white p-6">
             <h2 className="text-xl font-bold text-slate-900">Review server-validated changes</h2>
-            <p className="mt-1 text-slate-600">The server validated your roster, subjects, term, score limits, and duplicate keys, and computed every change below from the existing records. Nothing has been written yet.</p>
+            <p className="mt-3 rounded-xl bg-teal-50 p-3 font-bold text-teal-900" data-testid="upload-review-period">
+              {serverPreview.period?.month} · {serverPreview.period?.termName} · Academic year {serverPreview.period?.academicYearName ?? serverPreview.period?.academicYearId}
+            </p>
+            <p className="mt-2 text-sm text-slate-600">Updates apply only to this month. Matching assessments in other months are preserved. {serverPreview.skippedCount} identical records will be skipped without changing approval.</p>
+            <p className="mt-1 text-slate-600">The server validated your roster, subjects, term, score limits, and duplicate keys, and computed every change below from the existing records. No assessment marks have been written. The validated preview expires after 30 minutes.</p>
             <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
               <CountCard label="New grades" count={serverPreview.insertCount} color="teal" />
-              <CountCard label="Grades changing" count={serverPreview.updateCount} color="amber" />
+              <CountCard label="Same-month grades changing" count={serverPreview.updateCount} color="amber" />
               <CountCard label="Records in upload" count={resolveResult.records.length} color="slate" />
             </div>
           </div>
 
+          {changes.some(c => (c.preservedPeriods?.length ?? 0) > 0) && (
+            <div className="rounded-2xl border border-teal-200 bg-teal-50 p-5">
+              <h3 className="font-bold text-teal-900">Other months preserved</h3>
+              <p className="text-sm text-teal-900">These assessments also exist in the months listed below. Their scores and approval statuses will not change.</p>
+              <ChangeTable changes={changes.filter(c => (c.preservedPeriods?.length ?? 0) > 0)} />
+            </div>
+          )}
           {approvedChanges.length > 0 && (
             <div className="rounded-2xl border border-red-200 bg-red-50 p-5">
               <h3 className="font-bold text-red-900">Approved grades being changed ({approvedChanges.length})</h3>
@@ -726,6 +741,10 @@ export function BulkUploadGrades() {
         <div className="max-w-3xl space-y-5 rounded-2xl border border-slate-200 bg-white p-6">
           <h2 className="text-xl font-bold text-slate-900">Upload Summary</h2>
           <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <SummaryItem label="Assessment month" value={serverPreview.period?.month ?? 'Unverified'} />
+            <SummaryItem label="Term" value={serverPreview.period?.termName ?? 'Unverified'} />
+            <SummaryItem label="Academic year" value={serverPreview.period?.academicYearName ?? serverPreview.period?.academicYearId ?? 'Unverified'} />
+            <SummaryItem label="Unchanged (approval preserved)" value={String(serverPreview.skippedCount)} />
             <SummaryItem label="Class" value={selectedClass} />
             <SummaryItem label="Subjects" value={selectedSubjects.map(s => s.name).join(', ')} />
             <SummaryItem label="Students" value={String(resolveResult.validStudentCount)} />
@@ -818,6 +837,7 @@ function ChangeTable({ changes, showStatus = false }: { changes: BulkGradeChange
             <th className="px-3 py-2">Student</th>
             <th className="px-3 py-2">Subject</th>
             <th className="px-3 py-2">Assessment</th>
+            <th className="px-3 py-2">Month / preserved months</th>
             <th className="px-3 py-2">Current</th>
             <th className="px-3 py-2">New</th>
             {showStatus && <th className="px-3 py-2">Status</th>}
@@ -829,6 +849,7 @@ function ChangeTable({ changes, showStatus = false }: { changes: BulkGradeChange
               <td className="px-3 py-2 font-medium text-slate-800">{c.studentName || c.studentId}</td>
               <td className="px-3 py-2 text-slate-700">{c.subject}</td>
               <td className="px-3 py-2 text-slate-700">{blockDisplayName(c.assessmentLabel)}</td>
+              <td className="px-3 py-2 text-slate-700">{c.newMonth}<br /><span className="text-xs text-teal-700">{c.preservedPeriods?.length ? `Preserved: ${c.preservedPeriods.join(", ")}` : ""}</span></td>
               <td className="px-3 py-2 text-slate-500">{c.changeType === 'new' ? '—' : formatCellValue(c.existingScore, c.existingEntryState)}</td>
               <td className="px-3 py-2 font-semibold text-slate-900">
                 {c.changeType === 'update' && <span className="text-slate-400">→ </span>}

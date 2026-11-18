@@ -1,0 +1,41 @@
+Executed only against disposable local PostgreSQL/PGlite, synthetic records.
+Command: npx vitest --run src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts src/lib/__tests__/manualMonthlySQL.merge.db.test.ts --reporter=verbose
+No Supabase mutation, production deployment or notifications.
+Typecheck: npx tsc --noEmit passed.
+
+
+ RUN  v4.1.4 /home/user/schoolnnnnass
+
+ ✓ src/lib/__tests__/manualMonthlySQL.merge.db.test.ts > month-aware merge preview and resolved merge preserve October and November 3175ms
+ ✓ src/lib/__tests__/manualMonthlySQL.merge.db.test.ts > cross-month losing-row resolution is rejected before it can delete an exam 2145ms
+stdout | src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts
+MANUAL SQL LEGACY PRESERVATION: 3499 full rows unchanged; 331 groups / 667 rows; synthetic only
+
+stdout | src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 1/8: October approved remains unchanged after November upload
+SYNTHETIC OCTOBER/NOVEMBER EVIDENCE {"before":[{"studentId":"fictional-1","subjectId":"english","assessmentLabel":"HW1","termId":"term-2026","month":"October","score":"4","status":"approved"}],"after":[{"studentId":"fictional-1","subjectId":"english","assessmentLabel":"HW1","termId":"term-2026","month":"November","score":"5","status":"pending"},{"studentId":"fictional-1","subjectId":"english","assessmentLabel":"HW1","termId":"term-2026","month":"October","score":"4","status":"approved"}]}
+
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 1/8: October approved remains unchanged after November upload 47ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 2: same-month correction remains one record and requires reapproval 18ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 3: preserves upload order {"order":["August","September","October","November"]} 17ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 3: preserves upload order {"order":["November","October","September","August"]} 17ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 4: retries and new-key identical reuploads preserve approval 12ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 5: recurring HW, CPW, Quiz/MT, attendance and discipline labels remain independent 15ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 6: academic years do not collide 9ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 7: different students and subjects do not collide 7ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 9: NULL monthly periods rejected and NULL-label term-wide uniqueness protected 7ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 10: late batch write failure rolls back every assessment and upload log 12ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 11: preview pins period/payload, rejects mixed or invalid months and detects intervening changes 16ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > period cannot be changed by UPDATE-by-ID 6ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > 12: real monthly report and monitor functions keep months and academic years separate 40ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > older progress widgets do not combine the same month across academic years 15ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > manual artifact rejects a second application without changes 21ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > requested November correction: reject 6 above HW1 max; valid 4.5 changes only November 24ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > termwide Midterm rejects same identity across months 4ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > termwide Final rejects same identity across months 5ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > separate read-only verification file executes on the repaired fixture 15ms
+ ✓ src/lib/bulk-grades/__tests__/manual-monthly-sql.db.test.ts > expired preview is rejected without assessment writes 8ms
+
+ Test Files  2 passed (2)
+      Tests  22 passed (22)
+   Start at  14:23:26
+   Duration  10.29s (transform 137ms, setup 0ms, import 169ms, tests 9.84s, environment 0ms)

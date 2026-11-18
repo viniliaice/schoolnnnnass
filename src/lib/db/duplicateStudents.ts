@@ -174,7 +174,7 @@ export interface MergeResolution {
 }
 
 export interface ExamConflict {
-  identity: { subjectId: string | null; examType: string; assessmentLabel: string | null; termId: string | null; subject?: string };
+  identity: { subjectId: string | null; examType: string; assessmentLabel: string | null; termId: string | null; subject?: string; month?: string };
   canonical: { id: string; score: number | null; total: number; status: string; createdAt: string; date: string; subjectId: string | null; examType: string; assessmentLabel: string | null; termId: string | null };
   duplicate: { id: string; score: number | null; total: number; status: string; createdAt: string; date: string; subjectId: string | null; examType: string; assessmentLabel: string | null; termId: string | null };
   identical?: boolean;

@@ -1,5 +1,6 @@
 import type { Exam, ExamType, TeacherExamProgress, TeacherExamProgressVerification, ClassStudentSubjectProgress } from '../../types';
 import { supabase } from '../supabase';
+import { getCurrentTerm } from './academic';
 import { warnFallback } from '../logger';
 import { getStudentIdsByClasses, getStudentsByClass, getStudentsByClasses } from './students';
 
@@ -144,6 +145,8 @@ export async function getClassStudentSubjectProgressFallback(
   month: string
 ): Promise<ClassStudentSubjectProgress[]> {
   if (!className || !month) return [];
+  const currentTerm = await getCurrentTerm();
+  if (!currentTerm) return [];
 
   // Central reader (lib/db/students) so this client fallback excludes Former
   // Students exactly like the server-side
@@ -186,7 +189,8 @@ export async function getClassStudentSubjectProgressFallback(
     .from('exams')
     .select('studentId,subject,examType,score,total')
     .in('studentId', studentIds)
-    .eq('month', month);
+    .eq('month', month)
+    .eq('termId', currentTerm.id);
   if (examError) throw examError;
 
   const subjectNameByKey = new Map<string, string>();
@@ -265,6 +269,8 @@ async function getTeacherExamProgressFallback(filters: {
   classNames?: string[];
   teacherId?: string;
 }): Promise<TeacherExamProgress[]> {
+  const currentTerm = await getCurrentTerm();
+  if (!currentTerm) return [];
   const classNames = filters.classNames?.length
     ? filters.classNames
     : filters.className
@@ -302,7 +308,8 @@ async function getTeacherExamProgressFallback(filters: {
   let examQuery: any = supabase
     .from('exams')
     .select('studentId,subject,examType,month,teacherId')
-    .in('studentId', studentIds);
+    .in('studentId', studentIds)
+    .eq('termId', currentTerm.id);
 
   if (filters.month) examQuery = examQuery.eq('month', filters.month);
   if (filters.teacherId) examQuery = examQuery.eq('teacherId', filters.teacherId);
@@ -410,6 +417,8 @@ export async function getTeacherExamProgressVerification(filters: {
   month: string;
 }): Promise<TeacherExamProgressVerification> {
   const { teacherId, className, subjectId, subjectName, month } = filters;
+  const currentTerm = await getCurrentTerm();
+  if (!currentTerm) throw new Error('A current academic term is required to verify monthly marks.');
 
   // Mirrors the teacher_exam_progress view, which excludes Former Students.
   const studentIds = await getStudentIdsByClasses([className], 'active');
@@ -434,7 +443,8 @@ export async function getTeacherExamProgressVerification(filters: {
     .select('studentId,subject,examType,month,teacherId')
     .in('studentId', studentIds)
     .eq('month', month)
-    .eq('teacherId', teacherId);
+    .eq('teacherId', teacherId)
+    .eq('termId', currentTerm.id);
 
   const subjectFilters = [subjectId, subjectName].filter((value): value is string => Boolean(value));
   if (subjectFilters.length === 1) {
