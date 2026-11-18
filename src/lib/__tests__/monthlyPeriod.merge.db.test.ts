@@ -36,7 +36,7 @@ beforeEach(async () => {
  ALTER TABLE exams ADD COLUMN "uploadedBy" text;
  CREATE TABLE grade_uploads(id text PRIMARY KEY, "uploadedBy" text, payload_hash text, status text, result jsonb);
  CREATE UNIQUE INDEX exams_bulk_assessment_identity_unique ON exams("studentId","subjectId","examType","assessmentLabel","termId") WHERE "subjectId" IS NOT NULL AND "termId" IS NOT NULL AND "assessmentLabel" IS NOT NULL;`);
- await db.exec(readMigration('20261105_monthly_assessment_identity.sql'));
+ await db.exec(readMigration('../tests/fixtures/monthly-identity-prototype.sql'));
  for(const id of ['keeper','old']) {
   await seedStudent(db,{id,name:'Synthetic same candidate',className:'Review class',parentId:id==='keeper'?'parent':null});
   await seedEnrollment(db,{id:`enrollment-${id}`,studentId:id,className:'Review class',academicYearId:'year',effectiveFrom:'2026-08-01'});

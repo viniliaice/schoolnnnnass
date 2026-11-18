@@ -1,6 +1,6 @@
 # Monthly assessment overwrite repair — implementation and verification
 
-**Status: prepared and tested locally; NOT applied or deployed to production.**
+**Historical prototype investigation.** The final migration and current operational status are documented in `manual-monthly-assessment-application.md`. The user reports applying that final migration to LIVE. This document records the earlier investigation; its staging/release checklist is superseded by the manual application runbook.
 
 No production marks, student records, months, terms, subjects, labels or approval statuses were changed. Production access during this repair consisted exclusively of SELECT queries against catalogs and aggregate assessment data. No authenticated upload/merge/report RPC was invoked in production. Historical recovery is a separate, unperformed task.
 
@@ -88,7 +88,7 @@ Whole-repository searches included `.from('exams')`, exam INSERT/UPDATE/DELETE, 
 
 ### Database migration
 
-`supabase/migrations/20261105_monthly_assessment_identity.sql`:
+`supabase/tests/fixtures/monthly-identity-prototype.sql` (superseded local-only regression fixture):
 
 1. Runs in an explicit transaction with a 10-second lock-acquisition timeout and exam table write lock. Fails rather than repairing duplicate keys, invalid months or ambiguous terms.
 2. Creates the replacement unique index before dropping the month-blind one. PostgreSQL validates the index against existing rows. Any failure rolls back the entire migration.

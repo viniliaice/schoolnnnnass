@@ -2,7 +2,7 @@
 
 ## Read this before applying anything
 
-**Prepared for review/manual execution only. Production is NOT fixed by this work.** No migration, account, upload, approval, merge, notification or deployment was executed against Supabase. No new staging project was attempted. Live access in this task was SELECT-only schema/function inspection.
+**Operational update:** The user reports manually applying the migration below to LIVE and subsequently confirming an August upload. Do not rerun the migration. The agent has performed only read-only production inspection; complete historical preservation has not been independently established. This repair does not recover previously overwritten marks. The execution instructions below are retained as a reference, not an instruction to apply again.
 
 Files:
 
@@ -11,7 +11,7 @@ Files:
 3. **These instructions:** `docs/investigations/manual-monthly-assessment-application.md`
 4. **Executed local evidence:** `docs/investigations/manual-monthly-assessment-test-evidence.txt`
 
-**Apply only file 1. Do not also apply the earlier `20261105_monthly_assessment_identity.sql` draft, and do not run a blanket migration-directory deployment.** Both files are preserved for investigation history, but are alternatives, not sequential migrations. Reconcile the migration ledger separately before any future automated `supabase db push`; SQL Editor execution does not automatically reconcile that ledger. No automatic deployment command is recommended here.
+**Do not run a blanket migration-directory deployment.** The superseded prototype is now a local regression fixture at `supabase/tests/fixtures/monthly-identity-prototype.sql`, outside the migration directory; never apply it to LIVE. Reconcile the migration ledger separately before any future automated `supabase db push`; SQL Editor execution does not automatically reconcile that ledger. No automatic database deployment is authorised by merging this change.
 
 The timestamp is a deterministic artifact name, not an assertion of a production execution date.
 
@@ -72,7 +72,7 @@ Existing merge routines contain DELETE/UPDATE statements as part of their existi
 1. Arrange a write pause/maintenance window for assessment uploads, approvals, corrections, direct edits and student merges. Do not test with real records while comparing manifests. Do not send parent/teacher/student notifications.
 2. Take a recoverable, consistent database backup with data and schema. Verify its availability/recovery point. Include exams, students, profiles, subjects, terms/academic years, enrollments, assignments, upload/correction/merge audit records, report configuration/comments/grade scales and dependency tables. Preserve functions (all overloads), views, RLS/policies, grants/owners, triggers, constraints, indexes and migration history. CSV of exams alone is not a rollback backup. Storage file bytes, if needed for recovery, require their own backup; database metadata is not proof of their inclusion.
 3. Save secure schema/definition/grant exports using `monthly-assessment-repair-preflight.sql`. In particular retain the old bulk RPC, original status guard and **both live-only merge overloads**. Keep credentials and private student data out of chat/Git.
-4. Open **`docs/investigations/verify_monthly_assessment_identity.sql`**, run it read-only and save **all result sets**. It provides old/current indexes, check validation states, triggers, full-row/status/relationship fingerprints, unlabelled counts and ambiguous-group fingerprints. Use `staging-rehearsal-integrity.sql` as a second integrity reference if desired; no staging is being established here.
+4. Open **`docs/investigations/verify_monthly_assessment_identity.sql`**, run it read-only and save **all result sets**. It provides old/current indexes, check validation states, triggers, full-row/status/relationship fingerprints, unlabelled counts and ambiguous-group fingerprints.
 5. Expected investigation reference: 35,820 exams; 32,321 labelled; 3,499 unlabelled; 331 ambiguous groups/667 rows; approved 35,092, rejected 728, pending 0. Re-establish today's baseline if legitimate activity intervened; never rewrite records to make counts match a historical number.
 6. Monthly classified duplicate, termwide duplicate and invalid-month queries must return zero rows. Confirm only the old month-blind unique index is present, expected status guard is enabled, terms are valid, and the current-term dashboard has no ambiguous multiple-current-term configuration. Any unexpected object/version or duplicate is a STOP condition.
 7. Confirm the hosted app compatibility described above. Review the complete migration locally, especially the function-definition preservation blocks. The test coverage is local synthetic PostgreSQL, not a restored production rehearsal or browser test; that limitation has not disappeared.

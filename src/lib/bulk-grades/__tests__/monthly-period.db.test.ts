@@ -24,7 +24,7 @@ beforeAll(async()=>{
  ('legacy-1','fictional-1','english','English',4,5,'CA','October','approved','2026-10-02','teacher','term-2026'),
  ('legacy-2','fictional-1','english','English',3,5,'CA','October','approved','2026-10-02','teacher','term-2026');`);
  const beforeMigration=(await db.query('SELECT * FROM exams ORDER BY id')).rows;
- await db.exec(readMigration('20261105_monthly_assessment_identity.sql'));
+ await db.exec(readMigration('../tests/fixtures/monthly-identity-prototype.sql'));
  expect((await db.query('SELECT * FROM exams ORDER BY id')).rows).toEqual(beforeMigration);
  await db.exec(`ALTER TABLE profiles ADD COLUMN "assignedClasses" jsonb DEFAULT '[]';
  CREATE FUNCTION assert_can_view_student_term_report(text,text) RETURNS void LANGUAGE plpgsql AS $$ BEGIN RETURN; END $$;
