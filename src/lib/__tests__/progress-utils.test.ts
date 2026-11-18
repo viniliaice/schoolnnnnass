@@ -32,13 +32,7 @@ function terminalEq(result: unknown) {
   return query;
 }
 
-function examsQuery(result: unknown) {
-  const query: any = {
-    in: vi.fn(() => query),
-    eq: vi.fn(() => Promise.resolve({ data: result, error: null })),
-  };
-  return query;
-}
+function examsQuery(result: unknown) { return terminalEq(result); }
 
 beforeEach(() => {
   mockFrom.mockReset();
@@ -112,15 +106,19 @@ describe('getClassStudentSubjectProgress', () => {
       { studentId: 's1', subject: 'Mathematics', examType: 'Quiz', score: 9, total: 10 },
     ];
 
+    const examQuery = examsQuery(exams);
     mockFrom.mockImplementation((table: string) => {
+      if (table === 'terms') return { select: () => ({ eq: () => ({ maybeSingle: async () => ({data: {id: 'synthetic-current-term'}, error: null}) }) }) };
       if (table === 'students') return { select: () => terminalEq(students) };
       if (table === 'class_subjects') return { select: () => terminalEq(classSubjects) };
-      if (table === 'exams') return { select: () => examsQuery(exams) };
+      if (table === 'exams') return { select: () => examQuery };
       throw new Error(`Unexpected table ${table}`);
     });
 
     const result = await getClassStudentSubjectProgress('Grade 1-A', 'January');
 
+    expect(examQuery.eq).toHaveBeenCalledWith('termId', 'synthetic-current-term');
+    expect(examQuery.eq).toHaveBeenCalledWith('month', 'January');
     expect(result).toHaveLength(2);
     expect(result[0]).toMatchObject({
       studentId: 's1',

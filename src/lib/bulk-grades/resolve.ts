@@ -304,7 +304,7 @@ export function resolveWorkbook(parsed: WorkbookParseResult, context: ResolveCon
     // on an empty key.
     const resolvedId = (record.studentId ?? '').trim();
     if (!resolvedId) continue;
-    const key = [resolvedId, record.subjectId, record.examType, record.assessmentLabel, record.termId].join('|');
+    const key = [resolvedId, record.subjectId, record.examType, record.assessmentLabel, record.termId, record.month].join('|');
     seen.set(key, (seen.get(key) || 0) + 1);
   }
   for (const [key, count] of seen) {

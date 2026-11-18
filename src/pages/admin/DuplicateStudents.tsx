@@ -866,7 +866,7 @@ export function DuplicateStudents() {
                           const selected = examResMap.get(realIdx);
                           return (
                             <div key={realIdx} className="border rounded-xl p-3">
-                              <div className="text-xs font-bold text-slate-500">Exam conflict #{realIdx+1} — {c.identity.subject || c.identity.subjectId} {c.identity.examType} {c.identity.assessmentLabel||''} Term: {c.identity.termId}</div>
+                              <div className="text-xs font-bold text-slate-500">Exam conflict #{realIdx+1} — {c.identity.subject || c.identity.subjectId} {c.identity.examType} {c.identity.assessmentLabel||''} Term: {c.identity.termId} · {c.identity.month ?? 'Term-wide'}</div>
                               <div className="mt-2 grid grid-cols-2 gap-3">
                                 <div className="border rounded-lg p-2"><div className="text-xs font-bold">RECORD A</div><div>Score: {c.canonical.score} / {c.canonical.total}</div><div className="text-xs">Exam ID: {c.canonical.id}</div><div className="text-xs">Created: {c.canonical.createdAt.slice(0,10)}</div>{c.canonical.score !== c.duplicate.score && <div className="text-xs font-bold text-rose-700">CRITICAL ACADEMIC CONFLICT: {c.canonical.score} vs {c.duplicate.score}</div>}{c.identical && <div className="text-xs font-bold text-emerald-700">IDENTICAL RECORDS</div>}</div>
                                 <div className="border rounded-lg p-2"><div className="text-xs font-bold">RECORD B</div><div>Score: {c.duplicate.score} / {c.duplicate.total}</div><div className="text-xs">Exam ID: {c.duplicate.id}</div><div className="text-xs">Created: {c.duplicate.createdAt.slice(0,10)}</div></div>

@@ -3,7 +3,7 @@
 -- The browser unit tests mock Supabase, so the REAL safety invariants (server
 -- authorization, wrong-class rejection, teacher/class/subject binding, atomic
 -- upsert, idempotency) are asserted here against the migrated schema created by
--- 20260802_bulk_grade_integrity.sql.
+-- 20261105_monthly_assessment_identity.sql. Use an isolated/staging database only.
 --
 -- Run against a database with the migrations applied:
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f supabase/tests/rls-bulk-grades.sql
@@ -88,7 +88,7 @@ BEGIN
   END IF;
 END $$;
 
--- ── 5. Preview (p_confirm_updates=false) performs NO writes ────────────────
+-- ── 5. Preview performs NO assessment writes (metadata only) ────────────────
 DO $$
 DECLARE
   v_def TEXT;
@@ -112,7 +112,7 @@ DECLARE
 BEGIN
   SELECT pg_get_functiondef(oid) INTO v_def
   FROM pg_proc WHERE proname = 'submit_bulk_grades' AND pronamespace = 'public'::regnamespace;
-  IF position('ON CONFLICT ("studentId", "subjectId", "examType", "assessmentLabel", "termId")' in v_def) = 0 THEN
+  IF position('ON CONFLICT ("studentId", "subjectId", "examType", "assessmentLabel", "termId", month)' in v_def) = 0 THEN
     RAISE EXCEPTION 'submit_bulk_grades must upsert on the bulk assessment identity';
   END IF;
   IF position('INSERT INTO public.grade_uploads' in v_def) = 0 THEN
@@ -123,9 +123,9 @@ BEGIN
   SELECT count(*) INTO v_idx
   FROM pg_indexes
   WHERE schemaname = 'public' AND tablename = 'exams'
-    AND indexname = 'exams_bulk_assessment_identity_unique';
+    AND indexname = 'exams_bulk_assessment_period_unique';
   IF v_idx <> 1 THEN
-    RAISE EXCEPTION 'exams_bulk_assessment_identity_unique index is required for atomic bulk upserts';
+    RAISE EXCEPTION 'exams_bulk_assessment_period_unique index is required for atomic bulk upserts';
   END IF;
 END $$;
 

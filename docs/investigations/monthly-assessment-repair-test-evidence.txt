@@ -1,0 +1,102 @@
+ISOLATED SYNTHETIC TEST EVIDENCE — no production mutations
+
+
+ RUN  v4.1.4 /home/user/schoolnnnnass
+
+ ✓ src/lib/__tests__/monthlyPeriod.merge.db.test.ts > month-aware merge preview and resolved merge preserve October and November 3374ms
+ ✓ src/lib/__tests__/monthlyPeriod.merge.db.test.ts > cross-month losing-row resolution is rejected before it can delete an exam 2422ms
+stdout | src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 1/8: October approved remains unchanged after November upload
+SYNTHETIC OCTOBER/NOVEMBER EVIDENCE {"before":[{"studentId":"fictional-1","subjectId":"english","assessmentLabel":"HW1","termId":"term-2026","month":"October","score":"4","status":"approved"}],"after":[{"studentId":"fictional-1","subjectId":"english","assessmentLabel":"HW1","termId":"term-2026","month":"November","score":"5","status":"pending"},{"studentId":"fictional-1","subjectId":"english","assessmentLabel":"HW1","termId":"term-2026","month":"October","score":"4","status":"approved"}]}
+
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 1/8: October approved remains unchanged after November upload 57ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 2: same-month correction remains one record and requires reapproval 36ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 3: preserves upload order {"order":["August","September","October","November"]} 26ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 3: preserves upload order {"order":["November","October","September","August"]} 26ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 4: retries and new-key identical reuploads preserve approval 22ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 5: recurring HW, CPW, Quiz/MT, attendance and discipline labels remain independent 23ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 6: academic years do not collide 12ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 7: different students and subjects do not collide 8ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 9: NULL monthly periods rejected and NULL-label term-wide uniqueness protected 10ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 10: late batch write failure rolls back every assessment and upload log 14ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 11: preview pins period/payload, rejects mixed or invalid months and detects intervening changes 21ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > period cannot be changed by UPDATE-by-ID 8ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > 12: real monthly report and monitor functions keep months and academic years separate 50ms
+ ✓ src/lib/bulk-grades/__tests__/monthly-period.db.test.ts > older progress widgets do not combine the same month across academic years 20ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook > produces subject-scoped BulkGradeRecords for authorized students 45ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook > keeps Arabic Akhlaaq and Tarbiya Akhlaaq as distinct records 17ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook > rejects a student who is not in the current roster (wrong-class / stale) 15ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook > rejects an unauthorized subject present in the workbook 13ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook > excludes rows with no entered scores 16ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook > resolves a student who moved into the class (roster is authoritative) 10ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — subject aliases never bypass authorization > rejects "Mathematics HW1" for a teacher who is not assigned Math 4ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — subject aliases never bypass authorization > rejects "Maths HW1" for a teacher who is not assigned Math 3ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — subject aliases never bypass authorization > rejects "MATH HW1" for a teacher who is not assigned Math 4ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — subject aliases never bypass authorization > rejects "Math HW1" for a teacher who is not assigned Math 3ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — subject aliases never bypass authorization > accepts "Mathematics HW1" for a teacher whose assigned subject is stored as "Mathematics" 4ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — Needs Review (name-only matching) > A/B: a name-only row with one candidate is Needs Review, not Valid/Error 14ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — Needs Review (name-only matching) > C: multiple same-name candidates are all shown for explicit choice 12ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — Needs Review (name-only matching) > D: choosing a candidate reruns validation and produces a valid record 24ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — Needs Review (name-only matching) > E: excluding a review row creates no record and counts as excluded 27ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — Needs Review (name-only matching) > H: a name-only row with no roster candidate remains an Error 12ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — Needs Review (name-only matching) > H2: excluding a no-roster-match error row clears the error and counts as excluded 10ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — Needs Review (name-only matching) > J(client): choosing a student not in the current roster becomes an Error 11ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — Needs Review (name-only matching) > M: Maxamed Cabdijabar Ibrahim / Grade 11-A / row 2 → actionable Needs Review 11ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — Needs Review (name-only matching) > I: two workbook rows resolving to the same student stay an Error 9ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — Needs Review (name-only matching) > L: a normal downloaded workbook with hidden IDs produces no reviews 11ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — name-only Google Sheet workflow > A/G: multiple name-only rows are separate rows with no false duplicates 12ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — name-only Google Sheet workflow > B: a name-only row with a single roster candidate is Needs Review 10ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — name-only Google Sheet workflow > C: a name-only row with multiple same-name candidates shows all candidates 9ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — name-only Google Sheet workflow > D: a name-only row with no roster candidate is an Error 8ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — name-only Google Sheet workflow > E: choosing a student attaches all of the name-only row scores, none lost 9ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — name-only Google Sheet workflow > F: two name-only rows resolved to the same student produce a real duplicate 8ms
+ ✓ src/lib/__tests__/bulk-grades-resolve.test.ts > resolveWorkbook — name-only Google Sheet workflow > H: a full workbook with no visible Student ID metadata yields reviews, not false duplicates 11ms
+stderr | src/lib/__tests__/progress-utils.test.ts > getClassStudentSubjectProgress > falls back to direct queries when the RPC is missing
+[fallback] getClassStudentSubjectProgress RPC missing; using client fallback { code: 'PGRST202', message: 'function missing' }
+
+ ✓ src/lib/__tests__/progress-utils.test.ts > getClassStudentSubjectProgress > uses the RPC path and normalizes returned rows 4ms
+ ✓ src/lib/__tests__/progress-utils.test.ts > getClassStudentSubjectProgress > falls back to direct queries when the RPC is missing 12ms
+ ✓ src/lib/__tests__/progress-utils.test.ts > getClassStudentSubjectProgress > returns an empty array when className or month is missing 1ms
+ ✓ src/lib/__tests__/bulk-grades.test.ts > submitBulkGrades > uses the server RPC for a no-write conflict preview 4ms
+ ✓ src/lib/__tests__/bulk-grades.test.ts > submitBulkGrades > surfaces structured RPC failures instead of reporting a false success 1ms
+ ✓ src/lib/__tests__/bulk-grades.test.ts > submitBulkGrades — change preview parsing > parses the server change list, approved flags, and old->new values 1ms
+ ✓ src/lib/__tests__/bulk-grades.test.ts > submitBulkGrades — change preview parsing > defaults change fields safely when the server omits them (backward compatible) 0ms
+ ✓ src/lib/__tests__/reports.test.ts > getMidtermReportFallback > calculates subject score, class average, highest score, and rank from fallback queries 4ms
+ ✓ src/lib/__tests__/reports.test.ts > getMidtermReportFallback > treats bulk-uploaded MT rows stored as Quiz + assessmentLabel=MT as midterms 1ms
+ ✓ src/lib/__tests__/reports.test.ts > getMonthlyReportFallback > returns CA 40% + Quiz 60% and keeps Quiz visible 2ms
+ ✓ src/lib/__tests__/reports.test.ts > getMonthlyReportFallback > does not treat a missing Quiz as zero 1ms
+ ✓ src/lib/__tests__/bulkGradePeriod.test.ts > accepts the exact preview/selection/upload period 2ms
+ ✓ src/lib/__tests__/bulkGradePeriod.test.ts > rejects inconsistent selected month October 0ms
+ ✓ src/lib/__tests__/bulkGradePeriod.test.ts > rejects inconsistent selected month  0ms
+ ✓ src/lib/__tests__/bulkGradePeriod.test.ts > rejects inconsistent selected month november 0ms
+ ✓ src/lib/__tests__/bulkGradePeriod.test.ts > fails closed against the old month-blind RPC 0ms
+ ✓ src/lib/__tests__/bulkGradePeriod.test.ts > rejects an inconsistent row even when the visible selection is correct 0ms
+ ✓ src/lib/__tests__/bulkGradePeriod.test.ts > rejects different academic year and term 0ms
+
+ Test Files  7 passed (7)
+      Tests  62 passed (62)
+   Start at  13:52:57
+   Duration  11.51s (transform 387ms, setup 0ms, import 729ms, tests 9.74s, environment 1ms)
+
+
+
+FULL SUITE SUMMARY
+ FAIL  src/lib/__tests__/user-roles.test.ts > createUser (office-role assignment path) > rejects a stale session that is not an admin profile before creating anything
+ FAIL  src/lib/__tests__/user-roles.test.ts > createUser (office-role assignment path) > rejects a captured session whose profile role is not admin
+ FAIL  src/pages/admin/__tests__/ManageStudentsWhatsApp.test.tsx > ManageStudents - Send WhatsApp > renders View Parent & WhatsApp button, and upon viewing, clicking Send WhatsApp opens WhatsApp with parent email
+ FAIL  src/pages/admin/__tests__/ManageStudentsWhatsApp.test.tsx > ManageStudents - Send WhatsApp > handles multiple students belonging to the same parent
+ FAIL  src/pages/admin/__tests__/ManageStudentsWhatsApp.test.tsx > ManageStudents - Send WhatsApp > handles a student with a different parent email
+ FAIL  src/pages/admin/__tests__/ManageStudentsWhatsApp.test.tsx > ManageStudents - Send WhatsApp > shows error toast "Parent email not found" when parent email is missing and does not open WhatsApp
+ Test Files  2 failed | 166 passed (168)
+      Tests  6 failed | 1810 passed (1816)
+   Duration  223.65s (transform 7.32s, setup 0ms, import 32.47s, tests 157.60s, environment 11.91s)
+
+UNTOUCHED BASELINE REPRODUCTION SUMMARY
+ FAIL  src/lib/__tests__/user-roles.test.ts > createUser (office-role assignment path) > rejects a stale session that is not an admin profile before creating anything
+ FAIL  src/lib/__tests__/user-roles.test.ts > createUser (office-role assignment path) > rejects a captured session whose profile role is not admin
+ FAIL  src/pages/admin/__tests__/ManageStudentsWhatsApp.test.tsx > ManageStudents - Send WhatsApp > renders View Parent & WhatsApp button, and upon viewing, clicking Send WhatsApp opens WhatsApp with parent email
+ FAIL  src/pages/admin/__tests__/ManageStudentsWhatsApp.test.tsx > ManageStudents - Send WhatsApp > handles multiple students belonging to the same parent
+ FAIL  src/pages/admin/__tests__/ManageStudentsWhatsApp.test.tsx > ManageStudents - Send WhatsApp > handles a student with a different parent email
+ FAIL  src/pages/admin/__tests__/ManageStudentsWhatsApp.test.tsx > ManageStudents - Send WhatsApp > shows error toast "Parent email not found" when parent email is missing and does not open WhatsApp
+ Test Files  2 failed (2)
+      Tests  6 failed | 7 passed (13)
+   Duration  1.82s (transform 567ms, setup 0ms, import 1.05s, tests 47ms, environment 322ms)
