@@ -214,53 +214,41 @@ export async function updateExamStatus(id: string, status: ExamStatus): Promise<
   return updated as Exam;
 }
 
-// Bound every approval batch to PostgREST's `max_rows` (supabase/config.toml:
-// max_rows = 1000). Staying at/under this cap means the UPDATE never tries to
-// RETURN more rows than the API allows, and each statement is tiny enough to
-// stay well clear of Supabase's statement_timeout — which is what produced the
-// HTTP 500 ("canceling statement due to statement timeout") at ~30k pending.
-const APPROVE_BATCH_SIZE = 1000;
-// Hard safety valve so a pathological case (e.g. exams being created faster than
-// we can approve them) can never spin the loop forever.
-const APPROVE_MAX_ITERATIONS = 2000;
+// Keep fallback batches tiny: Supabase sits behind Cloudflare, which rejects
+// request URLs longer than ~8KB with HTTP 400. A 1,000-id `id=in.(…)` URL is
+// ~30KB and 400s — that was the failure after the first fix. 100 ids ≈ 3.5KB,
+// safely under the limit, so the client fallback can never reproduce it.
+const APPROVE_BATCH_SIZE = 100;
+// Hard safety valve so a pathological case (e.g. exams created faster than we
+// approve them) can never spin the loop forever.
+const APPROVE_MAX_ITERATIONS = 4000;
 
 /**
- * Approve pending exams in bounded batches.
+ * Approve pending exams.
  *
- * We repeatedly pull a small page of pending row ids and UPDATE *only those rows
- * by primary key*. Because the UPDATE flips status to 'approved', the next page
- * query no longer matches the rows we just approved, so the loop naturally drains
- * to zero without any offset bookkeeping. No single statement ever touches more
- * than APPROVE_BATCH_SIZE rows, so it can never trip the statement timeout.
+ * Primary path: a single server-side RPC (`approve_all_pending_exams`) that runs
+ * one UPDATE statement — no long URL, no RETURNING of huge result sets, and with
+ * the statement_timeout disabled so 30k+ rows finish instantly. This is the fix
+ * for both the original 500 (statement timeout) and the 400 (URL too long).
+ *
+ * Fallback: if the migration hasn't been deployed yet, do it client-side in
+ * bounded batches (see approvePendingExamsByIdFilter). Each batch stays under
+ * Cloudflare's URL limit, so it also works.
  */
-async function approvePendingExams(filters?: { studentIds?: string[] }): Promise<number> {
-  let approved = 0;
-  for (let iteration = 0; iteration < APPROVE_MAX_ITERATIONS; iteration++) {
-    let query = supabase.from('exams').select('id').eq('status', 'pending').limit(APPROVE_BATCH_SIZE);
-    if (filters?.studentIds) query = query.in('studentId', filters.studentIds);
-
-    const { data: page, error: selectError } = await query;
-    if (selectError) throw selectError;
-
-    const ids = (page ?? []).map((row: any) => row.id);
-    if (ids.length === 0) break;
-
-    const { error: updateError } = await supabase.from('exams').update({ status: 'approved' }).in('id', ids);
-    if (updateError) throw updateError;
-
-    approved += ids.length;
-  }
-  return approved;
-}
-
 export async function approveAllPendingExams(): Promise<number> {
-  return approvePendingExams();
+  const rpc = await approveViaRpc(null);
+  if (rpc !== null) return rpc;
+  return approvePendingExamsByIdFilter();
 }
 
 export async function approvePendingExamsForClasses(classNames: string[]): Promise<number> {
   if (!Array.isArray(classNames) || classNames.length === 0) return 0;
 
-  // Resolve the supervisor's student set in pages (className IN can be large).
+  const rpc = await approveViaRpc(classNames);
+  if (rpc !== null) return rpc;
+
+  // Fallback: resolve the supervisor's student set in pages, then approve their
+  // pending exams in small id batches.
   const studentIds: string[] = [];
   for (let offset = 0; ; offset += APPROVE_BATCH_SIZE) {
     const { data: students, error: studentError } = await supabase
@@ -276,11 +264,49 @@ export async function approvePendingExamsForClasses(classNames: string[]): Promi
   }
   if (studentIds.length === 0) return 0;
 
-  // Approve pending exams for those students, chunked so each UPDATE stays small.
   let approved = 0;
   for (let i = 0; i < studentIds.length; i += APPROVE_BATCH_SIZE) {
     const chunk = studentIds.slice(i, i + APPROVE_BATCH_SIZE);
-    approved += await approvePendingExams({ studentIds: chunk });
+    approved += await approvePendingExamsByIdFilter({ studentIds: chunk });
+  }
+  return approved;
+}
+
+/** Call the bulk-approval RPC. Returns the approved count, or null if the RPC is unavailable (migration not deployed). */
+async function approveViaRpc(classNames: string[] | null): Promise<number | null> {
+  try {
+    const params = classNames ? { p_class_names: classNames } : {};
+    const { data, error } = await supabase.rpc('approve_all_pending_exams', params as any);
+    if (error) return null; // RPC not deployed yet — fall back to client batching.
+    return typeof data === 'number' ? data : 0;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Client-side fallback: repeatedly pull a small page of pending row ids and UPDATE
+ * only those rows by primary key. Because each UPDATE flips status to 'approved',
+ * the next page query no longer matches them, so the loop drains to zero without
+ * offset bookkeeping. No single statement touches more than APPROVE_BATCH_SIZE
+ * rows and no URL exceeds Cloudflare's limit.
+ */
+async function approvePendingExamsByIdFilter(filters?: { studentIds?: string[] }): Promise<number> {
+  let approved = 0;
+  for (let iteration = 0; iteration < APPROVE_MAX_ITERATIONS; iteration++) {
+    let query = supabase.from('exams').select('id').eq('status', 'pending').limit(APPROVE_BATCH_SIZE);
+    if (filters?.studentIds) query = query.in('studentId', filters.studentIds);
+
+    const { data: page, error: selectError } = await query;
+    if (selectError) throw selectError;
+
+    const ids = (page ?? []).map((row: any) => row.id);
+    if (ids.length === 0) break;
+
+    const { error: updateError } = await supabase.from('exams').update({ status: 'approved' }).in('id', ids);
+    if (updateError) throw updateError;
+
+    approved += ids.length;
   }
   return approved;
 }
