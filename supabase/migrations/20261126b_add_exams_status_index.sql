@@ -1,0 +1,11 @@
+-- Speed up bulk exam approval (the "Approve All Pending" action) on large
+-- datasets. The approval path repeatedly scans exams WHERE status = 'pending';
+-- with no index on status PostgREST/Postgres fell back to a sequential scan on
+-- every batch page, which is what made approving ~30k rows slow enough to hit
+-- the API statement_timeout (HTTP 500 "canceling statement due to statement
+-- timeout").
+--
+-- A (status, "studentId") index covers both the global "approve all pending"
+-- scan and the per-class "approve for assigned classes" scan
+-- (status = 'pending' AND "studentId" IN (...)). Idempotent.
+CREATE INDEX IF NOT EXISTS idx_exams_status_student ON public.exams (status, "studentId");
