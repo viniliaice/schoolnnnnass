@@ -190,7 +190,11 @@ const teachersQuery = useQuery<User[], Error>({
       queryClient.invalidateQueries({ queryKey: ['examVerification', 'exams'] });
       queryClient.invalidateQueries({ queryKey: ['examVerification', 'statusCounts'] });
     } catch (error) {
-      addToast({ type: 'error', title: 'Failed to update exam status' });
+      addToast({
+        type: 'error',
+        title: 'Failed to update exam status',
+        description: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 
@@ -201,13 +205,23 @@ const teachersQuery = useQuery<User[], Error>({
       return;
     }
     try {
-      await Promise.all(ids.map(id => updateExamStatus(id, status)));
-      addToast({ type: 'success', title: `${status} ${ids.length} exams` });
+      const results = await Promise.allSettled(ids.map(id => updateExamStatus(id, status)));
+      const succeeded = results.filter(r => r.status === 'fulfilled').length;
+      const failed = results.length - succeeded;
+      if (failed > 0) {
+        addToast({ type: 'error', title: `${status} ${succeeded} of ${ids.length} (${failed} failed)` });
+      } else {
+        addToast({ type: 'success', title: `${status} ${succeeded} exams` });
+      }
       setSelectedIds({});
       queryClient.invalidateQueries({ queryKey: ['examVerification', 'exams'] });
       queryClient.invalidateQueries({ queryKey: ['examVerification', 'statusCounts'] });
     } catch (err) {
-      addToast({ type: 'error', title: 'Failed to update selected exams' });
+      addToast({
+        type: 'error',
+        title: 'Failed to update selected exams',
+        description: err instanceof Error ? err.message : String(err),
+      });
     }
   };
 
@@ -228,8 +242,7 @@ const teachersQuery = useQuery<User[], Error>({
   const handleDelete = async (id: string) => {
     if (!window.confirm('Delete this exam entry? This cannot be undone.')) return;
     try {
-      const ok = await deleteExam(id);
-      if (!ok) throw new Error('Delete failed');
+      await deleteExam(id);
       addToast({ type: 'success', title: 'Exam deleted' });
       queryClient.invalidateQueries({ queryKey: ['examVerification', 'exams'] });
       queryClient.invalidateQueries({ queryKey: ['examVerification', 'statusCounts'] });
@@ -262,8 +275,7 @@ const teachersQuery = useQuery<User[], Error>({
       const payload: Partial<Exam> = {
         score: Number(editScore),
       };
-      const updated = await updateExam(examId, payload);
-      if (!updated) throw new Error('Update failed');
+      await updateExam(examId, payload);
       addToast({ type: 'success', title: 'Exam updated' });
       queryClient.invalidateQueries({ queryKey: ['examVerification', 'exams'] });
       queryClient.invalidateQueries({ queryKey: ['examVerification', 'statusCounts'] });
@@ -384,7 +396,7 @@ const teachersQuery = useQuery<User[], Error>({
         <button
           onClick={async () => {
             try {
-              let res = null;
+              let res = 0;
               if (session?.role === 'supervisor') {
                 const supervisor = await getUserById(session.userId);
                 const assigned = supervisor?.assignedClasses || [];
@@ -392,11 +404,15 @@ const teachersQuery = useQuery<User[], Error>({
               } else {
                 res = await approveAllPendingExams();
               }
-              addToast({ type: 'success', title: `Approved ${res?.length || 0} pending exams` });
+              addToast({ type: 'success', title: `Approved ${res} pending exams` });
               queryClient.invalidateQueries({ queryKey: ['examVerification', 'exams'] });
               queryClient.invalidateQueries({ queryKey: ['examVerification', 'statusCounts'] });
             } catch (err) {
-              addToast({ type: 'error', title: 'Failed to approve all pending exams' });
+              addToast({
+                type: 'error',
+                title: 'Failed to approve all pending exams',
+                description: err instanceof Error ? err.message : String(err),
+              });
             }
           }}
           className="ml-2 px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700"
