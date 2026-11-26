@@ -214,41 +214,75 @@ export async function updateExamStatus(id: string, status: ExamStatus): Promise<
   return updated as Exam;
 }
 
+// Bound every approval batch to PostgREST's `max_rows` (supabase/config.toml:
+// max_rows = 1000). Staying at/under this cap means the UPDATE never tries to
+// RETURN more rows than the API allows, and each statement is tiny enough to
+// stay well clear of Supabase's statement_timeout — which is what produced the
+// HTTP 500 ("canceling statement due to statement timeout") at ~30k pending.
+const APPROVE_BATCH_SIZE = 1000;
+// Hard safety valve so a pathological case (e.g. exams being created faster than
+// we can approve them) can never spin the loop forever.
+const APPROVE_MAX_ITERATIONS = 2000;
+
+/**
+ * Approve pending exams in bounded batches.
+ *
+ * We repeatedly pull a small page of pending row ids and UPDATE *only those rows
+ * by primary key*. Because the UPDATE flips status to 'approved', the next page
+ * query no longer matches the rows we just approved, so the loop naturally drains
+ * to zero without any offset bookkeeping. No single statement ever touches more
+ * than APPROVE_BATCH_SIZE rows, so it can never trip the statement timeout.
+ */
+async function approvePendingExams(filters?: { studentIds?: string[] }): Promise<number> {
+  let approved = 0;
+  for (let iteration = 0; iteration < APPROVE_MAX_ITERATIONS; iteration++) {
+    let query = supabase.from('exams').select('id').eq('status', 'pending').limit(APPROVE_BATCH_SIZE);
+    if (filters?.studentIds) query = query.in('studentId', filters.studentIds);
+
+    const { data: page, error: selectError } = await query;
+    if (selectError) throw selectError;
+
+    const ids = (page ?? []).map((row: any) => row.id);
+    if (ids.length === 0) break;
+
+    const { error: updateError } = await supabase.from('exams').update({ status: 'approved' }).in('id', ids);
+    if (updateError) throw updateError;
+
+    approved += ids.length;
+  }
+  return approved;
+}
+
 export async function approveAllPendingExams(): Promise<number> {
-  // Update every pending exam. Select only `id` (with an exact count) so the
-  // payload stays tiny even when tens of thousands of exams are approved at once.
-  // The previous implementation returned the full rows via `.select()`, which
-  // could fail on large datasets — and because the caller swallowed the error it
-  // looked like the action silently did nothing.
-  const { data, error } = await supabase
-    .from('exams')
-    .update({ status: 'approved' })
-    .eq('status', 'pending')
-    .select('id')
-    .limit(100000);
-  if (error) throw error;
-  return data?.length ?? 0;
+  return approvePendingExams();
 }
 
 export async function approvePendingExamsForClasses(classNames: string[]): Promise<number> {
   if (!Array.isArray(classNames) || classNames.length === 0) return 0;
 
-  const { data: students, error: studentError } = await supabase.from('students').select('id').in('className', classNames);
-  if (studentError) throw studentError;
+  // Resolve the supervisor's student set in pages (className IN can be large).
+  const studentIds: string[] = [];
+  for (let offset = 0; ; offset += APPROVE_BATCH_SIZE) {
+    const { data: students, error: studentError } = await supabase
+      .from('students')
+      .select('id')
+      .in('className', classNames)
+      .range(offset, offset + APPROVE_BATCH_SIZE - 1);
+    if (studentError) throw studentError;
 
-  const studentIds = (students || []).map((s: any) => s.id);
+    const rows = students ?? [];
+    for (const s of rows) studentIds.push((s as any).id);
+    if (rows.length < APPROVE_BATCH_SIZE) break;
+  }
   if (studentIds.length === 0) return 0;
 
-  const { data, error } = await supabase
-    .from('exams')
-    .update({ status: 'approved' })
-    .in('studentId', studentIds)
-    .eq('status', 'pending')
-    .select('id')
-    .limit(100000);
-
-  if (error) throw error;
-  return data?.length ?? 0;
+  // Approve pending exams for those students, chunked so each UPDATE stays small.
+  let approved = 0;
+  for (let i = 0; i < studentIds.length; i += APPROVE_BATCH_SIZE) {
+    const chunk = studentIds.slice(i, i + APPROVE_BATCH_SIZE);
+    approved += await approvePendingExams({ studentIds: chunk });
+  }
+  return approved;
 }
 
 export async function updateExam(id: string, data: Partial<Exam>): Promise<Exam> {

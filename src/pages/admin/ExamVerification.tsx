@@ -47,6 +47,7 @@ export function ExamVerification() {
   const [editMonth, setEditMonth] = useState<string>('');
   const [editType, setEditType] = useState<string>('');
   const [editSubmitting, setEditSubmitting] = useState(false);
+  const [isApprovingAll, setIsApprovingAll] = useState(false);
 
   const supervisorQuery = useQuery<User | null, Error>({
     queryKey: ['supervisorUser', session?.userId],
@@ -395,6 +396,8 @@ const teachersQuery = useQuery<User[], Error>({
 
         <button
           onClick={async () => {
+            if (isApprovingAll) return;
+            setIsApprovingAll(true);
             try {
               let res = 0;
               if (session?.role === 'supervisor') {
@@ -413,11 +416,14 @@ const teachersQuery = useQuery<User[], Error>({
                 title: 'Failed to approve all pending exams',
                 description: err instanceof Error ? err.message : String(err),
               });
+            } finally {
+              setIsApprovingAll(false);
             }
           }}
-          className="ml-2 px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700"
+          disabled={isApprovingAll}
+          className="ml-2 px-3 py-2 rounded-xl bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700 disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          Approve All Pending
+          {isApprovingAll ? 'Approving…' : 'Approve All Pending'}
         </button>
 
         {Object.values(selectedIds).some(Boolean) && (
