@@ -208,47 +208,58 @@ export async function createExam(data: Omit<Exam, 'id' | 'created_At'>): Promise
   return created;
 }
 
-export async function updateExamStatus(id: string, status: ExamStatus): Promise<Exam | null> {
+export async function updateExamStatus(id: string, status: ExamStatus): Promise<Exam> {
   const { data: updated, error } = await supabase.from('exams').update({ status }).eq('id', id).select().single();
-  if (error) return null;
-  return updated;
+  if (error) throw error;
+  return updated as Exam;
 }
 
-export async function approveAllPendingExams(): Promise<Exam[] | null> {
-  const { data, error } = await supabase.from('exams').update({ status: 'approved' }).eq('status', 'pending').select();
-  if (error) return null;
-  return data || [];
+export async function approveAllPendingExams(): Promise<number> {
+  // Update every pending exam. Select only `id` (with an exact count) so the
+  // payload stays tiny even when tens of thousands of exams are approved at once.
+  // The previous implementation returned the full rows via `.select()`, which
+  // could fail on large datasets — and because the caller swallowed the error it
+  // looked like the action silently did nothing.
+  const { data, error } = await supabase
+    .from('exams')
+    .update({ status: 'approved' })
+    .eq('status', 'pending')
+    .select('id')
+    .limit(100000);
+  if (error) throw error;
+  return data?.length ?? 0;
 }
 
-export async function approvePendingExamsForClasses(classNames: string[]): Promise<Exam[] | null> {
-  if (!Array.isArray(classNames) || classNames.length === 0) return [];
+export async function approvePendingExamsForClasses(classNames: string[]): Promise<number> {
+  if (!Array.isArray(classNames) || classNames.length === 0) return 0;
 
   const { data: students, error: studentError } = await supabase.from('students').select('id').in('className', classNames);
   if (studentError) throw studentError;
 
   const studentIds = (students || []).map((s: any) => s.id);
-  if (studentIds.length === 0) return [];
+  if (studentIds.length === 0) return 0;
 
   const { data, error } = await supabase
     .from('exams')
     .update({ status: 'approved' })
     .in('studentId', studentIds)
     .eq('status', 'pending')
-    .select();
+    .select('id')
+    .limit(100000);
 
-  if (error) return null;
-  return data || [];
+  if (error) throw error;
+  return data?.length ?? 0;
 }
 
-export async function updateExam(id: string, data: Partial<Exam>): Promise<Exam | null> {
+export async function updateExam(id: string, data: Partial<Exam>): Promise<Exam> {
   const { data: updated, error } = await supabase.from('exams').update(data).eq('id', id).select().single();
-  if (error) return null;
-  return updated;
+  if (error) throw error;
+  return updated as Exam;
 }
 
-export async function deleteExam(id: string): Promise<boolean> {
+export async function deleteExam(id: string): Promise<void> {
   const { error } = await supabase.from('exams').delete().eq('id', id);
-  return !error;
+  if (error) throw error;
 }
 
 // ─── Admin Grade Correction: server-side filtered grade search ────────────────

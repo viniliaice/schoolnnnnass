@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { getSystemStats } from '../../lib/db/stats';
+import { useState, useEffect, useCallback } from 'react';
+import { type SystemStats, getSystemStats } from '../../lib/db/stats';
 import { getStudents } from '../../lib/db/students';
 import { getExams } from '../../lib/db/exams';
 import { getUsers } from '../../lib/db/profiles';
@@ -13,36 +13,60 @@ export function AdminDashboard({ navigate }: { navigate?: (path: string) => void
   const [students, setStudents] = useState<any[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [classesPage, setClassesPage] = useState(1);
   const [recentPage, setRecentPage] = useState(1);
   const CLASSES_PER_PAGE = 5;
   const RECENT_PER_PAGE = 5; // show 5 per page from the 15 loaded
 
-  useEffect(() => {
-    const loadData = async () => {
-      setLoading(true);
-      try {
-        const [statsData, examsData, studentsData, usersData] = await Promise.all([
-          getSystemStats(),
-          getExams(),
-          getStudents(),
-          getUsers(),
-        ]);
+  // Load each data source independently so that one slow / failing query (e.g. a
+  // database statement timeout) can never blank the entire dashboard. Failed
+  // sources degrade to empty/zero and are logged; the page still renders.
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    const [statsR, examsR, studentsR, usersR] = await Promise.allSettled([
+      getSystemStats(),
+      getExams(),
+      getStudents(),
+      getUsers(),
+    ]);
 
-        setStats(statsData);
-        setRecentExams(examsData.slice(-15).reverse());
-        setStudents(studentsData);
-        setUsers(usersData);
-      } catch (err) {
-        console.error('AdminDashboard load error:', err);
-      } finally {
-        setLoading(false);
-      }
-    };
-    loadData();
+    if (statsR.status === 'fulfilled') setStats(statsR.value);
+    else {
+      console.error('AdminDashboard stats error:', statsR.reason);
+      setLoadError('Could not load system statistics — showing the rest of the dashboard. Try reloading.');
+    }
+    if (examsR.status === 'fulfilled') setRecentExams(examsR.value.slice(-15).reverse());
+    else console.error('AdminDashboard recent exams error:', examsR.reason);
+    if (studentsR.status === 'fulfilled') setStudents(studentsR.value);
+    else console.error('AdminDashboard students error:', studentsR.reason);
+    if (usersR.status === 'fulfilled') setUsers(usersR.value);
+    else console.error('AdminDashboard users error:', usersR.reason);
+
+    setLoading(false);
   }, []);
 
-  if (loading || !stats) {
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // Used when the stats call fails so the stat cards still render (with zeros)
+  // instead of crashing on a null `stats`.
+  const EMPTY_STATS: SystemStats = {
+    totalTeachers: 0,
+    totalParents: 0,
+    totalStudents: 0,
+    formerStudents: 0,
+    totalExams: 0,
+    pendingExams: 0,
+    approvedExams: 0,
+    rejectedExams: 0,
+    averageScore: 0,
+  };
+  const statsOrEmpty: SystemStats = stats ?? EMPTY_STATS;
+
+  if (loading) {
     return (
       <div className="space-y-6">
         <div>
@@ -102,17 +126,17 @@ export function AdminDashboard({ navigate }: { navigate?: (path: string) => void
   const recentPaged = recentExams.slice((recentPage - 1) * RECENT_PER_PAGE, recentPage * RECENT_PER_PAGE);
 
   const statCards: any[] = [
-    { label: 'Teachers', value: stats.totalTeachers, icon: Users, color: 'bg-teal-500', bg: 'bg-teal-50' },
-    { label: 'Parents', value: stats.totalParents, icon: Users, color: 'bg-violet-500', bg: 'bg-violet-50' },
+    { label: 'Teachers', value: statsOrEmpty.totalTeachers, icon: Users, color: 'bg-teal-500', bg: 'bg-teal-50' },
+    { label: 'Parents', value: statsOrEmpty.totalParents, icon: Users, color: 'bg-violet-500', bg: 'bg-violet-50' },
     // Active students only: Former Students / Student Cleanup (20261008) moved
     // leavers out of this count and reports them separately.
-    { label: 'Students', value: stats.totalStudents, icon: GraduationCap, color: 'bg-blue-500', bg: 'bg-blue-50' },
-    { label: 'Former Students', value: stats.formerStudents, icon: UserMinus, color: 'bg-slate-500', bg: 'bg-slate-100', onClick: () => navigate?.('/admin/former-students') },
-    { label: 'Total Exams', value: stats.totalExams, icon: FileText, color: 'bg-amber-500', bg: 'bg-amber-50' },
-    { label: 'Pending', value: stats.pendingExams, icon: Clock, color: 'bg-amber-500', bg: 'bg-amber-50' },
-    { label: 'Approved', value: stats.approvedExams, icon: CheckCircle, color: 'bg-emerald-500', bg: 'bg-emerald-50' },
-    { label: 'Rejected', value: stats.rejectedExams, icon: XCircle, color: 'bg-red-500', bg: 'bg-red-50' },
-    { label: 'Avg Score', value: `${stats.averageScore}%`, icon: TrendingUp, color: 'bg-indigo-500', bg: 'bg-indigo-50' },
+    { label: 'Students', value: statsOrEmpty.totalStudents, icon: GraduationCap, color: 'bg-blue-500', bg: 'bg-blue-50' },
+    { label: 'Former Students', value: statsOrEmpty.formerStudents, icon: UserMinus, color: 'bg-slate-500', bg: 'bg-slate-100', onClick: () => navigate?.('/admin/former-students') },
+    { label: 'Total Exams', value: statsOrEmpty.totalExams, icon: FileText, color: 'bg-amber-500', bg: 'bg-amber-50' },
+    { label: 'Pending', value: statsOrEmpty.pendingExams, icon: Clock, color: 'bg-amber-500', bg: 'bg-amber-50' },
+    { label: 'Approved', value: statsOrEmpty.approvedExams, icon: CheckCircle, color: 'bg-emerald-500', bg: 'bg-emerald-50' },
+    { label: 'Rejected', value: statsOrEmpty.rejectedExams, icon: XCircle, color: 'bg-red-500', bg: 'bg-red-50' },
+    { label: 'Avg Score', value: `${statsOrEmpty.averageScore}%`, icon: TrendingUp, color: 'bg-indigo-500', bg: 'bg-indigo-50' },
     { label: 'Exam Reports', value: 'Open', icon: FileBarChart, color: 'bg-indigo-500', bg: 'bg-indigo-50', onClick: () => navigate?.('/admin/exam-reports') },
     { label: 'Lesson Plan Upload', value: 'Open', icon: CalendarRange, color: 'bg-indigo-500', bg: 'bg-indigo-50', onClick: () => navigate?.('/admin/lesson-planner') },
   ];
@@ -123,6 +147,19 @@ export function AdminDashboard({ navigate }: { navigate?: (path: string) => void
         <h1 className="text-2xl font-bold text-slate-900">Admin Dashboard</h1>
         <p className="text-slate-500 mt-1">System overview and key metrics</p>
       </div>
+
+      {loadError && (
+        <div className="flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          <span>{loadError}</span>
+          <button
+            type="button"
+            onClick={() => loadData()}
+            className="shrink-0 rounded-lg bg-amber-600 px-3 py-1 font-medium text-white hover:bg-amber-700"
+          >
+            Retry
+          </button>
+        </div>
+      )}
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {statCards.map(card => (
